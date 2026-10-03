@@ -80,3 +80,70 @@ Victus 15L probablemente no cabe (una ranura x16, caja y fuente pequeñas): comp
 1. La tabla de los A/B del §1 (medianas, mín./máx. y la línea de `DECODE_TIMING` de cada brazo).
 2. La línea `decode GPU stages` del §2.
 3. Con eso decido entre A, B, C y D, o paro si no compensa.
+
+---
+
+## 6. Lo que faltaba: sin esto no se llega "sí o sí" al máximo
+
+Lo de arriba encuentra el mejor de unos candidatos; no garantiza el máximo. Para acercarse a eso hacen falta cuatro
+cosas más.
+
+### 6.1 Saber cuánto queda: el techo de esta máquina
+
+Con vuestra línea de tiempos (48,45 ms por ventana, 1,86 tokens por ventana):
+
+| Si... | Ventana | Decode |
+| --- | ---: | ---: |
+| hoy | 48,5 ms | ~38-42 tokens/s [medido] |
+| P (cadena densa de la GPU) bajara a su ideal de ancho de banda, ~11 ms [est., informe 02] | ~36 ms | ~52 tokens/s |
+| además C (CPU) bajara un 20 % | ~32 ms | ~58 tokens/s |
+
+Con este modelo, esta GPU y esta CPU, **el techo realista del decode está en ~50-55 tokens/s** [est.]: ~+25-35 %
+sobre hoy, casi todo en P. Regla para parar: cuando paséis de ~48 tokens/s, lo que quede costará mucho más que lo que
+dé. Más allá hace falta más VRAM (§4) o más tokens aceptados por ventana (borrador MTP).
+
+### 6.2 El prefill (la nota de arriba es solo de decode)
+
+Hoy: ~865-890 tokens/s a 24K, en trozos de 6.144 tokens. Primero el dato: **`STRATA_PREFILL_TIMING=1`** da el
+tiempo de GPU del prompt por fase (`src/prefill/prefill.cpp:1217`). Pasádmelo. Mientras tanto:
+
+| # | Qué | Esperado [est.] | Calidad |
+| --- | --- | --- | --- |
+| P1 | `STRATA_PF_FUSED=1`: los kernels fusionados de los packs IQ (en la 5070, IQ2_XS +12 % a 4K y +3 % a 32K, `docs/DETAILS.md:27-28`) | 0-12 % | no es idéntico (validado por KL en upstream): pasarlo por la puerta de calidad de §6.4 |
+| P2 | Más VRAM libre (por ejemplo `--kv-resident 16384`) para ver si `--prefill auto` sube el trozo de 6.144 | 0-5 % | idéntica |
+| P3 | Comprobar que `gdn_rec_kh_kernel` no cae al kernel lento con 28 SM: `cuobjdump --dump-resource-usage` sobre el binario (informe 02, P2) | 2-5 % si cae | idéntica |
+| P4 | Reutilización de prefijos (`--prompt-cache-root`, caché de conversaciones): un agente reenvía casi todo el contexto en cada turno, así que **el prefill que no se hace** pesa más que el que se acelera. Medid cuántos tokens reutiliza cada turno (`RESUME n`) en una sesión real de agente | puede ser lo que más ahorre en un agente | idéntica |
+
+### 6.3 Medir con potencia suficiente
+
+Vuestras muestras van de ~38 a ~43 tokens/s con la misma configuración (±5 %). Con 4+4 o 6+6 pasadas no se ve un
+efecto del 1-3 %, y varias mejoras de esta nota son de ese tamaño.
+
+- **Banco fijo:** los mismos prompts, `temperature 0`, y una carga que se parezca a la vuestra: un turno de agente con
+  32K de contexto y otro con 128K, además del de 1.024 tokens. El decode depende del contexto y del texto (la
+  aceptación del MTP).
+- **Para efectos de ~2 %: 10+10 pasadas alternas** (A, B, A, B…), con la máquina sin otra carga y la GPU ya
+  caliente. Reportad mediana e intervalo, o un test de Mann-Whitney.
+- **Un cambio cada vez**, y al final todos juntos más un `--calibrate`: varios ajustes interactúan (gobernador con
+  workers, `--pcie-frac` con el modo PCIe).
+
+### 6.4 Una puerta de calidad igual para todo
+
+Cualquier cambio que no sea idéntico bit a bit (GR en 8 bits, `STRATA_PF_FUSED=1`, cambios de KV o de escalado)
+pasa por lo mismo antes de adoptarse:
+
+1. `logpos-compare` sobre **tres textos** (código, un documento y una conversación de agente; ~5.000 tokens cada uno),
+   con suelo de ruido.
+2. Criterio: **ΔNLL dentro de 2 errores estándar del ruido** y acuerdo del top-1 no peor que el del ruido menos
+   0,5 puntos.
+3. Si toca el contexto, `tools/needle_bench.py` a 32K, 128K y al máximo.
+
+Lo idéntico bit a bit (gobernador, relojes, workers, modo PCIe, kernels de P de tipo B, páginas de 2 MB) no
+necesita la puerta: los tokens son los mismos con la misma caché de expertos.
+
+### 6.5 Upstream
+
+Strata publica versiones casi a diario (de la 0.1.25 a la 0.1.38 entre el 29 de septiembre y el 3 de octubre), y
+varias han subido la velocidad un 5-20 %. Vuestro motor lleva un parche propio (System One y el kernel IQ2_S). Antes
+de invertir semanas en el motor, merece la pena **traer las versiones nuevas de upstream con el parche reaplicado**
+y medir. Puede dar más que cualquier cambio propio, sin trabajo de kernels.
