@@ -35,7 +35,14 @@ Una respuesta de 1.024 tokens, con su instrumentación:
 48,45 ms/ventana (551 ventanas, T medio 2,33, 1,86 tokens/ventana) =
    verify 43,02  =  espera GPU 21,43  +  host por capa 19,15 [CPU expertos 18,32]  +  stage 0,31
  + commit/emit 0,03 + borrador 2,57
-por capa-ventana: CPU expertos 4,41 ms, aciertos VRAM 16,69 ms, PCIe 1,28 ms
+por capa-ventana: CPU expertos 4,41, aciertos VRAM 16,69, PCIe 1,28   <- EXPERTOS, no milisegundos
+```
+
+> **Corrección (gracias a la [nota de decode](NOTA_DECODE_RONDA5.md)):** los números `4,41 / 16,69 / 1,28`
+> son **cuántos expertos** por capa y ventana, no tiempos. De ahí: **acierto de la caché de VRAM =
+> 16,69/22,38 = 74,6 %**; la CPU calcula el 19,7 % y el PCIe el 5,7 %. El reparto de *tiempos* de la
+> ronda es el de la tabla (CPU expertos 18,32 ms = 37,8 %), que sí es correcto.
+
 ```
 
 | Parte | ms/ventana | % |
