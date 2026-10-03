@@ -27,7 +27,8 @@ KEYS = {
 ARGS_TAIL = ["--conversation-cache-mib", "8192",
              "--conversation-cache-slots", "4"]
 # flags del motor que setup.py no escribe (o escribe con otro valor) y que hay que reponer
-ENGINE_ARGS = {"--kv": "int8", "--prompt-cache-root": "256", "--logprobs": "32"}
+ENGINE_ARGS = {"--kv": "int8", "--prompt-cache-root": "256", "--logprobs": "32",
+               "--short-read": "128"}
 DRAFT_VOCAB = "en"
 
 
