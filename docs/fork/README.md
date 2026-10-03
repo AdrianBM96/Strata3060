@@ -26,6 +26,7 @@ como tales.
 | **[MEDICION_RONDA2.md](MEDICION_RONDA2.md)** | Ronda 2: verificación de las correcciones, `draft_vocab en` medido, `--spec 8` (+5,1 %) y el aviso de que `escalate` dispara al revés en el modelo real |
 | **[RESPUESTA_RONDA3.md](RESPUESTA_RONDA3.md)** | Ronda 3: el `escalate` "al revés" como sesgo de letra (y la prueba que lo decide), YaRN medido token a token con `logpos-compare.py`, y el kernel AVX2 de IQ2_S ya en el motor con su test bit a bit y su protocolo de A/B |
 | **[RESPUESTA_RONDA4.md](RESPUESTA_RONDA4.md)** | Ronda 4: el +1,4 % del kernel no es significativo (y qué medir antes de otro kernel), la calibración corregida para restar solo el sesgo de letra, y `escalate` por acuerdo entre permutaciones en vez de por margen |
+| **[NOTA_DECODE_RONDA5.md](NOTA_DECODE_RONDA5.md)** | Qué más probar para subir el decode: lectura correcta del desglose (ping-pong GPU densa / CPU expertos, acierto de VRAM 74,6 %), A/B de sistema de minutos (relojes, gobernador, SMT, recalibrar, modo PCIe, páginas de 2 MB) y los cambios de motor candidatos (GR en 8 bits, kernels de P) |
 | **[SYSTEMONE.md](SYSTEMONE.md)** | System One completo: el cambio del motor, la API, operación, actualización y rollback |
 | **[ops/](ops/)** | Los ficheros de despliegue (`ada-decide.py`, `fit-calibration.py`, `logpos-compare.py`, `apply-tuning.sh`, `free-vram.sh`, `strata-switch.sh`, `serve-strata.sh`) y sus tests |
 
