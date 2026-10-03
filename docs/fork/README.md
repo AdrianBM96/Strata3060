@@ -22,8 +22,9 @@ como tales.
 | **[AUDITORIA_REVISION_3060.md](AUDITORIA_REVISION_3060.md)** | Auditoría de la revisión anterior: veredicto de cada punto, con las mediciones que la sostienen o la refutan |
 | **[RESPUESTA_A_REVISION.md](RESPUESTA_A_REVISION.md)** | Respuesta al revisor, punto por punto: sus correcciones verificadas, lo medido en la 3060 (`draft_vocab`, `--spec 8`), el aviso de `escalate` y las respuestas a su lista de siguientes pasos |
 | **[MEDICION_RONDA2.md](MEDICION_RONDA2.md)** | Ronda 2: verificación de las correcciones, `draft_vocab en` medido, `--spec 8` (+5,1 %) y el aviso de que `escalate` dispara al revés en el modelo real |
+| **[RESPUESTA_RONDA3.md](RESPUESTA_RONDA3.md)** | Ronda 3: el `escalate` "al revés" como sesgo de letra (y la prueba que lo decide), YaRN medido token a token con `logpos-compare.py`, y el kernel AVX2 de IQ2_S ya en el motor con su test bit a bit y su protocolo de A/B |
 | **[SYSTEMONE.md](SYSTEMONE.md)** | System One completo: el cambio del motor, la API, operación, actualización y rollback |
-| **[ops/](ops/)** | Los ficheros de despliegue que faltaban (`ada-decide.py`, `apply-tuning.sh`, `free-vram.sh`, `strata-switch.sh`, `serve-strata.sh`) |
+| **[ops/](ops/)** | Los ficheros de despliegue (`ada-decide.py`, `fit-calibration.py`, `logpos-compare.py`, `apply-tuning.sh`, `free-vram.sh`, `strata-switch.sh`, `serve-strata.sh`) y sus tests |
 
 ## Lo más importante en cuatro líneas
 

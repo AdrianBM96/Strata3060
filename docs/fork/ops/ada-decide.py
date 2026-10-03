@@ -34,7 +34,11 @@ Señales para escalar a "System Two" (una generacion normal con razonamiento):
   * margin: p(1.ª) - p(2.ª).  Bajo = dudoso.
   * option_mass: probabilidad ABSOLUTA que el modelo da a las etiquetas de las opciones (antes de
     normalizar).  Baja = el modelo queria escribir otra cosa: la respuesta no es fiable.
-  * escalate: true si margin < --escalate-margin u option_mass < --min-mass.
+  * agreement: que parte de las permutaciones elige la misma opcion (1 = todas).  < 1 = escalar.
+  * debiased: true si la respuesta esta corregida de sesgo (permutations > 1 o calibrate).  Sin eso el
+    margen mide sobre todo el sesgo de letra (medido: estado vacio -> "(A)" con margen 0,91), asi que
+    **no fieis escalate a un margen sin corregir**.
+  * escalate: true si margin < --escalate-margin, option_mass < --min-mass o agreement < 1.
 
 Limites honestos:
   * No es un decisor entrenado: son las preferencias del modelo base.  La calibracion de arriba
@@ -207,7 +211,7 @@ def decide_choice(url, tok, state, instructions, criteria: dict, timeout: float,
         return None, {"error": f"choice admite 2..{len(LABELS)} opciones, tiene {len(keys)}"}
     T = float(cfg.get("temperature") or 1.0)
     acc = {k: 0.0 for k in keys}
-    masses, missing_all, passes, usage = [], set(), [], {}
+    masses, missing_all, passes, usage, winners = [], set(), [], {}, []
     orders = rotations(keys, int(cfg.get("permutations") or 1))
     for order in orders:
         scores, missing, usage = option_scores(url, tok, state, instructions, order, criteria, timeout)
@@ -221,17 +225,26 @@ def decide_choice(url, tok, state, instructions, criteria: dict, timeout: float,
         probs = softmax([cal[k] / T for k in keys])
         for k, p in zip(keys, probs):
             acc[k] += p / len(orders)
+        winners.append(keys[max(range(len(keys)), key=probs.__getitem__)])
         passes.append({"order": order, "raw": scores, **({"cf": cf} if cf else {})})
     best, second = sorted(keys, key=acc.get, reverse=True)[:2]
     margin = acc[best] - acc[second]
     mass = sum(masses) / len(masses)
+    # Sin permutar ni calibrar, el margen mide sobre todo el sesgo de letra: con un estado vacio o vago el
+    # modelo elige "(A)" con mucha confianza y el margen sale ALTO (medido en la 3060: 0,91 con estado
+    # vacio).  Solo con la respuesta corregida de sesgo el margen dice algo de la ambiguedad.
+    debiased = len(orders) > 1 or bool(cfg.get("calibrate"))
+    agreement = sum(w == best for w in winners) / len(winners)   # que parte de los ordenes elige lo mismo
     reasons = []
     if margin < float(cfg.get("escalate_margin", 0.2)):
         reasons.append("margin")
     if mass < float(cfg.get("min_mass", 0.2)):
         reasons.append("option_mass")
+    if agreement < 1.0:
+        reasons.append("permutations_disagree")      # la respuesta cambia al cambiar el orden: no es fiable
     out = {"type": "choice", "choice": best, "confidence": acc[best], "probabilities": acc,
-           "margin": margin, "option_mass": mass, "escalate": bool(reasons)}
+           "margin": margin, "option_mass": mass, "agreement": agreement, "debiased": debiased,
+           "escalate": bool(reasons)}
     if reasons:
         out["escalate_reasons"] = reasons
     if missing_all:

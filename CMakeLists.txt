@@ -164,6 +164,20 @@ if(STRATA_BUILD_TESTS)
   add_executable(gguf_split_test tests/core/gguf_split_test.cpp)
   target_link_libraries(gguf_split_test PRIVATE strata_artifact)
   add_test(NAME gguf_split_test COMMAND gguf_split_test)
+  # the IQ2_S AVX-2 block kernel against the generic one, bit for bit (CPU only: it includes the kernel source, so it
+  # needs neither a GPU nor the ggml build); exit 77 = no AVX2 on this CPU, reported as skipped
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|x86")
+    add_executable(iq2s_avx2_test tests/core/iq2s_avx2_test.cpp)
+    target_include_directories(iq2s_avx2_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                                                      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ggml)
+    if(MSVC)
+      target_compile_options(iq2s_avx2_test PRIVATE /arch:AVX2)
+    else()
+      target_compile_options(iq2s_avx2_test PRIVATE -mavx2 -mfma -mf16c)
+    endif()
+    add_test(NAME iq2s_avx2_test COMMAND iq2s_avx2_test)
+    set_tests_properties(iq2s_avx2_test PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
 endif()
 
 # ---- strata_plan ----------------------------------------------------------

@@ -1,0 +1,25 @@
+# Strata3060 fork: the tests that need no GPU and no model - the IQ2_S AVX-2 kernel bit for bit against the generic one,
+# System One's ada-decide / fit-calibration / logpos-compare, and setup's own tests.
+name: fork-cpu-tests
+on:
+  push:
+    paths: ["src/kernels/cpu/**", "tests/core/iq2s_avx2_test.cpp", "docs/fork/ops/**", "setup.py", "tools/test_setup_*.py",
+            "CMakeLists.txt", ".github/workflows/fork-cpu-tests.yml"]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  cpu:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: IQ2_S AVX-2 kernel (bit-identical to the generic one)
+        run: |
+          cmake -S . -B build -DSTRATA_BUILD_TESTS=ON -DSTRATA_NATIVE_EXPERTS=OFF -DSTRATA_ENABLE_CUDA=OFF
+          cmake --build build --target iq2s_avx2_test -j4
+          ctest --test-dir build -R iq2s_avx2_test --output-on-failure
+          ./build/iq2s_avx2_test --bench
+      - name: System One tools
+        run: python3 docs/fork/ops/test_ada_decide.py
+      - name: setup's tests
+        run: |
+          for t in tools/test_setup_choices.py tools/test_setup_lowram.py tools/test_setup_draft_vocab.py; do python3 "$t"; done

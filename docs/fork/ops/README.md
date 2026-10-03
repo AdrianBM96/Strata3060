@@ -7,7 +7,8 @@ la configuración sea **reproducible y revisable**.
 | --- | --- |
 | `ada-decide.py` | El servicio System One (`POST /v1/systemone`, :8087). Contrato Jev: `choice`/`score`/`noul`. Permutaciones, calibración contextual, temperatura, señales para escalar (`margin`, `option_mass`, `escalate`) y log JSONL. |
 | `fit-calibration.py` | Ajusta la temperatura (y decide si conviene la calibración contextual) con decisiones etiquetadas del log de `ada-decide.py --log`. |
-| `test_ada_decide.py` | Tests sin GPU de los dos anteriores (`python3 test_ada_decide.py`). |
+| `logpos-compare.py` | Compara dos configuraciones sobre el mismo texto, token a token (`STRATA_LOGPOS`): acuerdo top-1, solape, KL y ΔNLL con su error, descontado el ruido. Para YaRN sí/no, int8/q4_0... |
+| `test_ada_decide.py` | Tests sin GPU de los tres anteriores (`python3 test_ada_decide.py`). |
 | `apply-tuning.sh` | Reaplica el tuneo a los `strata-*.json` (setup los reescribe y borra las claves nuestras), incluidos `--kv int8`, `--prompt-cache-root 256`, `--logprobs 32` y `"draft_vocab": "en"`. |
 | `free-vram.sh` | Aparta el modelo de llama.cpp antes de que Strata cargue (`before_load`). |
 | `strata-switch.sh` | Cambia de perfil Strata: `swift` (512K, diario), `swift262` (262K sin YaRN), `coder`, `qwen` (visión). |

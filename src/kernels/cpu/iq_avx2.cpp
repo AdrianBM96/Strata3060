@@ -315,10 +315,96 @@ inline void row_dot_iq2xs(const uint8_t* row, int nblocks, const block_q8_K* con
     for (int t = 0; t < NT; ++t) res[t] = hsum8(accf[t]);
 }
 
+// ---- IQ2_S (22) with the block decoded at once: Fmt32<22>::decode builds each half's 4 grid indices, 32 sign
+// bits and 2 scales in scalar code, 8 times per block.  Here a block's 32 grid indices (low byte + 2 qh bits)
+// come out of 4 vector steps, its 8 scale bytes become all 16 half-scales with the IQ2_XS unpack, and each
+// half's sign vector is a dword broadcast + pshufb of one 32-byte load.  The integer products and their sum
+// are the generic kernel's, so the result is bit-identical (tests/core/iq2s_avx2_test.cpp); measured
+// x1.21-1.34 per core on a 2.6 GHz Cascade Lake in L2 (docs/fork/informes/prototipos-cpu).  IQ2_S is the
+// gate/up type of 34 of the IQ2_XS pack's 48 layers.  STRATA_IQ2S_BLOCK=0 keeps the generic kernel (A/B).
+template <int NT>
+inline void row_dot_iq2s(const uint8_t* row, int nblocks, const block_q8_K* const* y, float* res) {
+    static const uint8_t k_sc_shuffle[128] = {  // half h -> scale bytes 2h (lanes 0-7), 2h+1 (lanes 8-15)
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+        2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
+        4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
+        6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7,
+        8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9,
+        10, 10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 11,
+        12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 13,
+        14, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15 };
+    const __m128i m4 = _mm_set1_epi8(0xf), m1 = _mm_set1_epi8(1);
+    const __m256i bsel = _mm256_setr_epi8(1, 2, 4, 8, 16, 32, 64, (char) 0x80, 1, 2, 4, 8, 16, 32, 64, (char) 0x80,
+                                          1, 2, 4, 8, 16, 32, 64, (char) 0x80, 1, 2, 4, 8, 16, 32, 64, (char) 0x80);
+    // the 4 sign bytes of a half (one dword, broadcast to all 8 dwords) -> 8 lanes each
+    const __m256i shuf_sgn = _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+                                              2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3);
+    const __m256i one8 = _mm256_set1_epi8(1);
+    const __m256i m300 = _mm256_set1_epi32(0x300);
+    // grid index g of a block = qs[g] | qh[g/4] bits 2*(g%4), 2*(g%4)+1 as bits 8, 9: Fmt32<22>'s
+    // (h << 8, 6, 4, 2) & 0x300 for the 4 groups of a qh byte
+    const __m256i qh_shift = _mm256_setr_epi32(8, 6, 4, 2, 8, 6, 4, 2);
+    const __m256i qh_pick = _mm256_setr_epi8(0, (char) 0x80, (char) 0x80, (char) 0x80, 0, (char) 0x80, (char) 0x80,
+                                             (char) 0x80, 0, (char) 0x80, (char) 0x80, (char) 0x80, 0, (char) 0x80,
+                                             (char) 0x80, (char) 0x80,
+                                             1, (char) 0x80, (char) 0x80, (char) 0x80, 1, (char) 0x80, (char) 0x80,
+                                             (char) 0x80, 1, (char) 0x80, (char) 0x80, (char) 0x80, 1, (char) 0x80,
+                                             (char) 0x80, (char) 0x80);
+    __m256 accf[NT];
+    for (int t = 0; t < NT; ++t) accf[t] = _mm256_setzero_ps();
+    for (int i = 0; i < nblocks; ++i) {
+        const uint8_t* blk = row + (size_t) i * 82;   // d | qs[32] grid low bytes | signs[32] | qh[8] | scales[8]
+        rows_ahead(blk + prefetch_ahead);
+        __m128i st = _mm_set1_epi64x((long long) u64(blk + 74));
+        st = _mm_unpacklo_epi8(_mm_and_si128(st, m4), _mm_and_si128(_mm_srli_epi16(st, 4), m4));
+        const __m128i scales = _mm_add_epi8(_mm_slli_epi16(st, 1), m1);   // [a0, b0, a1, b1, ...] = 2*s+1
+        alignas(32) uint32_t gi[32];
+        const uint64_t qh8 = u64(blk + 66);
+        for (int m = 0; m < 4; ++m) {   // grid indices 8m .. 8m+7: qh bytes 2m (lanes 0-3) and 2m+1 (lanes 4-7)
+            const __m128i qh2 = _mm_cvtsi32_si128((int) ((qh8 >> (16 * m)) & 0xffff));
+            const __m256i qhv = _mm256_shuffle_epi8(_mm256_broadcastsi128_si256(qh2), qh_pick);
+            const __m256i hi = _mm256_and_si256(_mm256_sllv_epi32(qhv, qh_shift), m300);
+            const __m256i lo = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i*) (blk + 2 + 8 * m)));
+            _mm256_store_si256((__m256i*) (gi + 8 * m), _mm256_or_si256(lo, hi));
+        }
+        const __m256i sgnall = _mm256_loadu_si256((const __m256i*) (blk + 34));
+        __m256i acci[NT];
+        for (int t = 0; t < NT; ++t) acci[t] = _mm256_setzero_si256();
+        for (int H = 0; H < 8; ++H) {   // the 8 32-value halves, in Fmt32<22>'s order (64*j + 32*half = 32*H)
+            const uint32_t* q = gi + 4 * H;
+            const __m256i g = _mm256_set_epi64x((long long) iq2s_grid[q[3]], (long long) iq2s_grid[q[2]],
+                                               (long long) iq2s_grid[q[1]], (long long) iq2s_grid[q[0]]);
+            const __m256i sb = _mm256_shuffle_epi8(_mm256_permutevar8x32_epi32(sgnall, _mm256_set1_epi32(H)),
+                                                   shuf_sgn);
+            const __m256i sgn = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(sb, bsel), bsel), one8);
+            const __m256i sc = _mm256_cvtepi8_epi16(
+                _mm_shuffle_epi8(scales, _mm_loadu_si128((const __m128i*) k_sc_shuffle + H)));
+            const int off = 32 * H;
+            for (int t = 0; t < NT; ++t) {
+                const __m256i yv = _mm256_loadu_si256((const __m256i*) (y[t][i].qs + off));
+                acci[t] = _mm256_add_epi32(acci[t],
+                    _mm256_madd_epi16(_mm256_maddubs_epi16(g, _mm256_sign_epi8(yv, sgn)), sc));
+            }
+        }
+        const float dx = h2f(u16(blk)) * 0.125f;
+        for (int t = 0; t < NT; ++t)
+            accf[t] = _mm256_fmadd_ps(_mm256_set1_ps(dx * y[t][i].d), _mm256_cvtepi32_ps(acci[t]), accf[t]);
+    }
+    for (int t = 0; t < NT; ++t) res[t] = hsum8(accf[t]);
+}
+
+const bool iq2s_block = [] {
+    const char* v = std::getenv("STRATA_IQ2S_BLOCK");
+    return v == nullptr || v[0] != '0';
+}();
+
 template <int TY, int NT>
 inline void row_dot_any(const uint8_t* row, int nblocks, const block_q8_K* const* y, float* res) {
     if constexpr (TY == 17) row_dot_iq2xs<NT>(row, nblocks, y, res);
-    else                    row_dot<TY, NT>(row, nblocks, y, res);
+    else if constexpr (TY == 22) {
+        if (iq2s_block) row_dot_iq2s<NT>(row, nblocks, y, res);
+        else            row_dot<TY, NT>(row, nblocks, y, res);
+    } else            row_dot<TY, NT>(row, nblocks, y, res);
 }
 
 template <int TY, int NT>

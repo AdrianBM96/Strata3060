@@ -165,7 +165,7 @@ Antes de cada cambio y después, con la misma batería:
 
 1. `tools/needle_bench.py --lengths 32k,128k,262k` (contexto).
 2. Decode a 1.024 tokens con razonamiento `high`, 3 pasadas; prefill con el prompt de 24.561 tokens.
-3. Calidad: `tools/kv_precision_compare.py` (int8 frente a q4_0), y vuestra batería de 6 tareas con y sin YaRN.
+3. Calidad: `STRATA_LOGPOS` + `ops/logpos-compare.py` sobre el mismo texto (int8 frente a q4_0, con y sin YaRN; `tools/kv_precision_compare.py`, que cita el benchmark de upstream, no está en el repo), y vuestra batería de 6 tareas.
 4. System One: latencia por pregunta (1.ª y siguientes, mirando `RESUME n`) y **acierto y Brier sobre un conjunto
    etiquetado** de decisiones reales, con y sin cada paso de calibración.
 

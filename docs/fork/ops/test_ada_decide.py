@@ -119,6 +119,29 @@ class Decide(unittest.TestCase):
         ans = self.run_choice(fake_model(letter_bias=0.0, content={"technical": 5.0}))
         self.assertFalse(ans["escalate"])
 
+    def test_uncorrected_margin_measures_letter_bias(self):
+        """Lo medido en la 3060: sin corregir, un estado vacio/vago da "(A)" con margen alto y no escala;
+        un caso claro cuya respuesta no es la (A) sale con margen bajo y escala.  Corregido, al reves."""
+        vague = fake_model(letter_bias=2.0, content={})
+        clear = fake_model(letter_bias=2.0, content={"technical": 2.3})     # technical es la (B)
+        a = self.run_choice(vague)
+        self.assertFalse(a["debiased"])
+        self.assertGreater(a["margin"], 0.6)
+        self.assertFalse(a["escalate"])
+        c = self.run_choice(clear)
+        self.assertEqual(c["choice"], "technical")
+        self.assertLess(c["margin"], 0.2)
+        self.assertTrue(c["escalate"])
+        a = self.run_choice(vague, permutations=3)
+        self.assertTrue(a["debiased"])
+        self.assertTrue(a["escalate"])
+        self.assertLess(a["agreement"], 1.0)
+        c = self.run_choice(clear, permutations=3, calibrate=True)
+        self.assertEqual(c["choice"], "technical")
+        self.assertGreater(c["margin"], 0.5)
+        self.assertEqual(c["agreement"], 1.0)
+        self.assertFalse(c["escalate"])
+
     def test_missing_ids_are_reported(self):
         def ask(url, system, user, timeout, lpids):
             return {"65": -0.1}, {}
@@ -163,6 +186,39 @@ class Http(unittest.TestCase):
             rec = json.loads(Path(AD.Handler.log_path).read_text().splitlines()[0])
             self.assertEqual(len(rec["passes"]), 3)
             self.assertIsNone(rec["label"])
+
+
+class LogposCompare(unittest.TestCase):
+    def test_same_text_detects_a_worse_config(self):
+        import random
+        import tempfile
+        lspec = importlib.util.spec_from_file_location("lp_cmp", Path(__file__).with_name("logpos-compare.py"))
+        LC = importlib.util.module_from_spec(lspec)
+        lspec.loader.exec_module(LC)
+        rnd = random.Random(2)
+
+        def write(path, shift, noise):
+            with open(path, "w") as f:
+                for pos in range(2000):
+                    tgt = pos % 50
+                    lp = -abs(rnd.gauss(1.0, 0.5)) - shift + rnd.gauss(0, noise)
+                    topk = {tgt: lp, 900: -2.0, 901: -2.5, 902: -3.0, 903: -3.5}
+                    top = max(topk, key=topk.get)
+                    cols = [pos, tgt, f"{lp:.6f}", top, f"{topk[top]:.6f}", int(top == tgt), "nan", "nan"]
+                    f.write("\t".join(map(str, cols)) + "".join(f"\t{i}:{v:.6f}" for i, v in topk.items()) + "\n")
+
+        with tempfile.TemporaryDirectory() as t:
+            a, a2, b = (str(Path(t) / n) for n in ("a.tsv", "a2.tsv", "b.tsv"))
+            rnd.seed(3); write(a, 0.0, 0.0)
+            rnd.seed(3); write(a2, 0.0, 0.0)
+            rnd.seed(3); write(b, 0.05, 0.0)
+            same = LC.compare(LC.load(a), LC.load(a2))
+            worse = LC.compare(LC.load(a), LC.load(b))
+        self.assertEqual(same["positions"], 2000)
+        self.assertAlmostEqual(same["delta_nll"], 0.0, places=6)
+        self.assertAlmostEqual(same["kl"], 0.0, places=6)
+        self.assertAlmostEqual(worse["delta_nll"], 0.05, places=4)
+        self.assertGreater(worse["ppl_b"], worse["ppl_a"])
 
 
 class FitCalibration(unittest.TestCase):
