@@ -1,0 +1,186 @@
+diff --git a/serve/server.py b/serve/server.py
+index 46e3fc3..fb40af8 100644
+--- a/serve/server.py
++++ b/serve/server.py
+@@ -504,6 +504,7 @@ class StrataEngine:
+         has gone.  A consumer that stops early (or `cancel`) makes the engine STOP, so it does not run to max_new."""
+         self.progress = None
+         self.prefill_tok_s_mean = None
++        self.last_logprobs = None      # --logprobs N: the prompt's last-position distribution
+         # an image request takes the same sampling keys as text (#75: it used to decode greedily whatever was asked)
+         head = f"GENI {int(max_new)}{self.sampling_keys(sampling or {})} {embeddings}" if embeddings else \
+             f"GEN {int(max_new)}{self.sampling_keys(sampling or {})}"
+@@ -539,7 +540,19 @@ class StrataEngine:
+                     done = True
+                     raise EngineDied(f"the engine stopped unexpectedly (exit code {self.exit_code()})")
+                 heard = time.monotonic()                  # any line is output: T, PP, RESUME, INFO ...
+-                if line.startswith("T "):
++                if line.startswith("strata logprobs:"):
++                    # engine (--logprobs N): {token_id: logprob} of the prompt's last position.
++                    # Read-only read-out; it is not part of the generated text (no `T ` prefix).
++                    pairs = {}
++                    for tok in line[len("strata logprobs:"):].split():
++                        i, _, v = tok.partition(":")
++                        try:
++                            pairs[int(i)] = float(v)
++                        except ValueError:
++                            pass
++                    if pairs:
++                        self.last_logprobs = pairs
++                elif line.startswith("T "):
+                     allow = silence
+                     if cancel.is_set():
+                         return
+@@ -1607,7 +1620,8 @@ class Service:
+         for ev in parser.finish():
+             yield "event", ev
+         yield "done", {"finish": finish, "completion_tokens": n, "reused": (timings or {}).get("cache_n", 0),
+-                       "timings": timings}
++                       "timings": timings,
++                       "strata_logprobs": getattr(self.engine, "last_logprobs", None)}
+ 
+ 
+ def prompt_tokens_seen(prompt_tokens: int, last: dict) -> int:
+@@ -1798,6 +1812,8 @@ def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel
+                              "prompt_tokens_details": {"cached_tokens": x.get("reused") or 0}}
+             if x.get("timings"):
+                 last["timings"] = x["timings"]          # llama.cpp's field: the speed its clients show
++            if x.get("strata_logprobs"):
++                last["strata_logprobs"] = x["strata_logprobs"]   # --logprobs N (System One)
+             yield last
+ 
+ 
+@@ -1842,6 +1858,8 @@ def openai_collect(chunks) -> dict:
+            "usage": last["usage"]}
+     if last.get("timings"):
+         out["timings"] = last["timings"]
++    if last.get("strata_logprobs"):
++        out["strata_logprobs"] = last["strata_logprobs"]
+     return out
+ 
+ 
+diff --git a/src/program/generate.cpp b/src/program/generate.cpp
+index a7c77d0..cce87d1 100644
+--- a/src/program/generate.cpp
++++ b/src/program/generate.cpp
+@@ -171,6 +171,13 @@ struct Options {
+     float temperature = 1.0f;
+     std::string dump_logits;          // one line of logits per generated position
+     int64_t logits_stride = 1;        // storage selection; all prompt tokens remain conditioned
++    /// **SYSTEM ONE / JEV, `--logprobs N`.**  Emit, once per generated position, a
++    /// `strata logprobs:` line with the N most likely tokens and their log-softmax
++    /// (the distribution the sampler draws from, at this run's temperature), so a
++    /// caller can score a finite set of options in ONE forward pass instead of
++    /// generating JSON and validating it.  Token IDs, not text: this build has no
++    /// tokenizer (see the note at the top); the server decodes them.  0 = off.
++    int logprobs = 0;
+     /// **THE RESIDUAL, SO THE HEAD CAN BE CHECKED WITHOUT THE LAYERS.**
+     ///
+     /// C1 fails (LEDGER L116) and the pipeline is `embed -> 48 layers -> head`.  Dumping `R` splits it in half:
+@@ -501,6 +508,8 @@ void usage() {
+                  "  --seed S             enable sampling with this Philox seed\n"
+                  "  --top-k N --top-p F --temperature F\n"
+                  "  --dump-logits PATH   write one line of raw logits per position\n"
++                 "  --logprobs N         emit the N top tokens' logprobs once per generated position\n"
++                 "                       (a `strata logprobs:` line; for decision/System One callers)\n"
+                  "  --logits-stride N    store every Nth row plus final input (default 1); N>1 requires --max-new 1\n"
+                  "  --dump-residual PATH write the final R (hc x n_embd, f32) for head bisection\n"
+                  "  --dump-layers PATH   write R after EVERY layer, per position: the C1 bisection ladder\n"
+@@ -859,6 +868,33 @@ int argmax(const std::vector<float>& v) {
+     return best;
+ }
+ 
++/// **`--logprobs N`: SYSTEM ONE / JEV OVER THE PROMPT'S LAST POSITION.**
++///
++/// Print the N most likely next tokens and their log-softmax, so a caller can score a
++/// FINITE set of options (a, b, c... the letters of a choice question) in one forward
++/// pass instead of generating JSON and validating it.  Absolute logprobs (log-softmax
++/// over the whole vocabulary, temperature 1): the caller applies its own temperature and
++/// normalizes over its own options.  Token IDs, not text - this build has no tokenizer,
++/// the server decodes them.  Pure read-out: it never draws, commits or touches the
++/// sampler or the KV state, so normal generation is byte-for-byte unaffected.
++void emit_logprobs_line(const float* row, int64_t n_vocab, int k) {
++    if (k <= 0 || row == nullptr || n_vocab <= 0) return;
++    double mx = -1e30;
++    for (int64_t i = 0; i < n_vocab; ++i) if ((double) row[i] > mx) mx = (double) row[i];
++    double se = 0.0;
++    for (int64_t i = 0; i < n_vocab; ++i) se += std::exp((double) row[i] - mx);
++    const double lse = mx + std::log(se);
++    if (k > n_vocab) k = (int) n_vocab;
++    std::vector<int> idx((size_t) n_vocab);
++    for (int64_t i = 0; i < n_vocab; ++i) idx[(size_t) i] = (int) i;
++    std::partial_sort(idx.begin(), idx.begin() + k, idx.end(),
++                      [&](int a, int b) { return row[a] > row[b]; });
++    std::printf("strata logprobs:");
++    for (int i = 0; i < k; ++i) std::printf(" %d:%.6f", idx[(size_t) i], (double) row[idx[(size_t) i]] - lse);
++    std::printf("\n");
++    std::fflush(stdout);
++}
++
+ // ---- --serve's conversation cache.  A chat or an agent sends the whole conversation again with every request, and
+ // reading it again is what made a long session wait minutes for every turn.  What a sequence leaves behind splits in
+ // two, and only one half needs copying:
+@@ -1123,6 +1159,13 @@ int main(int argc, char** argv) {
+         else if (a == "--top-p") o.top_p = (float) std::atof(next("--top-p"));
+         else if (a == "--temperature") o.temperature = (float) std::atof(next("--temperature"));
+         else if (a == "--dump-logits") o.dump_logits = next("--dump-logits");
++        else if (a == "--logprobs") {
++            o.logprobs = std::atoi(next("--logprobs"));
++            if (o.logprobs < 0 || o.logprobs > 64) {
++                std::fprintf(stderr, "strata generate: --logprobs takes 0..64\n");
++                return 2;
++            }
++        }
+         else if (a == "--logits-stride") {
+             if (have_logits_stride) { std::fprintf(stderr, "--logits-stride must be supplied only once\n"); return 2; }
+             if (!strata::program::logits_selection::parse_stride(next("--logits-stride"), o.logits_stride)) {
+@@ -5750,6 +5793,14 @@ int main(int argc, char** argv) {
+                 int a = 0;
+                 while (a < T - 1 && window[(size_t) a + 1] == outv[(size_t) a]) ++a;
+                 if (from_sfx) { ++sfx_windows; sfx_drafts += T - 1; sfx_ok += a; }
++                // `--logprobs N`: the decision read-out (see emit_logprobs_line). Row 0 of the
++                // FIRST window is the prompt's last token, so its distribution is the answer to
++                // "which option comes next". Read-only: no draw, no commit, no change to `T `.
++                if (first_window && o.logprobs > 0) {
++                    std::vector<float> lp_row((size_t) ver.vocab());
++                    if (ver.copy_logits(0, lp_row.data()))
++                        emit_logprobs_line(lp_row.data(), (int64_t) ver.vocab(), o.logprobs);
++                }
+                 const Clock::time_point tw1 = Clock::now();
+                 std::thread adapt_thr;   // the adaptive tier beside the commit and the draft (as in generate)
+                 bool adapt_ok = true;
+@@ -6264,7 +6315,7 @@ int main(int argc, char** argv) {
+         }
+         const bool emit_logits = dump != nullptr &&
+             strata::program::logits_selection::selected(pos, dump_positions, o.logits_stride);
+-        const bool read_logits = !o.stream_token || o.check_logits || emit_logits;
++        const bool read_logits = !o.stream_token || o.check_logits || emit_logits || o.logprobs > 0;
+         if (read_logits && (cudaMemcpyAsync(logits.data(), d_logits, (size_t) n_vocab * 4,
+                                            cudaMemcpyDeviceToHost, (cudaStream_t) token_stream) != cudaSuccess ||
+                             cudaStreamSynchronize((cudaStream_t) token_stream) != cudaSuccess)) {
+@@ -6278,6 +6329,10 @@ int main(int argc, char** argv) {
+                          (long long) n_vocab, (long long) pos);
+             return 1;
+         }
++        // `--logprobs N`: the distribution the sampler draws from, once per position.
++        // Log-softmax over the WHOLE vocabulary (so the values are absolute logprobs,
++        // as an OpenAI-style caller expects), then the N highest tokens by logit.
++        if (o.logprobs > 0) emit_logprobs_line(logits.data(), n_vocab, o.logprobs);
+         // the header with the first row (see `hdr`): a run that dumps nothing leaves an empty file
+         if (emit_logits && !hdr_written && std::fwrite(hdr, sizeof hdr, 1, dump) != 1) {
+             std::fprintf(stderr, "strata generate: cannot write logits header\n");
+@@ -6613,6 +6668,14 @@ int main(int argc, char** argv) {
+                         std::fprintf(stderr, "strata generate: STRATA_DUMP_FIRST_LOGITS: cannot write %s\n", fl);
+                     if (f) std::fclose(f);
+                 }
++                // `--logprobs N`: the decision read-out (see emit_logprobs_line). The first
++                // window's row 0 is the prompt's last token, so its distribution IS the answer
++                // to "which option comes next". Read-only: it neither draws nor commits.
++                if (o.logprobs > 0) {
++                    std::vector<float> row((size_t) ver.vocab());
++                    if (ver.copy_logits(0, row.data()))
++                        emit_logprobs_line(row.data(), (int64_t) ver.vocab(), o.logprobs);
++                }
+             }
+             // plan v0.3 P6: the adaptive tier's host work (ranking, copy submission) runs on its own thread while the
+             // GPU commits and drafts; it touches only the residency tables, which nothing reads until the next window

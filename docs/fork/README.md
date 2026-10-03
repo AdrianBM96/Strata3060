@@ -6,8 +6,10 @@ PC barato: CPU AVX2 sin AVX-512, DDR4, 32-64 GB de RAM y a menudo PCIe 3.0. Más
 perder calidad**.
 
 Estado (2026-10-03): **auditoría y plan**. Cinco agentes revisaron el código en paralelo, cada uno con un frente:
-VRAM, kernels CUDA, CPU/RAM/PCIe, decode y contexto, e instalador. Todavía no hay cambios en el motor ni en el
-instalador. Ninguna cifra está medida en una RTX 3060: las estimaciones van marcadas como tales.
+VRAM, kernels CUDA, CPU/RAM/PCIe, decode y contexto, e instalador. Esta rama incluye además una **modificación propia del motor** (System One / `--logprobs`,
+ver `CONFIG_MEDIDA_3060_Y_SYSTEMONE.md` y su parche) y las **primeras cifras medidas en una RTX 3060**
+reales. El resto del plan sigue sin cambios en el motor ni en el instalador; las estimaciones van marcadas
+como tales.
 
 | Documento | Qué contiene |
 | --- | --- |
@@ -15,6 +17,7 @@ instalador. Ninguna cifra está medida en una RTX 3060: las estimaciones van mar
 | [informes/](informes/) | Los 5 informes completos, con citas `archivo:línea` |
 | [informes/prototipos-cpu/](informes/prototipos-cpu/) | Prototipos de kernels AVX2 medidos (IQ2_S por bloques, Q2_0 en planos) y sus arneses |
 | [informes/simulaciones/](informes/simulaciones/) | Simulaciones de la longitud del borrador MTP y de la VRAM |
+| **[CONFIG_MEDIDA_3060_Y_SYSTEMONE.md](CONFIG_MEDIDA_3060_Y_SYSTEMONE.md)** | La configuración real medida en una 3060 (decode, prefill, contexto, latencias), la convivencia con llama.cpp, y la **modificación del motor para System One** (`--logprobs N` + `ada-decide`), con el parche re-aplicable de 84 líneas |
 
 ## Lo más importante en cuatro líneas
 
