@@ -39,9 +39,9 @@ Dos avisos de método, para que no se lean de más:
 | # | Prueba | Resultado |
 | --- | --- | --- |
 | 2 | **Gobernador de CPU** | Ya está en **`performance`** (y `energy_performance_preference=performance`). No hay nada que ganar |
-| 1 | **Relojes de GPU** | Durante decode: **SM 1875 MHz de 2100** (89 %), potencia 109 W de 170, **83 °C**, persistencia *disabled*. La GPU no está a tope y va caliente |
+| 1 | **Relojes de GPU** | **Bloquear a 2100 no sirve**: con `-lgc 2100,2100` el reloj real durante decode sigue en **1875-1890 MHz** y la potencia sube de 109 W a **148 W**. La GPU está limitada por **potencia/térmica**, no por DVFS. Mediana 39,85 frente a 40,25 de automático: **neutro y gasta más**. Revertido (`-rgc`). El límite real: 170 W y 83 °C en una Victus 15L |
 | 3 | **Hilos SMT** (`--pool-workers 10`) | 39,20 · 38,80 · 41,70 · 40,90 → mediana **40,05** frente a **40,25** con 5 workers. **Neutro**, revertido |
-| 5 | **Modo PCIe** (`--pcie-mode dma`) | en medición; se añade en el commit siguiente |
+| 5 | **Modo PCIe** (`--pcie-mode dma`) | 38,70 · 40,60 · 39,80 · 40,60 → mediana **40,20** frente a **40,25** de `auto`. **Neutro**, y sin el cuelgue que avisaba (#31). Revertido |
 | 6-8 | `--kv-resident 16384`, páginas de 2 MB, `STRATA_ADAPT_NOWAIT` | pendientes (las páginas necesitan `sudo`) |
 
 **Pendiente de ti (no tengo `sudo`):**
