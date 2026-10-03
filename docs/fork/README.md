@@ -13,6 +13,7 @@ como tales.
 
 | Documento | Qué contiene |
 | --- | --- |
+| **[PLAN_MAESTRO.md](PLAN_MAESTRO.md)** | **El plan completo**: qué se puede garantizar y qué no, el método común (banco fijo, estadística, puerta de calidad), decode y prefill con regla de parada, y System One frente a Jev: más rápido, cabeza de decisión propia, abstención con garantía conformal y autoaprendizaje |
 | **[PLAN_RTX3060.md](PLAN_RTX3060.md)** | Qué limita a una 3060, qué esperar hoy, y el plan por fases (medir, configuración, CPU, VRAM, MTP, kernels) con ganancia estimada, riesgo y esfuerzo |
 | [informes/](informes/) | Los 5 informes completos, con citas `archivo:línea` |
 | [informes/prototipos-cpu/](informes/prototipos-cpu/) | Prototipos de kernels AVX2 medidos (IQ2_S por bloques, Q2_0 en planos) y sus arneses |
