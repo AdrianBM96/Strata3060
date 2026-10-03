@@ -36,8 +36,18 @@ sobre 3,6 s.
 ## 2. Sus dos correcciones a mis medidas: las dos acertadas
 
 **a) `waitB` incluye la copia PCIe.** En `auto` la copia la hacen las SM, y por eso pesa 9,3 ms. El
-A/B que faltaba es **`dma` con `--pcie-frac` 0,35/0,45** (con 0,22 hay poco que solapar, y mi A/B
-salió neutro). **En medición** (script interleaved con reinicio por medida).
+A/B que faltaba era **`dma` con `--pcie-frac` 0,35**, para solapar esa copia con los aciertos de
+VRAM. Medido con el protocolo correcto (reinicio por medida, orden alterno, temperaturas 84-86 °C
+en las 12):
+
+| | n | mediana | mín. | máx. |
+| --- | ---: | ---: | ---: | ---: |
+| base (`auto`) | 6 | **40,05** | 38,30 | 40,70 |
+| `dma` + `--pcie-frac 0.35` | 6 | **40,15** | 38,60 | 40,90 |
+
+**+0,25 %, rangos solapados: sin diferencia.** Su hipótesis del solape no se materializa en esta
+máquina. Con esto, **todos los A/B de configuración/decodificación que quedaban están agotados**:
+lo que quede tiene que venir de cambios de motor (su D3) o de más VRAM.
 
 **b) Mis preguntas de System One eran repetidas.** Tenía razón: `304 reused + 7 read` es una pregunta
 ya en un punto de control. Con preguntas **distintas** (S2 de su banco):
