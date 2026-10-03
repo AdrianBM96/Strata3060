@@ -55,3 +55,24 @@ pasadas para efectos de ~2 %.
 
 Remedición de `--spec 8` con reinicio por medida y orden alterno (4,8 / 8,4), 6 parejas. El
 resultado entra en el commit siguiente.
+
+## Resultado de la remedición de `--spec 8` (interleaved)
+
+Protocolo correcto: **reinicio antes de cada medida** (la GPU arranca igual de fría), **orden alterno
+(4,8 / 8,4)** por pareja, temperatura anotada (todas entre 66 y 70 °C, así que la deriva está
+controlada):
+
+| | n | mediana | mín. | máx. |
+| --- | ---: | ---: | ---: | ---: |
+| `--spec 4` | 6 | **40,75** | 39,90 | 42,10 |
+| `--spec 8 --mtp-max-t 4` | 6 | **40,95** | 38,70 | 42,40 |
+
+**+0,5 %, con los rangos completamente solapados: NO hay mejora medible.** El **+5,1 %** que había
+desplegado era **artefacto térmico** (medí 3 pasadas de `--spec 8` con la GPU fresca y 6 de
+`--spec 4` después, caliente).
+
+**Revertido a `--spec 4`** (el defecto): un verify window más grande gasta VRAM y no da nada.
+
+Lección para el plan: los cambios de configuración de esta máquina están, a efectos prácticos,
+**agotados**. Lo que quede tiene que venir del motor (los cambios de Claude) o de más VRAM.
+
