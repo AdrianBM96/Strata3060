@@ -26,7 +26,7 @@ cosa, y **no se suman**: varias atacan la misma parte de la ronda.
 
 También se considera la RTX 3060 de 8 GB (128 bits, 240 GB/s).
 
-## Qué limita a una 3060 (resumen de los 7 informes)
+## Qué limita a una 3060 (resumen de los informes)
 
 1. **El tiempo de cada ronda lo marca la CPU, no la GPU.** Una ronda de decode es, por capa: cadena GPU (residual,
    mezclador, router) -> la CPU calcula los expertos que no están en VRAM mientras la GPU calcula los que sí ->
@@ -219,11 +219,10 @@ está validado por KL. Se mide en la Fase 0 y no se activa sin medir.
 2. **2.6 -> 2.1 -> 2.2** (CPU), **3.2** y **3.1** (VRAM): las de mayor ganancia con calidad idéntica.
 3. **2.3 / 3.3** (PCIe), **4.1** (calibración): necesitan el banco de pruebas para afinar.
 4. **Fase 5** (kernels), cuando la Fase 0 diga cuánto pesa cada etapa.
-5. GLM: ver la [auditoría](GLM_AUDITORIA.md); no antes de tener los puntos 1-2.
 
 ## Informes completos
 
-Los siete informes de los agentes, con citas `archivo:línea`, tablas y preguntas abiertas:
+Los informes de los agentes, con citas `archivo:línea`, tablas y preguntas abiertas:
 
 | Informe | Tema |
 | --- | --- |
@@ -232,5 +231,3 @@ Los siete informes de los agentes, con citas `archivo:línea`, tablas y pregunta
 | [03-host-cpu-ram-pcie](informes/03-host-cpu-ram-pcie.md) | CPU AVX2, DDR4, PCIe 3.0 / 4.0, SSD; prototipos medidos |
 | [04-decode-spec-context](informes/04-decode-spec-context.md) | Ronda de decode, MTP, KV cache y contexto |
 | [05-setup-profile](informes/05-setup-profile.md) | `setup.py`, servidor, perfil RTX 3060, evidencia de la comunidad |
-| [06-glm-research](informes/06-glm-research.md) | GLM-5.3-Flash: arquitectura, memoria, soporte, líneas base |
-| [07-portability](informes/07-portability.md) | Qué es específico de Qwen y cómo portar a GLM |

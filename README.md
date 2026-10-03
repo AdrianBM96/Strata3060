@@ -1,8 +1,8 @@
 <h1 align="center">Strata</h1>
 
 > **Fork Strata3060:** este repositorio es un fork de [Niko1221/Strata](https://github.com/Niko1221/Strata) orientado a
-> la RTX 3060 y a PCs baratos. El plan y la auditoría (incluida la de GLM-5.3-Flash) están en
-> [docs/fork/](docs/fork/README.md). El resto de este README es el de upstream.
+> la RTX 3060 y a PCs baratos. El plan y la auditoría están en [docs/fork/](docs/fork/README.md). El resto de este
+> README es el de upstream.
 
 <p align="center"><b>Run a 125-billion-parameter AI model on your own gaming PC</b><br>
 NVIDIA or AMD graphics card (12 GB or more) · Windows or Linux · free and open source</p>
