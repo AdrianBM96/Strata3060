@@ -23,22 +23,22 @@ Calibración (las tres son opcionales y se combinan):
   * permutations=P: la misma pregunta con las opciones rotadas P veces; se promedian las
     probabilidades por opcion.  Quita el sesgo de letra y de posicion.  Con el estado en el mensaje
     de sistema (--prompt-cache-root) cada permutacion extra solo lee la pregunta (~0,4 s medido).
-  * calibrate=true: calibracion contextual (Zhao et al. 2021, "Calibrate Before Use").  Una peticion
-    con el estado "N/A" da el sesgo p_cf de cada opcion para esa plantilla; p ∝ p / p_cf.  Se guarda
-    en memoria por plantilla (instrucciones + opciones + orden), asi que cuesta una peticion por
-    plantilla, no por decision.
+  * calibrate=true: quita el sesgo de POSICION/LETRA.  Una peticion con el estado "N/A", una pregunta
+    neutra y todas las opciones con el mismo texto mide cuanto prefiere el modelo cada letra por si
+    sola; p ∝ p / p_letra.  Una peticion por numero de opciones, guardada en memoria.  (La version
+    anterior dejaba la pregunta y las opciones reales y, medido en la 3060, restaba señal: no la uséis.)
   * temperature=T: p ∝ exp(logprob / T).  Ajustad T con fit-calibration.py sobre decisiones
     etiquetadas (el log de --log).  T > 1 baja la sobreconfianza.
 
 Señales para escalar a "System Two" (una generacion normal con razonamiento):
-  * margin: p(1.ª) - p(2.ª).  Bajo = dudoso.
+  * margin: p(1.ª) - p(2.ª).  Medido en la 3060 (MEDICION_RONDA2/3): NO separa los casos claros de los
+    vagos en este modelo, asi que por defecto no escala (--escalate-margin 0); ajustadlo con datos.
   * option_mass: probabilidad ABSOLUTA que el modelo da a las etiquetas de las opciones (antes de
     normalizar).  Baja = el modelo queria escribir otra cosa: la respuesta no es fiable.
   * agreement: que parte de las permutaciones elige la misma opcion (1 = todas).  < 1 = escalar.
-  * debiased: true si la respuesta esta corregida de sesgo (permutations > 1 o calibrate).  Sin eso el
-    margen mide sobre todo el sesgo de letra (medido: estado vacio -> "(A)" con margen 0,91), asi que
-    **no fieis escalate a un margen sin corregir**.
-  * escalate: true si margin < --escalate-margin, option_mass < --min-mass o agreement < 1.
+  * debiased: true si la respuesta esta corregida de sesgo de orden (permutations > 1 o calibrate).
+  * escalate: true si agreement < 1, option_mass < --min-mass o margin < --escalate-margin.  La señal
+    que funciono medida es agreement (detecto el fallo con 3 permutaciones: 0,33).
 
 Limites honestos:
   * No es un decisor entrenado: son las preferencias del modelo base.  La calibracion de arriba
@@ -46,10 +46,10 @@ Limites honestos:
 
 Uso:  python3 ada-decide.py [--port 8087] [--strata http://127.0.0.1:8081] [--tokenizer DIR]
                             [--permutations 1] [--calibrate] [--temperature 1.0]
-                            [--escalate-margin 0.2] [--min-mass 0.2] [--log decisions.jsonl]
+                            [--escalate-margin 0] [--min-mass 0.2] [--log decisions.jsonl]
 """
 from __future__ import annotations
-import argparse, hashlib, json, math, os, sys, threading, time, urllib.request
+import argparse, json, math, os, sys, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -174,30 +174,41 @@ def rotations(keys: list[str], n: int) -> list[list[str]]:
     return [keys[int(round(r * step)):] + keys[:int(round(r * step))] for r in range(n)]
 
 
+NEUTRAL_QUESTION = "Pick one of the options."
+NEUTRAL_OPTION = "an option"
+
+
 class Calibrator:
-    """Sesgo de cada plantilla con el estado vacio (calibracion contextual), en memoria."""
+    """El sesgo de POSICION/LETRA: la misma plantilla con el estado vacio, una pregunta neutra y todas las opciones
+    con el mismo texto, asi que lo unico que distingue a (A) de (B) es la letra y su sitio.
+
+    La primera version dejaba la pregunta y las opciones reales (Zhao et al. tal cual) y medido en la 3060
+    (docs/fork/MEDICION_RONDA3.md) restaba SEÑAL: con `State: N/A` el modelo ya sabe que "Bugs o caidas" es lo
+    plausible para un ticket, y dividir por eso empujaba a la respuesta equivocada.  Con opciones identicas no hay
+    contenido que restar.  Depende solo del numero de opciones: una peticion por n, guardada en memoria."""
 
     def __init__(self):
-        self.cache: dict[str, dict[str, float]] = {}
+        self.cache: dict[int, list[float]] = {}
         self.lock = threading.Lock()
 
-    @staticmethod
-    def key(instructions, order, criteria) -> str:
-        raw = json.dumps([instructions, [[k, criteria[k]] for k in order]], ensure_ascii=False)
-        return hashlib.sha1(raw.encode()).hexdigest()
+    def positional(self, url, tok, n, timeout) -> list[float]:
+        """log p(letra i) normalizado sobre las n letras, con opciones identicas."""
+        with self.lock:
+            if n in self.cache:
+                return self.cache[n]
+        keys = [str(i) for i in range(n)]
+        scores, _, _ = option_scores(url, tok, CONTENT_FREE, NEUTRAL_QUESTION, keys,
+                                     {k: NEUTRAL_OPTION for k in keys}, timeout)
+        lse = logsumexp([scores[k] for k in keys])
+        b = [scores[k] - lse for k in keys]
+        with self.lock:
+            self.cache[n] = b
+        return b
 
     def bias(self, url, tok, instructions, order, criteria, timeout) -> dict[str, float]:
-        """log p_cf(opcion), normalizado sobre las opciones, para este orden."""
-        k = self.key(instructions, order, criteria)
-        with self.lock:
-            if k in self.cache:
-                return self.cache[k]
-        scores, _, _ = option_scores(url, tok, CONTENT_FREE, instructions, order, criteria, timeout)
-        lse = logsumexp(list(scores.values()))
-        b = {o: s - lse for o, s in scores.items()}
-        with self.lock:
-            self.cache[k] = b
-        return b
+        """log p_cf de cada opcion = el sesgo de la letra que le toca en este orden."""
+        pos = self.positional(url, tok, len(order), timeout)
+        return {k: pos[i] for i, k in enumerate(order)}
 
 
 CALIBRATOR = Calibrator()
@@ -236,7 +247,7 @@ def decide_choice(url, tok, state, instructions, criteria: dict, timeout: float,
     debiased = len(orders) > 1 or bool(cfg.get("calibrate"))
     agreement = sum(w == best for w in winners) / len(winners)   # que parte de los ordenes elige lo mismo
     reasons = []
-    if margin < float(cfg.get("escalate_margin", 0.2)):
+    if margin < float(cfg.get("escalate_margin", 0.0)):
         reasons.append("margin")
     if mass < float(cfg.get("min_mass", 0.2)):
         reasons.append("option_mass")
@@ -366,9 +377,10 @@ def main():
     ap.add_argument("--tokenizer", default=os.environ.get("STRATA_TOKENIZER", DEFAULT_TOKENIZER))
     ap.add_argument("--timeout", type=float, default=120.0)
     ap.add_argument("--permutations", type=int, default=1, help="ordenes de opciones por pregunta (1 = sin permutar)")
-    ap.add_argument("--calibrate", action="store_true", help="calibracion contextual (estado 'N/A') por plantilla")
+    ap.add_argument("--calibrate", action="store_true", help="quita el sesgo de letra (opciones identicas, estado N/A)")
     ap.add_argument("--temperature", type=float, default=1.0, help="T ajustada con fit-calibration.py")
-    ap.add_argument("--escalate-margin", type=float, default=0.2)
+    ap.add_argument("--escalate-margin", type=float, default=0.0,
+                    help="0 = el margen no escala (medido: no separa claros de vagos en este modelo)")
     ap.add_argument("--min-mass", type=float, default=0.2,
                     help="masa absoluta minima en las etiquetas; ajustadla mirando el log")
     ap.add_argument("--log", default=None, help="JSONL con cada decision (para etiquetar y ajustar T)")

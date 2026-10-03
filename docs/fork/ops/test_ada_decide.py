@@ -37,9 +37,12 @@ class FakeTok:
         raise ValueError(text)
 
 
-def fake_model(letter_bias=2.0, content={"technical": 0.5}, empty_state_content=None):
+def fake_model(letter_bias=2.0, content={"technical": 0.5}, prior=None):
     """Un Strata simulado: logprob de la letra de cada opcion = sesgo de letra (A favorecida) + preferencia
-    por su contenido; el resto de la masa se la lleva otro token.  Con el estado 'N/A' no hay contenido."""
+    por su contenido segun el estado + `prior`, lo plausible que es la opcion por su texto aunque no haya
+    estado (lo que medisteis en la 3060: con 'State: N/A' el modelo ya prefiere 'Bugs o caidas').  El resto
+    de la masa se la lleva otro token.  Con el estado 'N/A' no hay contenido; con opciones neutras, ni prior."""
+    prior = prior or {}
     calls = []
 
     def ask(url, system, user, timeout, lpids):
@@ -49,7 +52,7 @@ def fake_model(letter_bias=2.0, content={"technical": 0.5}, empty_state_content=
         logits = {}
         for line in opts:
             letter, desc = line[1], line[4:]
-            s = (letter_bias if letter == "A" else 0.0)
+            s = (letter_bias if letter == "A" else 0.0) + prior.get(desc, 0.0)
             if not cf:
                 s += content.get(desc, 0.0)
             logits[letter] = s
@@ -104,6 +107,18 @@ class Decide(unittest.TestCase):
         self.run_choice(ask, calibrate=True)
         self.assertEqual(len(ask.calls), 3)                               # el sesgo ya esta en memoria
 
+    def test_calibration_removes_letter_bias_but_keeps_the_options_prior(self):
+        """MEDICION_RONDA3: con la pregunta y las opciones reales en la corrida sin contenido, la calibracion
+        restaba el prior de las opciones (señal) y elegia mal.  Ahora la corrida usa opciones identicas."""
+        ask = fake_model(letter_bias=1.0, content={}, prior={"technical": 1.5})
+        ans = self.run_choice(ask)
+        self.assertEqual(ans["choice"], "technical")
+        ans = self.run_choice(ask, calibrate=True)
+        self.assertEqual(ans["choice"], "technical")                    # la version anterior elegia "billing"
+        neutral = [u for s_, u in ask.calls if AD.NEUTRAL_QUESTION in u]
+        self.assertEqual(len(neutral), 1)
+        self.assertNotIn("technical", neutral[0])
+
     def test_temperature_softens(self):
         a1 = self.run_choice(fake_model(), calibrate=True)
         a2 = self.run_choice(fake_model(), calibrate=True, temperature=2.0)
@@ -112,6 +127,8 @@ class Decide(unittest.TestCase):
 
     def test_escalate_on_low_margin_and_low_mass(self):
         ans = self.run_choice(fake_model(letter_bias=0.0, content={"technical": 0.05}))
+        self.assertFalse(ans["escalate"])                                 # el margen no escala por defecto
+        ans = self.run_choice(fake_model(letter_bias=0.0, content={"technical": 0.05}), escalate_margin=0.2)
         self.assertTrue(ans["escalate"])
         self.assertEqual(ans["escalate_reasons"], ["margin"])
         ans = self.run_choice(fake_model(letter_bias=0.0, content={"technical": 5.0}), min_mass=0.9)
@@ -128,7 +145,7 @@ class Decide(unittest.TestCase):
         self.assertFalse(a["debiased"])
         self.assertGreater(a["margin"], 0.6)
         self.assertFalse(a["escalate"])
-        c = self.run_choice(clear)
+        c = self.run_choice(clear, escalate_margin=0.2)
         self.assertEqual(c["choice"], "technical")
         self.assertLess(c["margin"], 0.2)
         self.assertTrue(c["escalate"])
