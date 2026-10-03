@@ -49,9 +49,17 @@ Uso:  python3 ada-decide.py [--port 8087] [--strata http://127.0.0.1:8081] [--to
                             [--escalate-margin 0] [--min-mass 0.2] [--log decisions.jsonl]
 """
 from __future__ import annotations
-import argparse, json, math, os, sys, threading, time, urllib.request
+import argparse, json, math, os, random, sys, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import s1_learn  # noqa: E402  el bucle de autoaprendizaje (registro, calibracion aprendida, conformal, System Two)
+
+STORE: "s1_learn.Store | None" = None
+LEARNER: "s1_learn.Learner | None" = None
+SYSTEM2: "s1_learn.SystemTwo | None" = None
+AUDIT_RATE = 0.05
 
 LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 CONTENT_FREE = "N/A"
@@ -238,6 +246,14 @@ def decide_choice(url, tok, state, instructions, criteria: dict, timeout: float,
             acc[k] += p / len(orders)
         winners.append(keys[max(range(len(keys)), key=probs.__getitem__)])
         passes.append({"order": order, "raw": scores, **({"cf": cf} if cf else {})})
+    # el bucle de aprendizaje: la calibracion aprendida de esta plantilla (si hay una activa) y su umbral conformal
+    tid = s1_learn.template_id(instructions, keys, criteria)
+    z = s1_learn.option_features(keys, passes)
+    model = None
+    if LEARNER is not None:
+        acc2, model = LEARNER.adjust(tid, keys, z, acc)
+        if model is not None:
+            acc = acc2
     best, second = sorted(keys, key=acc.get, reverse=True)[:2]
     margin = acc[best] - acc[second]
     mass = sum(masses) / len(masses)
@@ -253,14 +269,22 @@ def decide_choice(url, tok, state, instructions, criteria: dict, timeout: float,
         reasons.append("option_mass")
     if agreement < 1.0:
         reasons.append("permutations_disagree")      # la respuesta cambia al cambiar el orden: no es fiable
+    auto, guarantee = LEARNER.gate(model, acc[best]) if LEARNER is not None else (None, None)
+    if auto is False:
+        reasons.append("conformal")                  # por debajo del umbral con error garantizado: no decide solo
     out = {"type": "choice", "choice": best, "confidence": acc[best], "probabilities": acc,
            "margin": margin, "option_mass": mass, "agreement": agreement, "debiased": debiased,
-           "escalate": bool(reasons)}
+           "escalate": bool(reasons), "template": tid}
+    if auto is not None:
+        out["auto"] = auto
+        out["guarantee"] = guarantee
     if reasons:
         out["escalate_reasons"] = reasons
     if missing_all:
         out["missing_label_ids"] = sorted(missing_all)   # no deberia pasar con lpids; si pasa, se dice
-    out["_passes"] = passes                               # para el log; se quita antes de responder
+    out["_passes"] = passes                               # para el log y el registro; se quitan antes de responder
+    out["_keys"], out["_criteria"], out["_z"], out["_best"] = keys, criteria, z, best
+    out["_model_version"] = model["version"] if model else None
     return out, usage
 
 
@@ -307,10 +331,72 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path.rstrip("/") in ("/health", ""):
+        path = self.path.rstrip("/")
+        if path in ("/health", ""):
             return self._send(200, {"status": "ok", "service": "ada-decide", "model": self.model,
-                                    "defaults": self.defaults})
+                                    "defaults": self.defaults, "learning": STORE is not None})
+        if path == "/v1/systemone/stats":
+            if STORE is None:
+                return self._send(404, {"error": "learning is off (start with --db)"})
+            s2 = {"queued": SYSTEM2.q.qsize(), "done": SYSTEM2.done, "failed": SYSTEM2.failed} if SYSTEM2 else None
+            return self._send(200, {"templates": STORE.stats(), "system2": s2, "audit_rate": AUDIT_RATE})
         self._send(404, {"error": "not found"})
+
+    def _remember(self, state, qtype, instr, ans) -> None:
+        """Registra la decision (si el aprendizaje esta activo), le pone id y encola su etiqueta de System Two: toda
+        decision que escala, y una muestra aleatoria (--audit-rate) de las que no."""
+        if STORE is None:
+            return
+        did = STORE.record(qtype, ans["template"], instr, ans["_keys"], ans["_criteria"], state, ans["_z"],
+                           ans["_passes"], ans["probabilities"], ans["_best"], ans["confidence"], ans["escalate"],
+                           ans.get("auto"), ans["_model_version"])
+        ans["id"] = did
+        if SYSTEM2 is not None:
+            if ans["escalate"]:
+                SYSTEM2.enqueue(did, "system2")
+            elif random.random() < AUDIT_RATE:
+                SYSTEM2.enqueue(did, "audit")
+
+    def _body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        return json.loads(self.rfile.read(n) or b"{}")
+
+    def _feedback(self, req):
+        """{"id": ..., "label": ...} o {"labels": [{"id", "label"}, ...]}: etiquetas humanas (ORO)."""
+        if STORE is None:
+            return self._send(404, {"error": "learning is off (start with --db)"})
+        items = req.get("labels") or [req]
+        done, bad = 0, []
+        for it in items:
+            d = STORE.decision(str(it.get("id")))
+            label = it.get("label")
+            if isinstance(label, bool):
+                label = "true" if label else "false"
+            if d is None or str(label) not in d["keys"]:
+                bad.append({"id": it.get("id"), "error": "unknown id" if d is None else f"label not in {d['keys']}"})
+                continue
+            STORE.add_label(d["id"], "human", str(label), {"agrees": str(label) == d["choice"]})
+            if LEARNER is not None:
+                LEARNER.on_label(d["template"])
+            done += 1
+        return self._send(200 if not bad else 207, {"stored": done, "errors": bad})
+
+    def _warm(self, req):
+        """Lee el estado YA (en segundo plano), antes de que lleguen las preguntas: la 1.ª pregunta reutiliza su punto
+        de control (--prompt-cache-root) en vez de leer el estado entero."""
+        state = req.get("state")
+        if not state:
+            return self._send(400, {"error": "state is required"})
+
+        def work():
+            with self.lock:
+                try:
+                    system, user = render(state, "warm-up", ["yes", "no"])
+                    ASK(self.strata, system, user, self.timeout, label_ids(self.tokenizer, "A"))
+                except Exception:
+                    pass
+        threading.Thread(target=work, daemon=True).start()
+        return self._send(202, {"warming": True})
 
     def _log(self, state, qid, q, ans, cfg):
         """Una linea JSONL por pregunta: lo necesario para etiquetarla y ajustar la calibracion
@@ -324,13 +410,26 @@ class Handler(BaseHTTPRequestHandler):
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     def do_POST(self):
-        if self.path.rstrip("/") not in ("/v1/systemone", "/systemone"):
-            return self._send(404, {"error": "not found"})
+        path = self.path.rstrip("/")
         try:
-            n = int(self.headers.get("Content-Length") or 0)
-            req = json.loads(self.rfile.read(n) or b"{}")
+            req = self._body()
         except Exception as e:
             return self._send(400, {"error": f"bad json: {e}"})
+        if path == "/v1/systemone/feedback":
+            return self._feedback(req)
+        if path == "/v1/systemone/warm":
+            return self._warm(req)
+        if path in ("/v1/systemone/retrain", "/v1/systemone/rollback"):
+            if STORE is None or LEARNER is None:
+                return self._send(404, {"error": "learning is off (start with --db)"})
+            tids = [req["template"]] if req.get("template") else list(STORE.stats().keys())
+            if path.endswith("rollback"):
+                versions = {t: STORE.rollback(t) for t in tids}
+                LEARNER.cache.clear()
+                return self._send(200, {"active_versions": versions})
+            return self._send(200, {"results": [LEARNER.retrain(t) for t in tids]})
+        if path not in ("/v1/systemone", "/systemone"):
+            return self._send(404, {"error": "not found"})
         state = req.get("state")
         questions = req.get("questions") or {}
         if not state or not isinstance(questions, dict) or not questions:
@@ -365,7 +464,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._log(state, qid, q, ans, cfg)
             except OSError:
                 pass
-            ans.pop("_passes", None)
+            try:
+                self._remember(state, qtype, instr, ans)
+            except Exception as e:                     # el registro nunca tumba una respuesta
+                ans["learning_error"] = str(e)[:200]
+            for k in [k for k in ans if k.startswith("_")]:
+                ans.pop(k)
             answers[qid] = ans
         return self._send(200, {"model": self.model, "answers": answers})
 
@@ -384,6 +488,16 @@ def main():
     ap.add_argument("--min-mass", type=float, default=0.2,
                     help="masa absoluta minima en las etiquetas; ajustadla mirando el log")
     ap.add_argument("--log", default=None, help="JSONL con cada decision (para etiquetar y ajustar T)")
+    ap.add_argument("--db", default=None, help="SQLite del bucle de aprendizaje (sin esto, no aprende)")
+    ap.add_argument("--audit-rate", type=float, default=0.05, help="parte de las decisiones automaticas que audita "
+                    "System Two en segundo plano")
+    ap.add_argument("--no-system2", action="store_true", help="no resolver con System Two (solo feedback humano)")
+    ap.add_argument("--system2-effort", default="high")
+    ap.add_argument("--system2-max-tokens", type=int, default=2048)
+    ap.add_argument("--alpha", type=float, default=0.05, help="error maximo garantizado de lo que decide solo")
+    ap.add_argument("--delta", type=float, default=0.1, help="1 - confianza de esa garantia")
+    ap.add_argument("--retrain-every", type=int, default=20, help="etiquetas nuevas por plantilla entre reentrenos")
+    ap.add_argument("--keep-state-days", type=float, default=30.0, help="dias que se guarda el texto de cada estado")
     a = ap.parse_args()
     Handler.tokenizer = build_tokenizer(Path(a.tokenizer))
     Handler.strata = a.strata
@@ -391,7 +505,21 @@ def main():
     Handler.log_path = a.log
     Handler.defaults = {"permutations": a.permutations, "calibrate": a.calibrate, "temperature": a.temperature,
                         "escalate_margin": a.escalate_margin, "min_mass": a.min_mass}
-    print(f"[ada-decide] :{a.port} -> {a.strata} (tokenizer {a.tokenizer}) {Handler.defaults}", flush=True)
+    global STORE, LEARNER, SYSTEM2, AUDIT_RATE
+    if a.db:
+        STORE = s1_learn.Store(a.db, a.keep_state_days)
+        LEARNER = s1_learn.Learner(STORE, alpha=a.alpha, delta=a.delta, retrain_every=a.retrain_every)
+        AUDIT_RATE = a.audit_rate
+        if not a.no_system2:
+            SYSTEM2 = s1_learn.SystemTwo(STORE, LEARNER, a.strata, a.system2_effort, a.system2_max_tokens)
+
+        def purge():
+            while True:
+                STORE.purge_states()
+                time.sleep(3600)
+        threading.Thread(target=purge, daemon=True).start()
+    print(f"[ada-decide] :{a.port} -> {a.strata} (tokenizer {a.tokenizer}) {Handler.defaults} "
+          f"learning={'on' if STORE else 'off'}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", a.port), Handler).serve_forever()
 
 

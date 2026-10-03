@@ -18,8 +18,11 @@ jobs:
           cmake --build build --target iq2s_avx2_test -j4
           ctest --test-dir build -R iq2s_avx2_test --output-on-failure
           ./build/iq2s_avx2_test --bench
-      - name: System One tools
-        run: python3 docs/fork/ops/test_ada_decide.py
+      - name: System One tools, learning loop and bench
+        run: |
+          python3 docs/fork/ops/test_ada_decide.py
+          python3 docs/fork/ops/test_s1_learn.py
+          python3 docs/fork/ops/test_bench.py
       - name: setup's tests
         run: |
           for t in tools/test_setup_choices.py tools/test_setup_lowram.py tools/test_setup_draft_vocab.py; do python3 "$t"; done

@@ -8,6 +8,9 @@ la configuración sea **reproducible y revisable**.
 | `ada-decide.py` | El servicio System One (`POST /v1/systemone`, :8087). Contrato Jev: `choice`/`score`/`noul`. Permutaciones, calibración contextual, temperatura, señales para escalar (`margin`, `option_mass`, `escalate`) y log JSONL. |
 | `fit-calibration.py` | Ajusta la temperatura (y decide si conviene la calibración contextual) con decisiones etiquetadas del log de `ada-decide.py --log`. |
 | `logpos-compare.py` | Compara dos configuraciones sobre el mismo texto, token a token (`STRATA_LOGPOS`): acuerdo top-1, solape, KL y ΔNLL con su error, descontado el ruido. Para YaRN sí/no, int8/q4_0... |
+| `s1_learn.py` | El bucle de autoaprendizaje de System One: registro SQLite, etiquetas (feedback humano, System Two, auditoría), calibración aprendida por plantilla con campeón/aspirante, umbral conformal con error garantizado y System Two en segundo plano. Lo usa `ada-decide.py --db` |
+| `bench.py` | El banco fijo del plan maestro (B1-B3 decode, P1-P2 prefill, S1-S3 System One) y la comparación A/B con mediana, IC bootstrap y Mann-Whitney |
+| `test_s1_learn.py`, `test_bench.py` | Tests sin GPU del bucle y del banco |
 | `test_ada_decide.py` | Tests sin GPU de los tres anteriores (`python3 test_ada_decide.py`). |
 | `apply-tuning.sh` | Reaplica el tuneo a los `strata-*.json` (setup los reescribe y borra las claves nuestras), incluidos `--kv int8`, `--prompt-cache-root 256`, `--logprobs 32` y `"draft_vocab": "en"`. |
 | `free-vram.sh` | Aparta el modelo de llama.cpp antes de que Strata cargue (`before_load`). |
