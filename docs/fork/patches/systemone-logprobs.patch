@@ -77,7 +77,7 @@ index 46e3fc3..4326539 100644
  
  
 diff --git a/src/program/generate.cpp b/src/program/generate.cpp
-index a7c77d0..6fea062 100644
+index a7c77d0..294cdd9 100644
 --- a/src/program/generate.cpp
 +++ b/src/program/generate.cpp
 @@ -171,6 +171,13 @@ struct Options {
@@ -199,16 +199,88 @@ index a7c77d0..6fea062 100644
                      else if (key == "temperature") req_temperature = fv;
                      else if (key == "top_p") req_top_p = fv;
                      else if (key == "top_k") req_top_k = std::atoi(tok.c_str() + eq + 1);
-@@ -5750,6 +5827,18 @@ int main(int argc, char** argv) {
+@@ -5609,8 +5686,25 @@ int main(int argc, char** argv) {
+                         if (i >= o.prompt_cache_root) root_at = i;
+                         break;
+                     }
++            // System One (a request with `lpids` and max_new 1: one decision, docs/fork/PLAN_MAESTRO.md V2).  Its last
++            // `fold` prompt tokens (up to a window, S) ride in the first verify window instead of a read of their own
++            // plus a window for the last token alone: the window computes the head for every row, and its last row IS
++            // the answer's distribution.  It also takes no checkpoint at its turn boundary: a decision's question is
++            // never continued, and the state's root checkpoint (--prompt-cache-root) is the one the next question on
++            // that state reuses.  The tokens are committed exactly as a read would commit them.  STRATA_S1_FOLD=0: off.
++            static const bool s1_fold_on = [] {
++                const char* v = std::getenv("STRATA_S1_FOLD");
++                return v == nullptr || v[0] != '0';
++            }();
++            const bool s1 = s1_fold_on && max_new == 1 && !req_logprob_ids.empty() && !geni && reread_to <= 0;
++            int64_t fold = 1;   // the prompt tokens the first window carries: 1 = the last one alone (every other request)
++            if (s1) {
++                const int64_t start = std::max<int64_t>(read_from, root_at > 0 ? root_at : 0);
++                fold = std::max<int64_t>(1, std::min<int64_t>((int64_t) S, n - start));
++            }
++            const int64_t split_at = s1 ? -1 : turn_at;
+             int64_t at = read_from;
+-            for (const int64_t to : {reread_to, root_at, turn_at, n - 1}) {
++            for (const int64_t to : {reread_to, root_at, split_at, n - fold}) {
+                 if (to <= at) continue;
+                 err.clear();
+                 const bool win = windows_ok(at, to);
+@@ -5660,9 +5754,9 @@ int main(int argc, char** argv) {
+             const double prompt_ms = std::chrono::duration<double, std::milli>(Clock::now() - r0).count();
+             std::printf("REUSED %lld\n", (long long) resume);   // the prompt is read; the first window comes next
+             std::fflush(stdout);
+-            // the verify windows: the first holds the last prompt token alone
+-            int64_t p = n - 1;
+-            int32_t x = (int32_t) ids[(size_t) (n - 1)];
++            // the verify windows: the first holds the last prompt token alone (a System One request: the last `fold`)
++            int64_t p = n - fold;
++            int32_t x = (int32_t) ids[(size_t) (n - fold)];
+             std::vector<int32_t> drafts((size_t) S, 0), window((size_t) S), outv((size_t) S);
+             std::vector<float> dprob((size_t) S, 0.0f);
+             std::vector<int32_t> sbuf((size_t) S, 0);
+@@ -5676,7 +5770,7 @@ int main(int argc, char** argv) {
+             // what the session holds once this request is done: the prompt read so far, then every committed token
+             std::vector<int32_t> consumed;
+             consumed.reserve((size_t) (n + max_new + S));
+-            for (int64_t i = 0; i < n - 1; ++i) consumed.push_back((int32_t) ids[(size_t) i]);
++            for (int64_t i = 0; i < n - fold; ++i) consumed.push_back((int32_t) ids[(size_t) i]);
+             const char* finish = "length";
+             const Clock::time_point d0 = Clock::now();
+             // STRATA_DECODE_TIMING=1: where a request's decode time goes (one line per request)
+@@ -5705,7 +5799,7 @@ int main(int argc, char** argv) {
+                     T = 1;
+                     while (T < S_mtp && dprob[(size_t) T - 1] >= (float) req_spec_min_p) ++T;
+                 }
+-                if (first_window) T = 1;
++                if (first_window) T = (int) fold;
+                 // a repeat of earlier context (prompt lookup) where the MTP's own first guess agrees: the policy takes it
+                 // when its expected tokens per ms, from the measured acceptance and window costs, beat the MTP window's
+                 bool from_sfx = false;
+@@ -5723,6 +5817,10 @@ int main(int argc, char** argv) {
+                 if (p + T > o.max_context) break;
+                 window[0] = x;
+                 for (int i = 1; i < T; ++i) window[(size_t) i] = from_sfx ? sbuf[(size_t) i - 1] : drafts[(size_t) i - 1];
++                // System One: the first window's rows after x are the prompt's own last tokens, not drafts
++                const bool forced = first_window && fold > 1;
++                if (forced)
++                    for (int i = 1; i < T; ++i) window[(size_t) i] = (int32_t) ids[(size_t) (n - fold + i)];
+                 drive.d.layers = 0;
+                 drive.d.experts = 0;
+                 drive.d.failed = false;
+@@ -5749,7 +5847,21 @@ int main(int argc, char** argv) {
+                 }
                  int a = 0;
                  while (a < T - 1 && window[(size_t) a + 1] == outv[(size_t) a]) ++a;
++                if (forced) a = T - 1;   // the prompt's own tokens: every one of them joins the session
                  if (from_sfx) { ++sfx_windows; sfx_drafts += T - 1; sfx_ok += a; }
-+                // `--logprobs N`: the decision read-out (see emit_logprobs_line). Row 0 of the
-+                // FIRST window is the prompt's last token, so its distribution is the answer to
-+                // "which option comes next". Read-only: no draw, no commit, no change to `T `.
++                // `--logprobs N`: the decision read-out (see emit_logprobs_line). Row a of the FIRST
++                // window is the prompt's last token (row 0, or the last of the System One fold), so its
++                // distribution is the answer to "which option comes next". Read-only: no draw, no
++                // commit, no change to `T `.
 +                if (first_window && o.logprobs > 0) {
 +                    std::vector<float> lp_row((size_t) ver.vocab());
-+                    if (ver.copy_logits(0, lp_row.data())) {
++                    if (ver.copy_logits(forced ? a : 0, lp_row.data())) {
 +                        if (!req_logprob_ids.empty())
 +                            emit_logprobs_ids(lp_row.data(), (int64_t) ver.vocab(), req_logprob_ids);
 +                        else
@@ -218,7 +290,44 @@ index a7c77d0..6fea062 100644
                  const Clock::time_point tw1 = Clock::now();
                  std::thread adapt_thr;   // the adaptive tier beside the commit and the draft (as in generate)
                  bool adapt_ok = true;
-@@ -6613,6 +6702,14 @@ int main(int argc, char** argv) {
+@@ -5762,11 +5874,14 @@ int main(int argc, char** argv) {
+                 }
+                 // the window's first a + 1 tokens are in the session now (the last output is not: it is next x)
+                 for (int i = 0; i <= a; ++i) consumed.push_back(window[(size_t) i]);
+-                draft_offered += T - 1;
+-                draft_accepted += a;
++                if (!forced) {   // the fold's rows are prompt, not drafts: they stay out of the acceptance figures
++                    draft_offered += T - 1;
++                    draft_accepted += a;
++                }
+                 first_window = false;
+                 bool eos = false;
+-                for (int i = 0; i <= a && produced_n < max_new && !eos; ++i) {
++                // the fold's rows 0..a-1 predicted prompt tokens the request already gave: only row a is output
++                for (int i = forced ? a : 0; i <= a && produced_n < max_new && !eos; ++i) {
+                     std::printf("T %d\n", (int) outv[(size_t) i]);
+                     strata::core::progress_beat();
+                     ++produced_n;
+@@ -5774,6 +5889,18 @@ int main(int argc, char** argv) {
+                     eos = std::find(o.eos_ids.begin(), o.eos_ids.end(), (int64_t) outv[(size_t) i]) != o.eos_ids.end();
+                 }
+                 std::fflush(stdout);
++                // the draft layer gets the fold's prompt rows as the prompt read would have given them (row t with
++                // the prompt token after it); the last row, like the last prompt token of any request, waits for a
++                // draft that a one-token request never makes
++                if (forced && T > 1) {
++                    std::vector<int32_t> nxt_f((size_t) T - 1);
++                    for (int i = 0; i < T - 1; ++i) nxt_f[(size_t) i] = window[(size_t) i + 1];
++                    if (!mtp.prefill(ver.final_R_all(), nxt_f.data(), T - 1, p, err)) {
++                        if (adapt_thr.joinable()) adapt_thr.join();
++                        std::printf("ERR %s\n", err.c_str());
++                        return 1;
++                    }
++                }
+                 ++rounds;
+                 const Clock::time_point tw2 = Clock::now();
+                 // coupled drafts with penalties: the next window's row-0 history (`consumed` holds this window's
+@@ -6613,6 +6740,14 @@ int main(int argc, char** argv) {
                          std::fprintf(stderr, "strata generate: STRATA_DUMP_FIRST_LOGITS: cannot write %s\n", fl);
                      if (f) std::fclose(f);
                  }
