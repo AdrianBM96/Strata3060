@@ -319,8 +319,8 @@ inline void row_dot_iq2xs(const uint8_t* row, int nblocks, const block_q8_K* con
 // bits and 2 scales in scalar code, 8 times per block.  Here a block's 32 grid indices (low byte + 2 qh bits)
 // come out of 4 vector steps, its 8 scale bytes become all 16 half-scales with the IQ2_XS unpack, and each
 // half's sign vector is a dword broadcast + pshufb of one 32-byte load.  The integer products and their sum
-// are the generic kernel's, so the result is bit-identical (tests/core/iq2s_avx2_test.cpp); measured
-// x1.21-1.34 per core on a 2.6 GHz Cascade Lake in L2 (docs/fork/informes/prototipos-cpu).  IQ2_S is the
+// are the generic kernel's, so the result is bit-identical (tests/core/iq2s_avx2_test.cpp); measured per core
+// in L2 on a 2.6 GHz Cascade Lake VM (iq2s_avx2_test --bench): x1.5 at 1-2 tokens per row, x1.06-1.16 at 3-8.  IQ2_S is the
 // gate/up type of 34 of the IQ2_XS pack's 48 layers.  STRATA_IQ2S_BLOCK=0 keeps the generic kernel (A/B).
 template <int NT>
 inline void row_dot_iq2s(const uint8_t* row, int nblocks, const block_q8_K* const* y, float* res) {
