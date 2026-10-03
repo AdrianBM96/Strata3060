@@ -218,26 +218,7 @@ index a7c77d0..6fea062 100644
                  const Clock::time_point tw1 = Clock::now();
                  std::thread adapt_thr;   // the adaptive tier beside the commit and the draft (as in generate)
                  bool adapt_ok = true;
-@@ -6264,7 +6353,7 @@ int main(int argc, char** argv) {
-         }
-         const bool emit_logits = dump != nullptr &&
-             strata::program::logits_selection::selected(pos, dump_positions, o.logits_stride);
--        const bool read_logits = !o.stream_token || o.check_logits || emit_logits;
-+        const bool read_logits = !o.stream_token || o.check_logits || emit_logits || o.logprobs > 0;
-         if (read_logits && (cudaMemcpyAsync(logits.data(), d_logits, (size_t) n_vocab * 4,
-                                            cudaMemcpyDeviceToHost, (cudaStream_t) token_stream) != cudaSuccess ||
-                             cudaStreamSynchronize((cudaStream_t) token_stream) != cudaSuccess)) {
-@@ -6278,6 +6367,9 @@ int main(int argc, char** argv) {
-                          (long long) n_vocab, (long long) pos);
-             return 1;
-         }
-+        // `--logprobs N`: the distribution the sampler draws from, once per position.
-+        // Log-softmax over the WHOLE vocabulary (so the values are absolute logprobs,
-+        // as an OpenAI-style caller expects), then the N highest tokens by logit.
-         // the header with the first row (see `hdr`): a run that dumps nothing leaves an empty file
-         if (emit_logits && !hdr_written && std::fwrite(hdr, sizeof hdr, 1, dump) != 1) {
-             std::fprintf(stderr, "strata generate: cannot write logits header\n");
-@@ -6613,6 +6705,14 @@ int main(int argc, char** argv) {
+@@ -6613,6 +6702,14 @@ int main(int argc, char** argv) {
                          std::fprintf(stderr, "strata generate: STRATA_DUMP_FIRST_LOGITS: cannot write %s\n", fl);
                      if (f) std::fclose(f);
                  }

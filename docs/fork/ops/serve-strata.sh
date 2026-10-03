@@ -13,6 +13,21 @@ M=$(cat "$F/.current-model" 2>/dev/null || echo swift-iq2_xs)
 CFG="$F/strata-${M}.json"
 [ -f "$CFG" ] || { echo "no existe $CFG (modelo: $M)"; exit 1; }
 
+# El subconjunto de borradores del config ("draft_vocab": "en" | "cjk" | "cyrillic"): setup lo copia al
+# arrancar con START/setup.sh, pero este script lanza server.py directamente, asi que lo hace aqui con la
+# misma funcion de setup (solo copia los ficheros que vienen en data/; uno hecho a mano se respeta).
+"$F/.venv/bin/python" - "$F" "$CFG" <<'PY' || echo "[strata] aviso: no se pudo refrescar draft_vocab" >&2
+import json, sys
+from pathlib import Path
+root, cfg_path = sys.argv[1], sys.argv[2]
+sys.path.insert(0, root)
+import setup
+cfg = json.loads(Path(cfg_path).read_text(encoding="utf-8-sig"))
+args = cfg.get("args", [])
+if "--mtp" in args[:-1]:
+    setup.refresh_draft_vocab(Path(args[args.index("--mtp") + 1]), cfg.get("draft_vocab", "cjk"))
+PY
+
 free_mib() { nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -1; }
 
 # Vision y --lazy son incompatibles ("lazy loading is text-only"): con el codificador

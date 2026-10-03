@@ -171,3 +171,50 @@ Antes de cada cambio y después, con la misma batería:
 
 Orden sugerido: 1 + 2 + 3 (configuración, minutos), recalibrar, medir. Después, 4 + 5 (System One, horas). Por
 último, el 7 (motor, semanas).
+
+## Ronda 2: tras la auditoría medida
+
+[AUDITORIA_REVISION_3060.md](AUDITORIA_REVISION_3060.md) midió esta revisión en la 3060. Lo que cambia:
+
+- **Refutado, y bien medido:** `q4_0` no es más rápido en la 3060 (mediana 39,25 frente a 39,95 tokens/s con
+  `int8`), así que `int8` devuelve la precisión gratis. `--pool-workers 6` es neutro. Mis estimaciones venían de una
+  5070.
+- **System One:** 0,37 s por pregunta desde la 2.ª [medido], mejor que mi estimación de 0,6-1 s.
+
+Lo que encontré al revisar los ficheros de `ops/` y lo que he cambiado (sin GPU; 11 tests en
+`ops/test_ada_decide.py`):
+
+| Hallazgo | Cambio |
+| --- | --- |
+| `apply-tuning.sh` no repone `--kv int8`, `--prompt-cache-root 256` ni `--logprobs 32`: el siguiente `./setup.sh` que reescriba los configs los borra y vuelve a `q4_0` | `ENGINE_ARGS` en `apply-tuning.sh` (cambia el valor si ya está, lo añade si no; idempotente) |
+| `draft_vocab` **sí** es una clave de config y `data/draft_vocab_en.bin` viene en el repo; setup lo copia al arrancar (`setup.py:2578,2637`), pero `serve-strata.sh` lanza `server.py` directamente y se lo salta | `apply-tuning.sh` pone `"draft_vocab": "en"`; `serve-strata.sh` llama a `setup.refresh_draft_vocab` antes de arrancar |
+| `ada-decide.py` toma el **máximo** de las variantes de cada letra ("A", " A"...), aunque su comentario dice que las suma; y `"A)"` daba el id de `)` | `logsumexp` de las variantes; solo cuentan los primeros tokens que distinguen opciones |
+| La calibración seguía pendiente (el `billing` 0,955) | permutaciones, calibración contextual con caché por plantilla, temperatura, `margin`, `option_mass` y `escalate`; `--log` en JSONL y `fit-calibration.py` para ajustar T con decisiones etiquetadas |
+| El parche aún forzaba copiar los logits al host en **cada token** del camino no `--serve` (`read_logits ... \|\| o.logprobs > 0`) sin emitir nada | quitado del parche; `git apply --check` limpio y `serve/test_server.py` (118 tests) pasa con el parche aplicado |
+
+### Cómo usar la calibración
+
+```bash
+python3 ada-decide.py --port 8087 --strata http://127.0.0.1:8081 --permutations 2 --calibrate \
+        --log ~/Strata/decisions.jsonl
+```
+
+- Cada respuesta trae `margin` (probabilidad de la 1.ª menos la de la 2.ª) y `option_mass` (probabilidad absoluta
+  que el modelo da a las letras). Con `escalate: true`, que la decida System Two: una petición normal con
+  razonamiento.
+- Coste: con `--permutations 2` cada pregunta hace 2 lecturas cortas (~0,4 s cada una desde la 2.ª pregunta).
+  `--calibrate` añade 2 lecturas por plantilla la primera vez; después quedan en memoria.
+- Con ~100-200 decisiones etiquetadas (añadid `"label"` a las líneas del log),
+  `python3 fit-calibration.py decisions.jsonl` dice qué T y qué combinación dan menor log-loss y menor ECE. Pasad
+  esa T con `--temperature`.
+- **Sin etiquetas no hay número:** medid el acierto con y sin cada opción antes de dejarla por defecto.
+
+### Siguiente, por orden
+
+1. Redesplegar `ops/` (`apply-tuning.sh`, `serve-strata.sh`, `ada-decide.py`) y comprobar en el log del motor que
+   el borrador usa 40.525 tokens (`en`) en vez de 106.299.
+2. A/B de minutos: `--spec 8 --mtp-max-t 4` (propuestas por n-gramas de hasta 7 tokens sin tocar el MTP). Las dos
+   flags juntas; solo `--spec 8` también alarga el MTP.
+3. YaRN: el perfil diario sigue siendo 512K con YaRN. Medido: mismo top-1, pero la respuesta diverge a los ~195
+   caracteres. Si la batería de 6 tareas puntúa igual o mejor con `swift262`, haced ese el de por defecto.
+4. Motor: el kernel AVX2 de IQ2_S (plan 2.1), validado bit a bit en CPU antes de recompilar en la 3060.

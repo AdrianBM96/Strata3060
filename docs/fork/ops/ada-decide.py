@@ -8,38 +8,58 @@ Contrato compatible con Jev/SystemOne:
         "<id>": {"type":"choice", "instructions":"...", "criteria": {"<op>":"<desc>", ...}},
         "<id>": {"type":"score",  "instructions":"...", "criteria": ["...", "..."]},
         "<id>": {"type":"noul",   "instructions":"...", "criteria": {...opcional...}}
-    }}
+     },
+     "options": {"permutations": 2, "calibrate": true, "temperature": 1.0}   <- opcional, por peticion}
 
-Respuesta: {"model": ..., "answers": {"<id>": {type, choice|score, confidence, probabilities[, legend, value]}},
-            "usage": {...}}
+Respuesta: {"model": ..., "answers": {"<id>": {type, choice|score|value, confidence, probabilities,
+            margin, option_mass, escalate[, escalate_reasons, legend]}}}
 
 Cómo funciona: por cada pregunta se renderiza un prompt que acaba en "Answer: (" y se
-pide UNA vez a Strata con `max_tokens=1`. El motor devuelve `strata_logprobs` (la
-distribucion de la ultima posicion del prompt, logprobs absolutos) y aqui se normaliza
-SOBRE LAS OPCIONES de la pregunta. No se genera texto: una pasada, probabilidades.
+pide UNA vez a Strata con `max_tokens=1` y `strata_lpids` = los ids de las etiquetas. El motor
+devuelve `strata_logprobs` (logprobs absolutos de esos ids en la ultima posicion del prompt) y aqui
+se normaliza SOBRE LAS OPCIONES de la pregunta.
+
+Calibración (las tres son opcionales y se combinan):
+  * permutations=P: la misma pregunta con las opciones rotadas P veces; se promedian las
+    probabilidades por opcion.  Quita el sesgo de letra y de posicion.  Con el estado en el mensaje
+    de sistema (--prompt-cache-root) cada permutacion extra solo lee la pregunta (~0,4 s medido).
+  * calibrate=true: calibracion contextual (Zhao et al. 2021, "Calibrate Before Use").  Una peticion
+    con el estado "N/A" da el sesgo p_cf de cada opcion para esa plantilla; p ∝ p / p_cf.  Se guarda
+    en memoria por plantilla (instrucciones + opciones + orden), asi que cuesta una peticion por
+    plantilla, no por decision.
+  * temperature=T: p ∝ exp(logprob / T).  Ajustad T con fit-calibration.py sobre decisiones
+    etiquetadas (el log de --log).  T > 1 baja la sobreconfianza.
+
+Señales para escalar a "System Two" (una generacion normal con razonamiento):
+  * margin: p(1.ª) - p(2.ª).  Bajo = dudoso.
+  * option_mass: probabilidad ABSOLUTA que el modelo da a las etiquetas de las opciones (antes de
+    normalizar).  Baja = el modelo queria escribir otra cosa: la respuesta no es fiable.
+  * escalate: true si margin < --escalate-margin u option_mass < --min-mass.
 
 Limites honestos:
-  * No es un decisor entrenado: son las preferencias del modelo base. La calibracion es
-    suya, no la de un head con perdida de Brier -> tiende a ser sobreconfiado.
-  * Se leen los N tokens mas probables (--logprobs en el motor): sirve para ~11 opciones
-    por pregunta con etiquetas (A)..(K). Para mas, cambiar el esquema de etiquetado.
+  * No es un decisor entrenado: son las preferencias del modelo base.  La calibracion de arriba
+    reduce el sesgo; no sustituye a medir el acierto con decisiones etiquetadas.
 
 Uso:  python3 ada-decide.py [--port 8087] [--strata http://127.0.0.1:8081] [--tokenizer DIR]
+                            [--permutations 1] [--calibrate] [--temperature 1.0]
+                            [--escalate-margin 0.2] [--min-mass 0.2] [--log decisions.jsonl]
 """
 from __future__ import annotations
-import argparse, json, math, os, re, sys, threading, urllib.request
+import argparse, hashlib, json, math, os, sys, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+CONTENT_FREE = "N/A"
 
 DEFAULT_TOKENIZER = "/home/bazzite/Strata-data/packs/swift-iq2_xs/tokenizer"
+STRATA_TOOLS = os.environ.get("STRATA_TOOLS", "/home/bazzite/Strata/tools")
 
 
 # ---------------------------------------------------------------- tokenizer
 def build_tokenizer(tpath: Path):
     """El mismo tokenizer que usa el servidor de Strata (tools/strata_tokenizer.py)."""
-    sys.path.insert(0, "/home/bazzite/Strata/tools")
+    sys.path.insert(0, STRATA_TOOLS)
     import strata_tokenizer as ST
     vocab = json.loads((tpath / "vocab.json").read_text(encoding="utf-8"))
     tokens = [None] * len(vocab)
@@ -51,20 +71,40 @@ def build_tokenizer(tpath: Path):
 
 
 def label_ids(tok, label: str) -> list[int]:
-    """Los ids con los que el modelo puede escribir esa etiqueta.
+    """Los ids con los que el modelo puede EMPEZAR a escribir esa etiqueta.
 
-    Segun el tokenizador la letra puede ser un token propio o venir pegada al parentesis
-    o al espacio; se prueban las variantes y se suman sus probabilidades al normalizar.
+    El "(" de "Answer: (" esta en el mensaje de usuario y la respuesta empieza en un turno nuevo,
+    asi que el primer token puede ser "A", " A", "(A", "A)"...  Se toma el PRIMER token de cada
+    variante (el que el motor puntua en la ultima posicion) y, si una variante es un solo token,
+    ese token.  Las probabilidades de las variantes se SUMAN (logsumexp) al puntuar la opcion.
     """
-    out = []
-    for text in (label, " " + label, "(" + label, " (" + label):
+    out = set()
+    for text in (label, " " + label, "(" + label, " (" + label, label + ")", "**" + label):
         try:
             ids = tok.encode(text, parse_special=False)
         except TypeError:
             ids = tok.encode(text)
-        if ids:
-            out.append(ids[-1])
-    return sorted(set(out))
+        if not ids:
+            continue
+        if len(ids) == 1 or text in (label, " " + label):
+            out.add(ids[0] if len(ids) == 1 else ids[-1])
+        else:
+            # "(A" -> ["(", "A"]: el primer token es "(" y no distingue opciones; solo vale si la
+            # variante entera es un token propio (p. ej. "(A" o "A)" fusionados)
+            pass
+    return sorted(out)
+
+
+def logsumexp(xs: list[float]) -> float:
+    m = max(xs)
+    return m + math.log(sum(math.exp(x - m) for x in xs))
+
+
+def softmax(xs: list[float]) -> list[float]:
+    m = max(xs)
+    e = [math.exp(x - m) for x in xs]
+    s = sum(e) or 1.0
+    return [v / s for v in e]
 
 
 # ---------------------------------------------------------------- render
@@ -74,7 +114,7 @@ def render(state, instructions, options: list[str]) -> tuple[str, str]:
     El ESTADO va en el mensaje de sistema a proposito: es lo que permite que varias
     preguntas sobre el mismo estado compartan prefijo y el motor solo lea la cola de
     cada una (con --prompt-cache-root).  La pregunta y las opciones van en el de
-    usuario, que es lo que cambia entre preguntas.
+    usuario, que es lo que cambia entre preguntas (y entre permutaciones).
     """
     st = state if isinstance(state, str) else json.dumps(state, ensure_ascii=False)
     system = ("You are a decision model. Choose exactly ONE option from the list. "
@@ -86,16 +126,13 @@ def render(state, instructions, options: list[str]) -> tuple[str, str]:
     return system, "\n".join(lines)
 
 
-def ask_strata(url: str, system: str, user: str, timeout: float,
-               lpids=None) -> tuple[dict, str]:
+def ask_strata(url: str, system: str, user: str, timeout: float, lpids=None) -> tuple[dict, dict]:
     body = {"model": "strata",
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "max_tokens": 1, "temperature": 0, "reasoning_effort": "none"}
     if lpids:
-        # lpids=a,b,c: el motor imprime la logprob de EXACTAMENTE esos ids, no el top-k.
-        # Sin esto, una letra que no cae en el top-32 cuenta como 0 y deforma la
-        # distribucion (fallo real, corregido).
+        # lpids=a,b,c: el motor imprime la logprob de EXACTAMENTE esos ids, no el top-k
         body["strata_lpids"] = [int(i) for i in lpids]
     req = urllib.request.Request(url.rstrip("/") + "/v1/chat/completions",
                                  data=json.dumps(body).encode(),
@@ -104,59 +141,124 @@ def ask_strata(url: str, system: str, user: str, timeout: float,
     return d.get("strata_logprobs") or {}, (d.get("usage") or {})
 
 
-def decide_choice(url: str, tok, state, instructions, criteria: dict, timeout: float):
-    """criteria: {clave_opcion: descripcion}. Devuelve la distribucion sobre las opciones."""
+ASK = ask_strata          # los tests lo sustituyen por un Strata simulado
+
+
+# ---------------------------------------------------------------- una pasada
+def option_scores(url, tok, state, instructions, keys, criteria, timeout):
+    """Una peticion con las opciones en el orden de `keys`.
+    -> ({clave: logprob absoluta de la opcion (logsumexp de sus variantes)}, ids que faltaron, usage)."""
+    system, user = render(state, instructions, [criteria[k] for k in keys])
+    per_option = {k: label_ids(tok, LABELS[i]) for i, k in enumerate(keys)}
+    flat = sorted({i for ids in per_option.values() for i in ids})
+    lp, usage = ASK(url, system, user, timeout, flat)
+    if not lp:
+        raise RuntimeError("el motor no devolvio strata_logprobs (¿arrancado sin --logprobs?)")
+    lp = {int(k): float(v) for k, v in lp.items()}
+    missing = sorted({i for i in flat if i not in lp})
+    scores = {}
+    for k in keys:
+        cands = [lp[i] for i in per_option[k] if i in lp]
+        scores[k] = logsumexp(cands) if cands else -30.0
+    return scores, missing, usage
+
+
+def rotations(keys: list[str], n: int) -> list[list[str]]:
+    """n ordenes distintos: rotaciones repartidas, para que cada opcion pase por varias letras."""
+    n = max(1, min(n, len(keys)))
+    step = len(keys) / n
+    return [keys[int(round(r * step)):] + keys[:int(round(r * step))] for r in range(n)]
+
+
+class Calibrator:
+    """Sesgo de cada plantilla con el estado vacio (calibracion contextual), en memoria."""
+
+    def __init__(self):
+        self.cache: dict[str, dict[str, float]] = {}
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def key(instructions, order, criteria) -> str:
+        raw = json.dumps([instructions, [[k, criteria[k]] for k in order]], ensure_ascii=False)
+        return hashlib.sha1(raw.encode()).hexdigest()
+
+    def bias(self, url, tok, instructions, order, criteria, timeout) -> dict[str, float]:
+        """log p_cf(opcion), normalizado sobre las opciones, para este orden."""
+        k = self.key(instructions, order, criteria)
+        with self.lock:
+            if k in self.cache:
+                return self.cache[k]
+        scores, _, _ = option_scores(url, tok, CONTENT_FREE, instructions, order, criteria, timeout)
+        lse = logsumexp(list(scores.values()))
+        b = {o: s - lse for o, s in scores.items()}
+        with self.lock:
+            self.cache[k] = b
+        return b
+
+
+CALIBRATOR = Calibrator()
+
+
+def decide_choice(url, tok, state, instructions, criteria: dict, timeout: float, cfg: dict):
+    """criteria: {clave_opcion: descripcion}.  cfg: permutations, calibrate, temperature,
+    escalate_margin, min_mass.  Devuelve la distribucion sobre las opciones y las señales."""
     keys = list(criteria.keys())
     if not 2 <= len(keys) <= len(LABELS):
         return None, {"error": f"choice admite 2..{len(LABELS)} opciones, tiene {len(keys)}"}
-    system, user = render(state, instructions, [criteria[k] for k in keys])
-    # los ids EXACTOS de las etiquetas: se los pedimos al motor en vez del top-k, para
-    # que ninguna opcion pueda faltar (el fallo del top-32).
-    per_option = {k: label_ids(tok, LABELS[i]) for i, k in enumerate(keys)}
-    flat = sorted({i for ids in per_option.values() for i in ids})
-    lp, usage = ask_strata(url, system, user, timeout, lpids=flat)
-    if not lp:
-        return None, {"error": "el motor no devolvio strata_logprobs (¿arrancado sin --logprobs?)"}
-    lp = {int(k): v for k, v in lp.items()}
-    missing = sorted({i for ids in per_option.values() for i in ids if i not in lp})
-    # probabilidad de cada opcion = mejor logprob de sus tokens candidatos
-    raw = []
-    for k in keys:
-        cands = [lp[i] for i in per_option[k] if i in lp]
-        raw.append(max(cands) if cands else -30.0)
-    mx = max(raw)
-    exps = [math.exp(r - mx) for r in raw]
-    total = sum(exps) or 1.0
-    probs = {k: e / total for k, e in zip(keys, exps)}
-    best = max(probs, key=probs.get)
-    out = {"type": "choice", "choice": best, "confidence": probs[best], "probabilities": probs}
-    if missing:
-        # no deberia pasar con lpids; si pasa, se dice en vez de esconderlo
-        out["missing_label_ids"] = missing
+    T = float(cfg.get("temperature") or 1.0)
+    acc = {k: 0.0 for k in keys}
+    masses, missing_all, passes, usage = [], set(), [], {}
+    orders = rotations(keys, int(cfg.get("permutations") or 1))
+    for order in orders:
+        scores, missing, usage = option_scores(url, tok, state, instructions, order, criteria, timeout)
+        missing_all.update(missing)
+        masses.append(sum(math.exp(s) for s in scores.values()))
+        cal = dict(scores)
+        cf = None
+        if cfg.get("calibrate"):
+            cf = CALIBRATOR.bias(url, tok, instructions, order, criteria, timeout)
+            cal = {k: scores[k] - cf[k] for k in order}
+        probs = softmax([cal[k] / T for k in keys])
+        for k, p in zip(keys, probs):
+            acc[k] += p / len(orders)
+        passes.append({"order": order, "raw": scores, **({"cf": cf} if cf else {})})
+    best, second = sorted(keys, key=acc.get, reverse=True)[:2]
+    margin = acc[best] - acc[second]
+    mass = sum(masses) / len(masses)
+    reasons = []
+    if margin < float(cfg.get("escalate_margin", 0.2)):
+        reasons.append("margin")
+    if mass < float(cfg.get("min_mass", 0.2)):
+        reasons.append("option_mass")
+    out = {"type": "choice", "choice": best, "confidence": acc[best], "probabilities": acc,
+           "margin": margin, "option_mass": mass, "escalate": bool(reasons)}
+    if reasons:
+        out["escalate_reasons"] = reasons
+    if missing_all:
+        out["missing_label_ids"] = sorted(missing_all)   # no deberia pasar con lpids; si pasa, se dice
+    out["_passes"] = passes                               # para el log; se quita antes de responder
     return out, usage
 
 
-def decide_score(url, tok, state, instructions, criteria: list, timeout: float):
-    keys = [str(i) for i in range(len(criteria))]
+def decide_score(url, tok, state, instructions, criteria: list, timeout: float, cfg: dict):
     ans, usage = decide_choice(url, tok, state, instructions,
-                               {str(i): criteria[i] for i in range(len(criteria))}, timeout)
+                               {str(i): criteria[i] for i in range(len(criteria))}, timeout, cfg)
     if ans is None:
         return None, usage
     p = ans["probabilities"]
-    expected = sum(float(k) * v for k, v in p.items())
-    best = max(p, key=p.get)
-    return {"type": "score", "score": expected, "confidence": p[best],
-            "legend": criteria, "probabilities": p}, usage
+    ans.update({"type": "score", "score": sum(float(k) * v for k, v in p.items()), "legend": criteria})
+    ans.pop("choice")
+    return ans, usage
 
 
-def decide_noul(url, tok, state, instructions, timeout: float):
-    ans, usage = decide_choice(url, tok, state, instructions,
-                               {"true": "Yes", "false": "No"}, timeout)
+def decide_noul(url, tok, state, instructions, timeout: float, cfg: dict):
+    ans, usage = decide_choice(url, tok, state, instructions, {"true": "Yes", "false": "No"}, timeout, cfg)
     if ans is None:
         return None, usage
     p = ans["probabilities"]
-    return {"type": "noul", "value": p["true"] >= 0.5, "confidence": max(p["true"], p["false"]),
-            "probabilities": {"true": p["true"], "false": p["false"]}}, usage
+    ans.update({"type": "noul", "value": p["true"] >= 0.5})
+    ans.pop("choice")
+    return ans, usage
 
 
 # ---------------------------------------------------------------- servidor
@@ -165,6 +267,8 @@ class Handler(BaseHTTPRequestHandler):
     strata = "http://127.0.0.1:8081"
     timeout = 120.0
     model = "ada-next-systemone"
+    defaults: dict = {}
+    log_path: str | None = None
     lock = threading.Lock()
 
     def log_message(self, *a):        # silencio: el journal no necesita cada peticion
@@ -180,8 +284,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.rstrip("/") in ("/health", ""):
-            return self._send(200, {"status": "ok", "service": "ada-decide", "model": self.model})
+            return self._send(200, {"status": "ok", "service": "ada-decide", "model": self.model,
+                                    "defaults": self.defaults})
         self._send(404, {"error": "not found"})
+
+    def _log(self, state, qid, q, ans, cfg):
+        """Una linea JSONL por pregunta: lo necesario para etiquetarla y ajustar la calibracion
+        despues (fit-calibration.py).  Añadid "label": "<opcion>" a mano o desde vuestra app."""
+        if not self.log_path:
+            return
+        rec = {"ts": time.time(), "qid": qid, "type": q.get("type"), "instructions": q.get("instructions"),
+               "criteria": q.get("criteria"), "state": state, "config": cfg,
+               "passes": ans.get("_passes"), "probabilities": ans.get("probabilities"), "label": None}
+        with self.lock, open(self.log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     def do_POST(self):
         if self.path.rstrip("/") not in ("/v1/systemone", "/systemone"):
@@ -195,27 +311,38 @@ class Handler(BaseHTTPRequestHandler):
         questions = req.get("questions") or {}
         if not state or not isinstance(questions, dict) or not questions:
             return self._send(400, {"error": "state and questions are required"})
-        answers, usage = {}, {}
+        cfg = {**self.defaults, **{k: v for k, v in (req.get("options") or {}).items()
+                                   if k in ("permutations", "calibrate", "temperature", "escalate_margin",
+                                            "min_mass")}}
+        answers = {}
         for qid, q in questions.items():
-            qtype = (q or {}).get("type")
-            instr = (q or {}).get("instructions") or str(qid)
-            crit = (q or {}).get("criteria")
+            q = q or {}
+            qtype = q.get("type")
+            instr = q.get("instructions") or str(qid)
+            crit = q.get("criteria")
             try:
                 with self.lock:                      # el motor atiende una peticion a la vez
                     if qtype == "choice":
-                        ans, u = decide_choice(self.strata, self.tokenizer, state, instr, crit or {}, self.timeout)
+                        ans, u = decide_choice(self.strata, self.tokenizer, state, instr, crit or {},
+                                               self.timeout, cfg)
                     elif qtype == "score":
-                        ans, u = decide_score(self.strata, self.tokenizer, state, instr, crit or [], self.timeout)
+                        ans, u = decide_score(self.strata, self.tokenizer, state, instr, crit or [],
+                                              self.timeout, cfg)
                     elif qtype == "noul":
-                        ans, u = decide_noul(self.strata, self.tokenizer, state, instr, self.timeout)
+                        ans, u = decide_noul(self.strata, self.tokenizer, state, instr, self.timeout, cfg)
                     else:
                         ans, u = None, {"error": f"unknown question type {qtype!r}"}
             except Exception as e:
                 ans, u = None, {"error": str(e)[:200]}
             if ans is None:
                 answers[qid] = {"type": qtype, **(u if isinstance(u, dict) else {"error": "failed"})}
-            else:
-                answers[qid] = ans
+                continue
+            try:
+                self._log(state, qid, q, ans, cfg)
+            except OSError:
+                pass
+            ans.pop("_passes", None)
+            answers[qid] = ans
         return self._send(200, {"model": self.model, "answers": answers})
 
 
@@ -225,11 +352,21 @@ def main():
     ap.add_argument("--strata", default="http://127.0.0.1:8081")
     ap.add_argument("--tokenizer", default=os.environ.get("STRATA_TOKENIZER", DEFAULT_TOKENIZER))
     ap.add_argument("--timeout", type=float, default=120.0)
+    ap.add_argument("--permutations", type=int, default=1, help="ordenes de opciones por pregunta (1 = sin permutar)")
+    ap.add_argument("--calibrate", action="store_true", help="calibracion contextual (estado 'N/A') por plantilla")
+    ap.add_argument("--temperature", type=float, default=1.0, help="T ajustada con fit-calibration.py")
+    ap.add_argument("--escalate-margin", type=float, default=0.2)
+    ap.add_argument("--min-mass", type=float, default=0.2,
+                    help="masa absoluta minima en las etiquetas; ajustadla mirando el log")
+    ap.add_argument("--log", default=None, help="JSONL con cada decision (para etiquetar y ajustar T)")
     a = ap.parse_args()
     Handler.tokenizer = build_tokenizer(Path(a.tokenizer))
     Handler.strata = a.strata
     Handler.timeout = a.timeout
-    print(f"[ada-decide] :{a.port} -> {a.strata} (tokenizer {a.tokenizer})", flush=True)
+    Handler.log_path = a.log
+    Handler.defaults = {"permutations": a.permutations, "calibrate": a.calibrate, "temperature": a.temperature,
+                        "escalate_margin": a.escalate_margin, "min_mass": a.min_mass}
+    print(f"[ada-decide] :{a.port} -> {a.strata} (tokenizer {a.tokenizer}) {Handler.defaults}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", a.port), Handler).serve_forever()
 
 
