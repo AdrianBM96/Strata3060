@@ -1,8 +1,25 @@
 diff --git a/serve/server.py b/serve/server.py
-index 46e3fc3..fb40af8 100644
+index 46e3fc3..4326539 100644
 --- a/serve/server.py
 +++ b/serve/server.py
-@@ -504,6 +504,7 @@ class StrataEngine:
+@@ -479,6 +479,16 @@ class StrataEngine:
+                 keys += f" penalty_last_n={pln}"
+             else:
+                 keys += " penalty_last_n=64"
++        # System One: emit the logprobs of EXACTLY these ids (the option labels), not the top-k.
++        # An unknown key for the engine? It is skipped, so this is backward compatible.
++        lp = sampling.get("strata_lpids")
++        if isinstance(lp, (list, tuple)) and lp:
++            try:
++                ids = ",".join(str(int(i)) for i in lp if int(i) >= 0)
++                if ids:
++                    keys += f" lpids={ids}"
++            except (TypeError, ValueError):
++                pass
+         seed = sampling.get("seed")
+         if isinstance(seed, int) and seed > 0:
+             keys += f" seed={seed}"
+@@ -504,6 +514,7 @@ class StrataEngine:
          has gone.  A consumer that stops early (or `cancel`) makes the engine STOP, so it does not run to max_new."""
          self.progress = None
          self.prefill_tok_s_mean = None
@@ -10,7 +27,7 @@ index 46e3fc3..fb40af8 100644
          # an image request takes the same sampling keys as text (#75: it used to decode greedily whatever was asked)
          head = f"GENI {int(max_new)}{self.sampling_keys(sampling or {})} {embeddings}" if embeddings else \
              f"GEN {int(max_new)}{self.sampling_keys(sampling or {})}"
-@@ -539,7 +540,19 @@ class StrataEngine:
+@@ -539,7 +550,19 @@ class StrataEngine:
                      done = True
                      raise EngineDied(f"the engine stopped unexpectedly (exit code {self.exit_code()})")
                  heard = time.monotonic()                  # any line is output: T, PP, RESUME, INFO ...
@@ -31,7 +48,7 @@ index 46e3fc3..fb40af8 100644
                      allow = silence
                      if cancel.is_set():
                          return
-@@ -1607,7 +1620,8 @@ class Service:
+@@ -1607,7 +1630,8 @@ class Service:
          for ev in parser.finish():
              yield "event", ev
          yield "done", {"finish": finish, "completion_tokens": n, "reused": (timings or {}).get("cache_n", 0),
@@ -41,7 +58,7 @@ index 46e3fc3..fb40af8 100644
  
  
  def prompt_tokens_seen(prompt_tokens: int, last: dict) -> int:
-@@ -1798,6 +1812,8 @@ def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel
+@@ -1798,6 +1822,8 @@ def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel
                               "prompt_tokens_details": {"cached_tokens": x.get("reused") or 0}}
              if x.get("timings"):
                  last["timings"] = x["timings"]          # llama.cpp's field: the speed its clients show
@@ -50,7 +67,7 @@ index 46e3fc3..fb40af8 100644
              yield last
  
  
-@@ -1842,6 +1858,8 @@ def openai_collect(chunks) -> dict:
+@@ -1842,6 +1868,8 @@ def openai_collect(chunks) -> dict:
             "usage": last["usage"]}
      if last.get("timings"):
          out["timings"] = last["timings"]
@@ -60,7 +77,7 @@ index 46e3fc3..fb40af8 100644
  
  
 diff --git a/src/program/generate.cpp b/src/program/generate.cpp
-index a7c77d0..cce87d1 100644
+index a7c77d0..6fea062 100644
 --- a/src/program/generate.cpp
 +++ b/src/program/generate.cpp
 @@ -171,6 +171,13 @@ struct Options {
@@ -86,7 +103,7 @@ index a7c77d0..cce87d1 100644
                   "  --logits-stride N    store every Nth row plus final input (default 1); N>1 requires --max-new 1\n"
                   "  --dump-residual PATH write the final R (hc x n_embd, f32) for head bisection\n"
                   "  --dump-layers PATH   write R after EVERY layer, per position: the C1 bisection ladder\n"
-@@ -859,6 +868,33 @@ int argmax(const std::vector<float>& v) {
+@@ -859,6 +868,53 @@ int argmax(const std::vector<float>& v) {
      return best;
  }
  
@@ -117,10 +134,30 @@ index a7c77d0..cce87d1 100644
 +    std::fflush(stdout);
 +}
 +
++/// **`lpids=a,b,c` (una clave por peticion, `--serve`).**  La misma fila, pero en vez
++/// del top-k imprime EXACTAMENTE esos ids.  Hace falta para System One: si la letra de
++/// una opcion no cae en el top-k, normalizar sobre las encontradas la trata como 0 y
++/// deforma la distribucion.  Con los ids exactos de las opciones no puede faltar
++/// ninguna.  Desconocida para un motor viejo (las claves se saltan), asi que es
++/// compatible hacia atras.
++void emit_logprobs_ids(const float* row, int64_t n_vocab, const std::vector<int>& ids) {
++    if (row == nullptr || n_vocab <= 0 || ids.empty()) return;
++    double mx = -1e30;
++    for (int64_t i = 0; i < n_vocab; ++i) if ((double) row[i] > mx) mx = (double) row[i];
++    double se = 0.0;
++    for (int64_t i = 0; i < n_vocab; ++i) se += std::exp((double) row[i] - mx);
++    const double lse = mx + std::log(se);
++    std::printf("strata logprobs:");
++    for (int id : ids)
++        if (id >= 0 && (int64_t) id < n_vocab) std::printf(" %d:%.6f", id, (double) row[id] - lse);
++    std::printf("\n");
++    std::fflush(stdout);
++}
++
  // ---- --serve's conversation cache.  A chat or an agent sends the whole conversation again with every request, and
  // reading it again is what made a long session wait minutes for every turn.  What a sequence leaves behind splits in
  // two, and only one half needs copying:
-@@ -1123,6 +1159,13 @@ int main(int argc, char** argv) {
+@@ -1123,6 +1179,13 @@ int main(int argc, char** argv) {
          else if (a == "--top-p") o.top_p = (float) std::atof(next("--top-p"));
          else if (a == "--temperature") o.temperature = (float) std::atof(next("--temperature"));
          else if (a == "--dump-logits") o.dump_logits = next("--dump-logits");
@@ -134,7 +171,35 @@ index a7c77d0..cce87d1 100644
          else if (a == "--logits-stride") {
              if (have_logits_stride) { std::fprintf(stderr, "--logits-stride must be supplied only once\n"); return 2; }
              if (!strata::program::logits_selection::parse_stride(next("--logits-stride"), o.logits_stride)) {
-@@ -5750,6 +5793,14 @@ int main(int argc, char** argv) {
+@@ -5073,6 +5136,8 @@ int main(int argc, char** argv) {
+             float req_min_p = 0.0f, req_penalty_repeat = 1.0f, req_penalty_freq = 0.0f, req_penalty_present = 0.0f;
+             int req_penalty_last_n = 0;
+             int req_cvec = 1;   // cvec=0|1: a loaded control vector for this request (on when absent)
++            // lpids=a,b,c: emit the logprobs of EXACTLY these ids (System One option labels)
++            std::vector<int> req_logprob_ids;
+             // tuning keys (setup's calibration measures settings without restarting the engine): the PCIe share of
+             // the missed experts and the draft-probability floor, for this request only
+             double req_pcie_frac = o.pcie_frac, req_spec_min_p = o.spec_min_p;
+@@ -5089,6 +5154,18 @@ int main(int argc, char** argv) {
+                     const std::string key = tok.substr(0, eq);
+                     const float fv = std::strtof(tok.c_str() + eq + 1, nullptr);
+                     if (key == "cvec") req_cvec = std::atoi(tok.c_str() + eq + 1);
++                    else if (key == "lpids") {
++                        req_logprob_ids.clear();
++                        const char* q = tok.c_str() + eq + 1;
++                        while (*q != '\0') {
++                            char* e2 = nullptr;
++                            const long v = std::strtol(q, &e2, 10);
++                            if (e2 == q) break;
++                            if (v >= 0) req_logprob_ids.push_back((int) v);
++                            q = e2;
++                            while (*q == ',') ++q;
++                        }
++                    }
+                     else if (key == "temperature") req_temperature = fv;
+                     else if (key == "top_p") req_top_p = fv;
+                     else if (key == "top_k") req_top_k = std::atoi(tok.c_str() + eq + 1);
+@@ -5750,6 +5827,18 @@ int main(int argc, char** argv) {
                  int a = 0;
                  while (a < T - 1 && window[(size_t) a + 1] == outv[(size_t) a]) ++a;
                  if (from_sfx) { ++sfx_windows; sfx_drafts += T - 1; sfx_ok += a; }
@@ -143,13 +208,17 @@ index a7c77d0..cce87d1 100644
 +                // "which option comes next". Read-only: no draw, no commit, no change to `T `.
 +                if (first_window && o.logprobs > 0) {
 +                    std::vector<float> lp_row((size_t) ver.vocab());
-+                    if (ver.copy_logits(0, lp_row.data()))
-+                        emit_logprobs_line(lp_row.data(), (int64_t) ver.vocab(), o.logprobs);
++                    if (ver.copy_logits(0, lp_row.data())) {
++                        if (!req_logprob_ids.empty())
++                            emit_logprobs_ids(lp_row.data(), (int64_t) ver.vocab(), req_logprob_ids);
++                        else
++                            emit_logprobs_line(lp_row.data(), (int64_t) ver.vocab(), o.logprobs);
++                    }
 +                }
                  const Clock::time_point tw1 = Clock::now();
                  std::thread adapt_thr;   // the adaptive tier beside the commit and the draft (as in generate)
                  bool adapt_ok = true;
-@@ -6264,7 +6315,7 @@ int main(int argc, char** argv) {
+@@ -6264,7 +6353,7 @@ int main(int argc, char** argv) {
          }
          const bool emit_logits = dump != nullptr &&
              strata::program::logits_selection::selected(pos, dump_positions, o.logits_stride);
@@ -158,18 +227,17 @@ index a7c77d0..cce87d1 100644
          if (read_logits && (cudaMemcpyAsync(logits.data(), d_logits, (size_t) n_vocab * 4,
                                             cudaMemcpyDeviceToHost, (cudaStream_t) token_stream) != cudaSuccess ||
                              cudaStreamSynchronize((cudaStream_t) token_stream) != cudaSuccess)) {
-@@ -6278,6 +6329,10 @@ int main(int argc, char** argv) {
+@@ -6278,6 +6367,9 @@ int main(int argc, char** argv) {
                           (long long) n_vocab, (long long) pos);
              return 1;
          }
 +        // `--logprobs N`: the distribution the sampler draws from, once per position.
 +        // Log-softmax over the WHOLE vocabulary (so the values are absolute logprobs,
 +        // as an OpenAI-style caller expects), then the N highest tokens by logit.
-+        if (o.logprobs > 0) emit_logprobs_line(logits.data(), n_vocab, o.logprobs);
          // the header with the first row (see `hdr`): a run that dumps nothing leaves an empty file
          if (emit_logits && !hdr_written && std::fwrite(hdr, sizeof hdr, 1, dump) != 1) {
              std::fprintf(stderr, "strata generate: cannot write logits header\n");
-@@ -6613,6 +6668,14 @@ int main(int argc, char** argv) {
+@@ -6613,6 +6705,14 @@ int main(int argc, char** argv) {
                          std::fprintf(stderr, "strata generate: STRATA_DUMP_FIRST_LOGITS: cannot write %s\n", fl);
                      if (f) std::fclose(f);
                  }

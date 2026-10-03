@@ -18,6 +18,9 @@ como tales.
 | [informes/prototipos-cpu/](informes/prototipos-cpu/) | Prototipos de kernels AVX2 medidos (IQ2_S por bloques, Q2_0 en planos) y sus arneses |
 | [informes/simulaciones/](informes/simulaciones/) | Simulaciones de la longitud del borrador MTP y de la VRAM |
 | **[CONFIG_MEDIDA_3060_Y_SYSTEMONE.md](CONFIG_MEDIDA_3060_Y_SYSTEMONE.md)** | La configuración real medida en una 3060 (decode, prefill, contexto, latencias), la convivencia con llama.cpp, y la **modificación del motor para System One** (`--logprobs N` + `ada-decide`), con el parche re-aplicable de 84 líneas |
+| **[AUDITORIA_REVISION_3060.md](AUDITORIA_REVISION_3060.md)** | Auditoría de la revisión anterior: veredicto de cada punto, con las mediciones que la sostienen o la refutan |
+| **[SYSTEMONE.md](SYSTEMONE.md)** | System One completo: el cambio del motor, la API, operación, actualización y rollback |
+| **[ops/](ops/)** | Los ficheros de despliegue que faltaban (`ada-decide.py`, `apply-tuning.sh`, `free-vram.sh`, `strata-switch.sh`, `serve-strata.sh`) |
 
 ## Lo más importante en cuatro líneas
 
