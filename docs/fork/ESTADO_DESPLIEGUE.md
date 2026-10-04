@@ -101,3 +101,13 @@ grep STRATA_PF_FUSED ~/Strata/serve-strata.sh      # la mejora de prefill
 | `claude-sub` | **suscripción OAuth** (Opus/Sonnet reales) | saltados (flag + `settings-subscription.json` sin `env`) |
 
 `claude-sub` = `claude --dangerously-skip-permissions --setting-sources project,local --settings ~/.claude/settings-subscription.json` (alias en `~/.bashrc`). El pane de herdr «Servidor IA» corre `claude-sub` equivalente. Revertir ada-next: `cp ~/.claude/settings.json.bak-20261004-pre-ada-next ~/.claude/settings.json`.
+
+## ada-cli en herdr (compatible via `pi`)
+
+`ada-cli` está basado en pi (misma TUI y marcadores), así que herdr lo maneja con `--kind pi` pasando el binario:
+
+```bash
+herdr agent start <nombre> --kind pi --pane <pane> -- /home/bazzite/.local/bin/ada-cli
+```
+
+Verificado de extremo a extremo (responde por ada-next → Strata). En la web sale como agente `pi`.
