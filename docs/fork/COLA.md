@@ -68,3 +68,12 @@ que no esté subido y documentado.
 - **N7.** A tester solo se le lanza desde run.sh, que espera bloqueando y deja el resultado en resultados/.
   Prohibido mandarle prompts sueltos a mano. Si alguna vez hace falta uno suelto, siempre con `--wait` y su
   timeout, nunca sin esperar.
+
+- **N8.** Mientras exista `/tmp/strata-motor.lock` NO esperar: adelantar lo de la columna SÍ, en este orden:
+  SÍ (sin motor, CPU ligera): C22 menos el STREAM · C18 entero · C14a, C15 y C16: escribir el código y compilarlo
+  en un build aparte (`nice -n 19`, `make -j2`), SIN desplegarlo ni ejecutarlo contra el motor · C17: el script de
+  clasificación sobre logs ya guardados · C23: leer los kernels (ISA, hilos, afinidad; file:line), sin lanzar el
+  bench · C24: localizar en el código dónde se perfila el PP · documentación y CHANGELOG.
+  NO (esperan al lock): el STREAM de C22, los benchmarks de C23, todo C24, C20 y C21 (motor), C8 (cache-sim satura
+  la CPU), cualquier despliegue, reinicio o cambio de flags, y ejecutar binarios nuevos contra el motor.
+  Al liberarse el lock: primero los pasos NO pendientes del contrato más prioritario, después lo siguiente.
