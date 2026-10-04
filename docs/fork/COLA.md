@@ -46,20 +46,27 @@ commit), actualizar RESUMEN_FINAL.md (configuración y cifras vigentes) y, si ca
 ESTADO_DESPLIEGUE.md; 3) si es un parche nuevo, dejarlo también en `docs/fork/patches/`. No se da por adoptado nada
 que no esté subido y documentado.
 
+
+## Línea EXPLORACIÓN (hardware, no solo Strata)
+
+Norma N9: al menos 1 contrato E de cada 3. Los E empiezan por un ESTUDIO barato (≤1 página, con cifras y techo)
+y solo se implementan con OK de Claude. Mismos criterios: más tps de decode o de prefill, sin perder contexto
+ni calidad.
+
+- [ ] **E1.** SO y hardware sin BIOS (recursos: motor; tras el lock). turbostat//proc en B1 (frecuencia P-cores,
+  throttling PL1/PL2, governor, C-states, THP en expertos CPU); probar reversible: governor performance,
+  /dev/cpu_dma_latency=0, hugepages, `nvidia-smi -lgc`, persistence mode. A/B 6+6 B1/B2. Entrega: tabla con
+  ganancia+IC y qué persistir con systemd.
+- [ ] **E2.** Formato de expertos para la CPU (tras C23). Si la CPU limita por cálculo: (a) reempaquetar la copia
+  CPU bit-exacto para AVX2/VNNI, o (b) Q2_K/Q3_K desde pesos originales (con puerta de calidad). Estudio: µs/experto
+  por formato, bytes extra, RAM total.
+- [ ] **E3.** KV persistente de prefijos para agentes (estudio; recursos: ninguno). Tamaño KV por 1K tokens,
+  prefijo común por cliente (logs C10b), velocidad NVMe/RAM, si el motor restaura estado de fichero (file:line).
+  Techo: segundos de TTFT ahorrados con prefijo de 20K.
+- [ ] **E4.** Prefill por dos vías (estudio, tras C24). Repartir expertos no residentes entre PCIe (11 GB/s) y CPU
+  (RAM) para terminar a la vez. Techo con C24+C23.
+
 ## Cola (por orden)
 
-- [ ] **C19** (en curso). Batería tester. Recursos: tester+motor.
-- [ ] **C23.** Eficiencia de expertos en CPU: GB/s por tipo e hilos vs STREAM; ISA; reparto; afinidad. Hasta
-  3 candidatos. Recursos: CPU (lectura) + motor (bench, con lock libre).
-- [ ] **C16.** `STRATA_ROUTE_GAP_STATS=1` según §16 (lo implementa el agente). Recursos: build aparte.
-- [ ] **C14a.** Medir con CARGA (código hecho y compilado).
-- [ ] **C24.** Perfil del prefill (recursos: motor; N5/N6).
-- [ ] **C20.** `--kv-resident 16384` (recursos: motor/GPU).
-- [ ] **C17.** Script sobre logs + CARGA.
-- [ ] **C15.** Degradada (gana ≤1 ms): precarga solo esconde la PCIe; manda la CPU. Va aquí, sin prisa.
-- [ ] **C8.** Rejilla del simulador (solo CPU).
-- [x] **C18.** Cerrada como diseño, sin implementar (`C18_DISENO.md`).
-- [ ] **C21** (orden de Adrián). Virgen vs nuestra, con la cola vacía.
-
-Decisión tras C22 v2 (anotada): la precarga (C15) solo esconde la PCIe y gana ≤1 ms → BAJA. Mandan la CPU de
-expertos y la parte densa.
+- [ ] **C19** (en curso) · **C23** · **E1** · **C24** · **E3** · **C16** · **E2** · **C14a** · **E4** · **C20** ·
+  **C17** · **C15** · **C8** · **C21**.
