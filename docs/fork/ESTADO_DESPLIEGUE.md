@@ -97,10 +97,11 @@ grep STRATA_PF_FUSED ~/Strata/serve-strata.sh      # la mejora de prefill
 
 | Comando | Modelo | Permisos |
 | --- | --- | --- |
-| `claude` | **ada-next** (Strata local :8081) | saltados (config + alias `--dangerously-skip-permissions`) |
-| `claude-sub` | **suscripción OAuth** (Opus/Sonnet reales) | saltados (flag + `settings-subscription.json` sin `env`) |
+| `claude` | **suscripción OAuth** (Opus/Sonnet reales; ada-next revertido a petición) | según alias `--dangerously-skip-permissions` en terminal interactivo |
+| `claude-sub` | **suscripción OAuth** (fuerza OAuth aunque el entorno herede ada-next) | saltados siempre (limpia `ANTHROPIC_*` + flag) |
+| `herdr-ada [pane]` | **ada-cli en herdr** (`--kind pi`, verificado extremo a extremo) | las del pane |
 
-`claude-sub` = `claude --dangerously-skip-permissions --setting-sources project,local --settings ~/.claude/settings-subscription.json` (alias en `~/.bashrc`). El pane de herdr «Servidor IA» corre `claude-sub` equivalente. Revertir ada-next: `cp ~/.claude/settings.json.bak-20261004-pre-ada-next ~/.claude/settings.json`.
+`claude-sub` = `claude --dangerously-skip-permissions --setting-sources project,local --settings ~/.claude/settings-subscription.json` (alias en `~/.bashrc`). El pane de herdr «Servidor IA» corre `claude-sub` equivalente. Nota herdr: la lista de agentes es cerrada (no admite `ada-cli` como tipo propio); va con `--kind pi` y nombre `ada-cli`.
 
 ## ada-cli en herdr (compatible via `pi`)
 
