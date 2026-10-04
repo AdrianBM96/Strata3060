@@ -48,32 +48,18 @@ que no esté subido y documentado.
 
 ## Cola (por orden)
 
-- [ ] **C19** (en curso). Batería tester en `docs/fork/ops/tester/`. Recursos: tester+motor (excluye benchmarks).
-  Hecho cuando: HUMO y CARGA pasan 2 veces seguidas, CARGA ≤20 min.
-- [ ] **C22.** Techo teórico (solo cálculo, sin motor; recursos: ninguno). Decode y prefill máximos en esta
-  máquina y pérdida por etapa. Entrega en `docs/fork/C22_TECHO.md` (máx. 1 página).
-- [ ] **C23.** Eficiencia de expertos en CPU (recursos: CPU y motor; N5/N6). GB/s por tipo e hilos vs STREAM;
-  ISA por kernel; reparto entre hilos; fijado a P-cores. Hasta 3 candidatos con techo.
-- [ ] **C24.** Perfil del prefill (recursos: motor; N5/N6). `bench-prefill.py` a 32K y 86K; desglose en ms/1K
-  tokens; tabla en `docs/fork/C24_PREFILL.md` + hasta 3 candidatos.
-- [ ] **C14a.** `STRATA_MTP_HIST=1` (código hecho, compila; falta medir con CARGA).
-- [ ] **C15.** `STRATA_PREGATE_STATS=1` según ORDENES §15.
-- [ ] **C16.** `STRATA_ROUTE_GAP_STATS=1` según §16.
-- [ ] **C17.** Según §17 con script sobre logs + CARGA.
-- [ ] **C20.** `--kv-resident 16384` (era paso 4 de la orden 11).
-- [ ] **C8.** Rejilla del simulador a) b) a+b.
-- [ ] **C18** (solo estudio, sin código). Entrega en `docs/fork/C18_DISENO.md` (máx. 1 página).
-- [ ] **C21** (orden de Adrián). Nuestra versión contra Strata 0.1.39 virgen, con la cola vacía.
+- [ ] **C19** (en curso). Batería tester. Recursos: tester+motor.
+- [ ] **C23.** Eficiencia de expertos en CPU: GB/s por tipo e hilos vs STREAM; ISA; reparto; afinidad. Hasta
+  3 candidatos. Recursos: CPU (lectura) + motor (bench, con lock libre).
+- [ ] **C16.** `STRATA_ROUTE_GAP_STATS=1` según §16 (lo implementa el agente). Recursos: build aparte.
+- [ ] **C14a.** Medir con CARGA (código hecho y compilado).
+- [ ] **C24.** Perfil del prefill (recursos: motor; N5/N6).
+- [ ] **C20.** `--kv-resident 16384` (recursos: motor/GPU).
+- [ ] **C17.** Script sobre logs + CARGA.
+- [ ] **C15.** Degradada (gana ≤1 ms): precarga solo esconde la PCIe; manda la CPU. Va aquí, sin prisa.
+- [ ] **C8.** Rejilla del simulador (solo CPU).
+- [x] **C18.** Cerrada como diseño, sin implementar (`C18_DISENO.md`).
+- [ ] **C21** (orden de Adrián). Virgen vs nuestra, con la cola vacía.
 
-- **N7.** A tester solo se le lanza desde run.sh, que espera bloqueando y deja el resultado en resultados/.
-  Prohibido mandarle prompts sueltos a mano. Si alguna vez hace falta uno suelto, siempre con `--wait` y su
-  timeout, nunca sin esperar.
-
-- **N8.** Mientras exista `/tmp/strata-motor.lock` NO esperar: adelantar lo de la columna SÍ, en este orden:
-  SÍ (sin motor, CPU ligera): C22 menos el STREAM · C18 entero · C14a, C15 y C16: escribir el código y compilarlo
-  en un build aparte (`nice -n 19`, `make -j2`), SIN desplegarlo ni ejecutarlo contra el motor · C17: el script de
-  clasificación sobre logs ya guardados · C23: leer los kernels (ISA, hilos, afinidad; file:line), sin lanzar el
-  bench · C24: localizar en el código dónde se perfila el PP · documentación y CHANGELOG.
-  NO (esperan al lock): el STREAM de C22, los benchmarks de C23, todo C24, C20 y C21 (motor), C8 (cache-sim satura
-  la CPU), cualquier despliegue, reinicio o cambio de flags, y ejecutar binarios nuevos contra el motor.
-  Al liberarse el lock: primero los pasos NO pendientes del contrato más prioritario, después lo siguiente.
+Decisión tras C22 v2 (anotada): la precarga (C15) solo esconde la PCIe y gana ≤1 ms → BAJA. Mandan la CPU de
+expertos y la parte densa.
