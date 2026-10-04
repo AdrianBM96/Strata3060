@@ -71,10 +71,16 @@ ni calidad.
 
 - [x] **C19** hecha (batería 2× HUMO + 2× CARGA, todo PASA) · [x] **C22** hecha (techo v2: precarga ≤1 ms, manda CPU).
 - [ ] **C23** (en curso, mis medidas) · **C26** (obrero, wt-P08: kernel CPU IQ2 en iq_avx2.cpp+repack; pasos
-  a) VNNI b) R2/R4 c) P09, cada uno con te_sweep T_e=1,4,12 + parity bit-exacta; luego A/B B1 6+6) · **E1** ·
-  **C24** (simplificado + burbuja sync) · **E3** · **C16** (obrero1, wt-C16) · **E2** · **C14a** (código
-  verificado; medir a su turno) · **C20** · **C17** · **C15** (degradada) · **C8** (+P05 c) · **C18** ·
+  a) VNNI b) R2/R4 c) P09, cada uno con te_sweep T_e=1,4,12 + parity bit-exacta; luego A/B B1 6+6) · **E2**
+  (tras C26: Q2_K gate/up +41 % en beellama; PENDIENTE: ¿de dónde re-cuantizar? en disco solo hay quants
+  IQ2_XS/IQ1_M + mmproj, sin pesos BF16 del LLM) · **E1** (+afinidad: Strata fija workers en físicos 1-5,
+  `pool.cpp:276`; probar 6 hilos 0-5 vs actual) · **C24** (simplificado + burbuja sync) · **E3** · **C16**
+  (obrero1, wt-C16) · **C14a** (código verificado; medir a su turno) · **C20** · **C17** (primero lo barato:
+  `--spec` 2vs3vs4, beellama +14 % con depth 3) · **C15** (degradada) · **C8** (+P05 c) · **C18** ·
   **E4** (+3,7 % prefill recalculado, al final) · **C21**.
+- Nota: `-b/-ub 128` de llama.cpp no aplica a los chunks de Strata (diseño distinto); sin acción.
+- **N14.** Vigía diario (07:13 UTC) del Strata oficial: si sale versión nueva llega contrato CUP y se sigue tal
+  cual (nada se despliega sin OK de Claude). Hoy al día (v0.1.39 = HEAD).
 - Verificado con file:line (no basar nada en lo contrario): `iq2s_grid` es `uint64_t[1024]` = 8 KB
   (`third_party/llama.cpp/ggml/src/ggml-common.h:758`, macro `:472`) → residente en L1, accesos escalares
   (`iq_avx2.cpp:155-158,404-405`); `vpshufb` solo indexa 16 entradas por lane (signos/escalas,

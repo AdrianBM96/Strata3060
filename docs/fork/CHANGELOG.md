@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C23 cerrando (yo) | C26 creado, wt-P08 paso b | wt-C16 portando | prod OK | 2026-10-04 22:24 UTC
+ESTADO: C23 P02-A/B fondo (yo, con lock) | C26 wt-P08 paso b | wt-C16 portando | 2026-10-04 22:26 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -34,3 +34,4 @@ ESTADO: C23 cerrando (yo) | C26 creado, wt-P08 paso b | wt-C16 portando | prod O
 | 2026-10-04 | N13+E4 | N13 (parciales ≤3 líneas, hora date -u, línea propia sigue); E4 tras E3 con corte T_e≤3 | - | - | Vigente |
 | 2026-10-04 | prod-ck | Tras restart mtmin-ab (22:08): config producción exacta | mtmin.conf borrado, sin MT_MIN en environ; binario intacto 13:32 md5 056819f9 (0 refs MTP_HIST: var inerte); activos PF_FUSED=1, FETCH_ADMIT=1, PROFILE_HEAT_MIN, MTP_HIST_FILE | 056819f9 | Producción OK |
 | 2026-10-04 | C26 | Kernel CPU IQ2 (tras C23): VNNI, R2/R4, P09 con te_sweep+parity; CPU-KERNELS al repo; E4 al final (+3,7%) | grid 8KB L1 (ggml-common.h:758) y vpshufb lane-local (iq_avx2:314...) verificados; wt-P08 hace paso b | - | En curso |
+| 2026-10-04 | beellama | BEELLAMA-TRUCOS al repo + N14 (vigía 07:13, CUP) + E2 tras C26 + C17 spec-primero + E1 afinidad | spec existe (generate:459, prod spec4); workers en físicos 1-5 (pool:276); sin pesos BF16 en disco | - | Anotado |
