@@ -67,6 +67,19 @@ cambio que aporta sin coste es el que ya teníamos.
 3. **`--vision-on-demand`**: candidato para traer la visión a Strata en la 3060 (hoy la sirve nex-mini por
    VRAM). ¿Merece un port, o lo dejamos para después del Mac?
 
+## Cambios de motor de Claude (ronda 12 §2, cherry-pick `9727998`)
+
+No son del fork `architectds`: viven en la rama de `AdrianBM96/Strata3060` y se traen a `~/Strata` aparte
+(rama `port/claude-r7`). Ya estaban en la registración de `CMakeLists` pero no el fichero del test.
+
+- **`STRATA_HIT_GY=16` y `24`** (lanzamiento de los grupos de VRAM; bit-idéntico): A/B de decode B1/B2/B4 →
+  **sin ganancia** (def 43,75/43,25/41,00 · gy16 44,20/41,50/40,80 · gy24 42,50/42,50/40,60). Se queda **apagado**.
+- **`STRATA_PROFILE_HEAT_MIN=200000`**: **activado** (drop-in persistente `profileheat.conf`). Requiere
+  `--expert-profile-save` (lo tenemos). Se observará el acierto de la caché de expertos (línea base **70-78 %**)
+  durante unos días, comparando con `STRATA_DECODE_TIMING`.
+- **`tests/core/iq2s_avx2_test.cpp`** (`bd7a2e9`): añadido y **PASA** — "block kernel bit-identical to the generic
+  one (NT 1-8, 3 seeds, 4 patterns)". Confirma bit a bit nuestro kernel IQ2_S.
+
 ## Registro
 
 - **2026-10-04**: base congelada en `bebb18d`. Historia del fork traída completa. Confirmado que el #1 ya
