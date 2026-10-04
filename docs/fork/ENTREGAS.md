@@ -94,3 +94,19 @@ Estado: aplicado y verificado.
 - **opencode + ada-next, tarea larga**: **actúa**, 409 s, ambos ficheros, **25/25** en el corrector. (Sin `--model`
   va a un cloud bloqueado por país: "This model is not available in your country".)
 - **Veredicto propuesto: el tope 3072 se queda** (es barato, no degrada, y evita el atasco en ambos clientes).
+
+## Orden 5. 4096 con el `max_tokens` real
+
+Estado: medida. **El tope se queda en 3072.**
+
+- TASK.md con tope 4096 + `max_tokens` 32768, 3 reps:
+
+| rep | tiempo | stop | thinking | ¿actúa? |
+| --- | ---: | --- | ---: | --- |
+| 1 | 619 s | max_tokens | 17.199 c | **no** (solo thinking+text) |
+| 2 | 197 s | tool_use | 16.552 c | **sí** (2× write_file) |
+| 3 | 197 s | tool_use | 16.527 c | **sí** (2× write_file) |
+
+- **2/3, no 3/3** → según el criterio de la orden, **no sube a 4096**. Además la rep fallida quemó 619 s.
+  La primera repetición confirma que con tarea larga el 4096 sigue siendo frágil aunque haya sitio.
+- **Veredicto propuesto: se queda en 3072.**
