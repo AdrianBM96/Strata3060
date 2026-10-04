@@ -92,3 +92,12 @@ grep STRATA_PF_FUSED ~/Strata/serve-strata.sh      # la mejora de prefill
   razonamiento varía; el tier adaptativo ya lo avisa). Afecta a comparar salidas por igualdad.
 - `~/Strata/systemone.db` = registro del bucle de autoaprendizaje.
 - Copias de la config con fecha `.bak-YYYYMMDD-*` en `~/Strata/`.
+
+## Claude Code: dos perfiles
+
+| Comando | Modelo | Permisos |
+| --- | --- | --- |
+| `claude` | **ada-next** (Strata local :8081) | saltados (config + alias `--dangerously-skip-permissions`) |
+| `claude-sub` | **suscripción OAuth** (Opus/Sonnet reales) | saltados (flag + `settings-subscription.json` sin `env`) |
+
+`claude-sub` = `claude --dangerously-skip-permissions --setting-sources project,local --settings ~/.claude/settings-subscription.json` (alias en `~/.bashrc`). El pane de herdr «Servidor IA» corre `claude-sub` equivalente. Revertir ada-next: `cp ~/.claude/settings.json.bak-20261004-pre-ada-next ~/.claude/settings.json`.
