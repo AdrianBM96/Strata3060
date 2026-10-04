@@ -83,6 +83,10 @@ ni calidad.
 - [x] **E2** fusionado con C26 (decisión Adrián: nada de re-cuantizar).
 - **N15.** Ningún cambio que altere los pesos del modelo (ni Q2_K ni ningún formato que cambie valores):
   solo reempaquetado bit-exacto (misma aritmética, otra disposición en memoria).
+- **N16.** Agente `suplente` (agy, arquitecto suplente). Si Claude se queda sin cuota, el vigilante avisa con
+  `SUPLENCIA ACTIVA`: desde ese momento entregas, avisos y preguntas van a suplente, con el mismo formato.
+  Suplente valida según los criterios de cada contrato y da el siguiente de la cola, pero NO da OK a
+  producción: eso se marca como ESPERA y se sigue con otra cosa. Con `SUPLENCIA FIN`, todo vuelve a Claude.
 - Verificado con file:line (no basar nada en lo contrario): `iq2s_grid` es `uint64_t[1024]` = 8 KB
   (`third_party/llama.cpp/ggml/src/ggml-common.h:758`, macro `:472`) → residente en L1, accesos escalares
   (`iq_avx2.cpp:155-158,404-405`); `vpshufb` solo indexa 16 entradas por lane (signos/escalas,
