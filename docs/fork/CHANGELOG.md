@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C23 barrido T_e en curso | siguiente E1 (tras C23) | ninguno | 2026-10-04 22:13 UTC
+ESTADO: C23 medidas T_e (yo) | wt-C16 portando codigo (obrero1) | wt-C14a cherry-pick+build (obrero2) | 2026-10-04 22:14 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -27,3 +27,4 @@ ESTADO: C23 barrido T_e en curso | siguiente E1 (tras C23) | ninguno | 2026-10-0
 | 2026-10-04 | C19 | Batería validada (timing real) | HUMO 2x (11s); CARGA 2x T1-T7 todo PASA (T1 10s, T2 45s, T3 26-36s, T4 20-26s, T5 20s, T6 26-35s, T7 6-12s) | - | Entregada |
 | 2026-10-04 | E1 | Checklist E1-PREP al repo (reglas: diagnosticar, madvise, A/B por palanca, nada persistente) | 252 líneas copiadas a exploracion/ | - | Checklist listo; mide tras C23 |
 | 2026-10-04 | C25 | Subagentes lector+codigo + N12 | lector (deny edit/shell salvo lectura) y codigo (solo wt-*) creados; lector verificado sin escritura | - | Hecho |
+| 2026-10-04 | C25rev | Paralelo real: agente obrero + N12 nueva + wt-C16/wt-C14a (base cb8c2ff) + 2 obreros en marcha | obrero.md (edit solo wt-*, shell compilacion nice, deny serie); worktrees listos | - | Obreros trabajando |

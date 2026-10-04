@@ -85,9 +85,13 @@ ni calidad.
   espere el OK de Claude, poner `ESPERA: <qué>` en la línea ESTADO; si hay bloqueo, `BLOQUEO: <qué>`; si la cola
   está vacía, `COLA VACÍA`. No usarlo para descansar: si hay algo de la columna SÍ de N8, no se está esperando.
 
-- **N12.** Subagentes opencode (C25): `lector` (solo lectura: sin write/edit, bash solo grep/rg/cat/git
-  log/show/diff; lee código, logs y docs con file:line) y `codigo` (edita SOLO en su worktree
-  `/tmp/opencode/wt-<contrato>`, rama `wt/<contrato>`; nunca compila; entrega un diff y el dueño lo integra).
-  Yo soy el ÚNICO dueño del motor, tester, lock, compilación, benchmarks, git en la rama principal
-  (commit/push) y COLA/CHANGELOG: los subagentes no tocan nada de eso. Máximo 2 subagentes a la vez y nunca
-  dos `codigo` sobre el mismo fichero. Usarlos para adelantar trabajo de N8 mientras el motor está ocupado.
+- **N12.** Trabajo en paralelo real (C25 revisado): hasta 3 líneas = yo + 2 subagentes `obrero`
+  (`~/.config/opencode/agents/obrero.md`). Cada obrero lleva UN contrato entero en su worktree
+  (`/tmp/opencode/wt-<C>`, rama `wt/<C>`) con su build aparte (`build-<C>/`). El obrero puede: leer, editar,
+  compilar en su worktree (`nice -n 19`, `-j2`), ejecutar tests de SOLO CPU, escribir scripts y documentar en
+  `wt-<C>/ENTREGA.md`; al terminar avisa con rama, commit y qué falta medir. Solo mío (recursos serie): motor
+  y GPU (incluidos tests o binarios que usen CUDA: con el motor cargado en 11 GB pueden provocar un OOM en
+  producción), tester y lock, benchmarks, despliegue, merge a la rama principal, push, COLA/CHANGELOG/ESTADO.
+  Candado de medida: mientras mido (bench, logpos, E1 o C23 bench) creo `/tmp/strata-bench.lock`; con ese lock
+  los obreros NO compilan (siguen editando o leyendo) y lo borro al terminar. Yo integro, compruebo que con la
+  variable apagada todo sale bit a bit igual y mido en serie.
