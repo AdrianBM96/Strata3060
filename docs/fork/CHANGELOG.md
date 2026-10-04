@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C28 verificado+OK pedido (yo) | C26 wt-P08 paso b | C17 wt-C17 script (obrero1) | 2026-10-04 22:32 UTC
+ESTADO: C26-b verificado (yo, con lock) | C26a VNNI-down (obrero) | C17 script | 2026-10-04 22:32 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -42,3 +42,4 @@ ESTADO: C28 verificado+OK pedido (yo) | C26 wt-P08 paso b | C17 wt-C17 script (o
 | 2026-10-04 | C28-est | Estudio: R=1,31GB@32K (D=10240 FP32, no cabe en VRAM: RAM fijada); KV causal OK; bit-exacto por construcción | techo: expertos −17,3 s menos hand-off 11,5 s = neto −6 s @32K (−13 s @86K) | - | Prototipo solo con OK |
 | 2026-10-04 | C16-cod | Obrero1 entrega wt/C16 21e9091 (portado a mano, build OK, off=1 if) | verificado 4 fich 138+/1- + binario; medir (paridad GPU + B1) a su turno | - | Código listo |
 | 2026-10-04 | C28-ver | LAYER-MAJOR verificado: R es FP32 (2×1,31GB, no BF16); KV int8 (384MB); GDN 118MB; total 3,1/8,2GB; solo cabe en VRAM hasta ~10,8K | confirma dirección y techo expertos; neto −6 s @32K | - | PIDO OK prototipo |
+| 2026-10-04 | C26-b | P08 verificado con te_sweep en GGUF real: con despacho MT_MIN el proto da 79,2→66,1 µs (−16,5% a Te=1); sin MT_MIN no se alcanza (ggml fallback) | bit-idéntico; hallazgo: P02 murió por kernel viejo, no por despacho | - | A/B motor pdte |
