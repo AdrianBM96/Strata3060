@@ -47,3 +47,12 @@ agente (sesiones reales ≥20-30 min de C14a/C15/C17, tareas largas con herramie
 un cliente) la hace tester. NO usar Claude ni ningún modelo en la nube para eso. Cómo: `herdr agent prompt tester
 "<tarea cerrada>" --wait --timeout <ms>`; después `herdr agent read tester`. Los benchmarks (bench.py,
 logpos-compare) se lanzan por shell, como ahora. Antes de cada sesión de tester, apuntar la config del motor activa.
+
+## Norma permanente: adopción en el mismo día
+
+Cuando algo se ADOPTE (gana con IC, pasa la calidad y OK de Claude), en el mismo día: 1) commit del código y la
+configuración y push a la rama del fork `AdrianBM96/Strata3060` rama `claude/strata-rtx3060-optimization-zfgxq8`
+(`git pull --no-rebase` antes del push); 2) documentarlo: entrada en el CHANGELOG (qué, por qué, cifras con IC,
+commit), actualizar RESUMEN_FINAL.md (configuración y cifras vigentes) y, si cambia el despliegue,
+ESTADO_DESPLIEGUE.md; 3) si es un parche nuevo, dejarlo también en `docs/fork/patches/`. No se da por adoptado nada
+que no esté subido y documentado.
