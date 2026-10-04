@@ -38,3 +38,18 @@ justo el mecanismo que el motor ya usa.
 **Recomendación:** dejar 512K. Si algún día se quiere más VRAM para la caché de expertos (más aciertos →
 decode más rápido), la palanca sería **subir `--kv-resident`** con un contexto menor, no bajar el contexto a
 secas. No parece necesario hoy: el acierto de la caché ya va al 62-78 %.
+
+## A/B de `--max-context` (256K vs 512K) — medido
+
+Claude avisó de que **dos cosas sí dependen del contexto máximo** y van a VRAM (las claves agrupadas del
+indexador y la tabla RoPE, dentro de `qsa_state_bytes`, que no salían en mi reparto). Medido con un reinicio a
+256K:
+
+| Config | huecos de expertos | VRAM libre | decode (mediana, 6 pasadas) |
+| --- | ---: | ---: | ---: |
+| **512K** | 3.696 | 5,71 GiB | **42,60 tok/s** |
+| **256K** | 4.032 | 6,16 GiB | **43,80 tok/s** |
+
+256K libera ~450 MiB → **+318 huecos (+9 %)** → **+2,8 % de decode**, en el filo del ruido (~3 %). El prompt
+más largo real fue **86.631 tokens**, así que 256K sobra (3x). **Decisión de Adrián**: 512K (capacidad, coste
+cero) o 256K (+2,8 % decode). Se queda en **512K** hasta que decida.
