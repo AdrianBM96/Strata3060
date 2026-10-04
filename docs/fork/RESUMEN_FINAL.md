@@ -25,8 +25,8 @@ todo lo que hemos cambiado y medido desde el Strata original.
 | --- | --- | --- | --- |
 | **8081** | **Strata** (`ada-next`) — Swift 1.5 125B IQ2_XS | `strata.service` (usuario) | **El modelo principal**: texto, código y **visión** |
 | **8087** | **System One** (`ada-decide`) | `ada-decide.service` (usuario) | Decisiones rápidas (sí/no/opciones) leyendo logprobs del 125B |
-| **4000** | **litellm** | `litellm-proxy.service` (usuario) | Router: los clientes piden `ada-next` / `ada-praxis` |
-| 8080 | BeeLlama.cpp (router GGUF) | (router :8080) | Modelos pequeños locales (tiler, qwopus…) |
+| **4000** | **litellm** | `litellm-proxy.service` (usuario) | Router: los clientes piden `ada-next` / `ada-praxis` (ambos → Strata) |
+| ~~8080~~ | ~~BeeLlama.cpp (router GGUF)~~ | ~~router :8080~~ | **RETIRADO**: los modelos pequeños ya no se usan (ficheros intactos) |
 | — | **Ventilador GPU al 100%** | `gpu-fan-100.service` + `.timer` (sistema) | Salud de la tarjeta; se re-aplica cada 5 min |
 
 ### 2.2 El flujo de una petición
@@ -77,6 +77,10 @@ Partimos de **Niko1221/Strata 0.1.38**. Esto es lo que añadimos o activamos, **
 (térmico), `idle=poll` (neutro), límite de potencia 150 W (neutro), y del fork `architectds`: `GR_DOWN_MAX4`
 (+1,2%, ruido), AVX-VNNI (bit-idéntico pero ruido), **CPU assist** (+5,7% prefill pero **degrada la calidad**),
 `HIT_GY` (ruido), chunks por tamaño (nuestro `auto` ya elige 6144).
+
+**Retirado además:** los modelos pequeños locales del **:8080** (tiel, qwopus, ornith, neohorse…) y **nex-mini**
+— la 3060 queda **entera para Strata**. Ficheros y stack intactos (reversible con
+`systemctl --user enable --now ada-router.service` y restaurando las entradas de litellm).
 
 ---
 
