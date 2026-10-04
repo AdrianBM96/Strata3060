@@ -93,8 +93,12 @@ decisions: 2 · labels: {'audit': 2} · audit_agreement: 0.5 · system2: {done: 
 ```
 
 Es exactamente lo que pedisteis: **se etiqueta solo desde el uso real, sin que nadie ponga etiquetas
-a mano**, y la auditoría detecta cuándo el decisor se equivoca. Con pocas etiquetas no hay umbral
-conformal, así que `auto` es 0 (todo escala) — como él diseñó.
+a mano**, y la auditoría detecta cuándo el decisor se equivoca.
+
+**Corrección de Claude a esta sección:** dije que sin umbral conformal `auto` es 0 y todo escala.
+**Es falso.** Sin umbral, `auto` **no aparece** en la respuesta, y la decisión escala solo por las
+reglas de antes (permutaciones en desacuerdo, `option_mass`). El motivo `conformal` existe solo cuando
+la plantilla ya tiene umbral.
 
 Sus 11 tests pasan aquí. **Lo siguiente** es dejarlo correr con uso real y mirar
 `GET /v1/systemone/stats`: con ~20 etiquetas por plantilla se dispara el campeón/aspirante.
