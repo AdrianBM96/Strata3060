@@ -873,6 +873,17 @@ def child_env(cfg: dict) -> dict:
     return env
 
 
+def lazy_vision_error(cfg: dict, lazy: bool) -> str | None:
+    """Lazy startup takes no VRAM until the first request, so it is refused with an encoder ON THE GPU (it would take
+    its VRAM at the start, before the engine sizes its cache, while another program may hold the card).  An encoder on
+    the CPU ("gpu": false) takes RAM only: it starts with the server, and the engine still loads on the first request."""
+    v = cfg.get("vision")
+    if lazy and v and v.get("gpu"):
+        return ('lazy loading takes no VRAM at the start, and a GPU vision encoder would: put the encoder on the CPU '
+                '("gpu": false in the config\'s "vision" section) or start without --lazy')
+    return None
+
+
 def vision_env(cfg: dict, env: dict) -> dict:
     """The image encoder's environment: the engine's, unless the config's vision section names its own "cuda_device"
     (numbered like nvidia-smi) - then the encoder runs on that card alone, so a spare GPU can hold it while the engine
@@ -2852,7 +2863,7 @@ def main() -> int:
     ap.add_argument("--mcp-config", help="a JSON file with MCP servers in Claude Desktop's format ({\"mcpServers\": "
                                          "{...}}); the web app's chat can use their tools (also \"mcp_servers\" in "
                                          "the config)")
-    ap.add_argument("--lazy", action="store_true", help="start the text-only API unloaded; load on first request")
+    ap.add_argument("--lazy", action="store_true", help="start the API unloaded; load on first request (with vision, only with the encoder on the CPU)")
     ap.add_argument("--api-monitor", action="store_true",
                     help="the API request monitor at /api-monitor: keeps the last 100 requests' prompts and answers in "
                          "memory (also \"api_monitor\": true in the config; off by default)")
@@ -2901,8 +2912,9 @@ def main() -> int:
             pretty = ", ".join(f"{k}={v}" for k, v in sampling_defaults.items())
             print(f"[strata] sampling defaults from the config: {pretty}", flush=True)
         lazy = a.lazy or cfg.get("lazy_load") is True
-        if lazy and cfg.get("vision"):
-            ap.error("lazy loading is text-only; disable vision in the config")
+        why = lazy_vision_error(cfg, lazy)
+        if why:
+            ap.error(why)
         if cfg.get("vision"):
             print("loading the vision encoder ...", flush=True)
             # relative paths are the config's cwd's, as for the engine below

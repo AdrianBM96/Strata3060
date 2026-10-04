@@ -2329,5 +2329,15 @@ class LostStep(unittest.TestCase):
         self.run_mode("stop", stream=False)
 
 
+class LazyVision(unittest.TestCase):
+    def test_lazy_start_takes_a_cpu_encoder_but_not_a_gpu_one(self):
+        from serve.server import lazy_vision_error
+        self.assertIsNone(lazy_vision_error({"vision": {"exe": "v", "gpu": False}}, True))     # RAM only
+        self.assertIsNone(lazy_vision_error({"vision": {"exe": "v"}}, True))                   # no "gpu": the CPU
+        self.assertIn("CPU", lazy_vision_error({"vision": {"exe": "v", "gpu": True}}, True))
+        self.assertIsNone(lazy_vision_error({"vision": {"exe": "v", "gpu": True}}, False))     # eager: as before
+        self.assertIsNone(lazy_vision_error({}, True))                                         # text only
+
+
 if __name__ == "__main__":
     unittest.main()

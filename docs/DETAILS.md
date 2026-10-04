@@ -924,7 +924,9 @@ Strata itself: [MIT](../LICENSE). The model files are not part of it; their lice
 `serve/server.py --engine strata --config strata-<model>.json --lazy` (or `"lazy_load": true` in that
 config) starts the lightweight HTTP API without spawning the native engine. The first generation request
 loads it through the existing reload path, including `before_load` and `min_free_vram_mib`. Eager startup
-remains the default. This option is text-only: a vision configuration with lazy startup is rejected explicitly.
+remains the default. With vision, lazy startup needs the encoder on the CPU (`"gpu": false` in the config's
+`"vision"` section): it takes RAM only and starts with the server. A GPU encoder would take its VRAM at the start,
+so that combination is rejected explicitly.
 
 `POST /v1/load` and `/v1/unload` are JSON control aliases for integrations, accepting `{}` or
 `{"model":"<configured model>"}` and returning model status. They require the configured API key,
