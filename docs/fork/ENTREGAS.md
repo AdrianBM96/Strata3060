@@ -166,3 +166,16 @@ Estado: mirado (solo lectura). **No lo cuenta.**
 - **No lo implemento yo**: el punto de relectura es diseño de motor (un mal sitio mete un sync por ventana).
   **Pido a Claude el contador `STRATA_MTP_HIST=1`** como especifica la orden (uint32 por experto, volcado al
   salir, coste cero apagado). Cuando esté, mido la sesión de ≥30 min y la aceptación del borrador.
+
+## Orden de Adrián (pendiente): Strata virgen vs la nuestra
+
+Cuando cierren las órdenes de Claude, medir **nuestra última versión contra Strata oficial virgen**: cuánto % hemos
+ganado en total.
+
+- **Nuestra**: motor desplegado (0.1.39 + parches System One/suffix-draft + `PF_FUSED=1` + `FETCH_ADMIT=1` + tope
+  3072 + visión CPU + 512K) con su config.
+- **Virgen**: Strata oficial **de la misma base** (0.1.39) compilada tal cual, sin parches ni variables, config
+  equivalente (mismo modelo swift, mismo 512K) — así el % aísla **nuestra** aportación.
+- **Extra**: también contra la **última oficial** que haya entonces (si upstream avanzó), para el % total visible.
+- **Método**: el de siempre (alternar binarios con md5 verificado, B1/B2/B4/P1/P2, `bench.py compare`) + puerta de
+  calidad (`logpos-compare`) para que el % no esconda degradación.
