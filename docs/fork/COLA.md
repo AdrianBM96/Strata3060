@@ -77,3 +77,7 @@ ni calidad.
   implementar nada ni aceptar de él trabajo nuevo. Al empezar cada contrato: `git -C ~/strata-explore pull`.
   Propuestas P<nn> aprobadas → copiar a `docs/fork/exploracion/` del repo con su commit. Empezar los mensajes a
   cualquier agente con `opencode2:`.
+
+- **N11.** Vigilante automático: si paso más de 3 min idle, empuja a seguir con la cola. Cuando de verdad se
+  espere el OK de Claude, poner `ESPERA: <qué>` en la línea ESTADO; si hay bloqueo, `BLOQUEO: <qué>`; si la cola
+  está vacía, `COLA VACÍA`. No usarlo para descansar: si hay algo de la columna SÍ de N8, no se está esperando.
