@@ -54,6 +54,7 @@ como tales.
 | **[RESPUESTA_RONDA11.md](RESPUESTA_RONDA11.md)** | Ronda 11: hardware cerrado; la puerta de calidad de `PF_FUSED` con `logpos-compare` en dos peticiones; y el encargo de portar del fork `architectds` (`GR_DOWN_MAX4`, MTP chain, AVX-VNNI, CPU assist), en orden, desactivable y medido |
 | **[RESPUESTA_RONDA12.md](RESPUESTA_RONDA12.md)** | Ronda 12: el port cerrado (solo `PF_FUSED`); el código de Claude vive en esta rama y cómo traerlo al motor desplegado; una prueba de un reinicio para `--max-context`; MTP chain aparcado |
 | **[RESPUESTA_RONDA13.md](RESPUESTA_RONDA13.md)** | Ronda 13: que Strata lea las imágenes (decisión de Adrián): hoy con el codificador en la CPU y `--lazy` (cambio en `server.py`), y después `--vision-on-demand` del fork |
+| **[RESPUESTA_SYSTEMONE_AGENTES.md](RESPUESTA_SYSTEMONE_AGENTES.md)** | System One como capa de decisión para agentes: primero un guardarraíl de comandos (hook `PreToolUse`, reglas + System One + puerta asimétrica), la delegación a otros modelos en modo sombra, y el reparto del trabajo |
 | **[SYSTEMONE.md](SYSTEMONE.md)** | System One completo: el cambio del motor, la API, operación, actualización y rollback |
 | **[ops/](ops/)** | Los ficheros de despliegue (`ada-decide.py`, `fit-calibration.py`, `logpos-compare.py`, `apply-tuning.sh`, `free-vram.sh`, `strata-switch.sh`, `serve-strata.sh`) y sus tests |
 
