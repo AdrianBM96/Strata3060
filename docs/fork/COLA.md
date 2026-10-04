@@ -71,12 +71,13 @@ ni calidad.
 - [ ] **C19** (en curso) · **C23** · **E1** · **C24** · **E3** · **C16** · **E2** · **C14a** · **E4** · **C20** ·
   **C17** · **C15** · **C8** · **C21**.
 
-- **N10.** Agente `explorer` (agy con Gemini 3.8 Flash, panel w1:pM, copia de lectura en `~/strata-explore`).
-  Solo investiga y propone a Claude. Preguntas de investigación cerradas (máx. 1 por contrato):
-  `herdr agent prompt explorer "opencode2: <pregunta>"`; responde con un fichero R<nn>. Nunca pedirle
-  implementar nada ni aceptar de él trabajo nuevo. Al empezar cada contrato: `git -C ~/strata-explore pull`.
-  Propuestas P<nn> aprobadas → copiar a `docs/fork/exploracion/` del repo con su commit. Empezar los mensajes a
-  cualquier agente con `opencode2:`.
+- **N10.** Agente `explorer` (agy con Gemini 3.8 Flash, panel w1:pM). Solo investiga y propone a Claude.
+  Preguntas de investigación cerradas (máx. 1 por contrato):
+  `herdr agent prompt explorer "opencode2: <pregunta>"`. Explorer no puede usar herdr: responde mediante
+  un vigilante que reparte su buzón; su salida está en `~/explorer/` (P<nn>.md, BUZON.md). Propuestas P<nn>
+  aprobadas por Claude → copiar de `~/explorer/` a `docs/fork/exploracion/` del repo con su commit. Nunca
+  pedirle implementar nada ni aceptar de él trabajo nuevo. Empezar los mensajes a cualquier agente con
+  `opencode2:`.
 
 - **N11.** Vigilante automático: si paso más de 3 min idle, empuja a seguir con la cola. Cuando de verdad se
   espere el OK de Claude, poner `ESPERA: <qué>` en la línea ESTADO; si hay bloqueo, `BLOQUEO: <qué>`; si la cola

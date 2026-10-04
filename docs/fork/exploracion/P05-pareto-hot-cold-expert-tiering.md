@@ -8,21 +8,18 @@ Dividir la memoria de la caché de expertos de la GPU en dos niveles: un *Hot Ti
 - Patrón de colocación híbrida de neuronas/expertos frecuentes de **PowerInfer-2** (arXiv:2406.06282).
 
 ## 3. Qué cuello de nuestro hardware ataca y por qué aplica
-Ataca los **fallos de caché de expertos y el tiempo de espera PCIe en decode (`waitB` 6,5-10 ms)**.
+Ataca los **fallos de caché de expertos y el tiempo de espera PCIe en decode (`waitB` 6,5-10,2 ms)**.
 En la RTX 3060 de 12 GB, el presupuesto de caché de expertos es de ~3.450 slots en total (~72 slots por capa para 512 expertos).
-Hoy, Strata gestiona estos 72 slots con una política puramente dinámica y reactiva (`--adapt-every 2 --adapt-swaps 32`). Cuando una petición realiza llamadas a herramientas o salta entre código y razonamiento, la política de adaptación expulsa expertos estructuralmente necesarios para cargar expertos de ráfaga temporal, provocando "thrashing" y dejando el acierto de caché en **73-78 %**.
-En los modelos MoE (como demostró PowerInfer), la activación de expertos sigue una ley de potencias (distribución de Pareto): en torno al 8-10 % de los expertos (~40-50 de 512) absorben más del 65 % de todas las decisiones del router en cualquier texto. Blindar esos expertos evita que la adaptación los expulse innecesariamente.
+Hoy, Strata gestiona estos 72 slots con una política puramente dinámica y reactiva (`--adapt-every 2 --adapt-swaps 32`). En tareas de agentes, las transiciones entre código y razonamiento expulsan expertos estructurales globales para cargar expertos de ráfagas transitorias, provocando "thrashing" y dejando el acierto en **73-78 %** (mediana ~75 %, `C22_TECHO.md`).
+Como demostró PowerInfer, en MoE el ~8-10 % de los expertos (~45 de 512) absorbe más del 65 % de todas las decisiones del router de forma estable. Blindar esos expertos en VRAM garantiza esa base y reduce las expulsiones destructivas.
 
 ## 4. Ganancia estimada con nuestras cifras
-- Hoy tenemos 72 slots/capa con 73-78 % de acierto (mediana ~75 %).
-  - Fallos por capa = $10 \text{ elecciones} \times (1 - 0,75) = 2,5 \text{ fallos/capa}$.
-  - Los fallos generan `waitB` (6,5-10 ms) y cómputo CPU (14-19 ms).
-- Con 45 slots en Hot Tier estático (cubren ~68 % de aciertos garantizados) y 27 slots dinámicos (que cubren el 50 % de las llamadas restantes):
-  $$\text{Tasa de acierto estimada} \approx 68\% + (32\% \times 0,52) \approx \mathbf{84,6\%} \quad (\text{muy próxima al techo Belady de } 87\%).$$
-  - Los fallos caen de 2,5 a 1,54 por capa (un **−38 % de fallos**).
-  - La espera PCIe `waitB` se reduce en ~3,5 ms (de ~9 ms a ~5,5 ms).
-  - El tiempo de ventana se reduce de 44 ms a ~40,5 ms:
-  $$\text{Decode: } \frac{2,3 \text{ tok}}{0,0405 \text{ s}} \approx \mathbf{56,8 \text{ tok/s}} \quad (\mathbf{+12\% \text{ en decode general B1}}).$$
+*(Cifras base: `C22_TECHO.md` y `ENTREGAS.md` orden 9: acierto actual 73-78 %, techo Belady en simulador ~85 % (`ORDENES.md` §14), waitB 6,5-10,2 ms con media 9,3 ms, ventana 44 ms con 2,3 tok/v en B1 = 50,70 tok/s).*
+- Con 45 slots en Hot Tier estático y 27 slots en Dynamic Tier, el acierto sube del 75 % a un realista **81-82 %** (acercándose al techo asintótico de Belady de ~85 % sin pretender superarlo):
+  - Los fallos de caché caen de 2,50 a 1,85 por capa-ventana (un **−26 % de fallos**).
+  - La espera PCIe `waitB` baja proporcionalmente de 9,3 ms a **~6,9 ms** (ahorro neto de **~2,4 ms por ventana**).
+  - El tiempo de ventana se reduce de 44 ms a **~41,6 ms**:
+  $$\text{Decode B1: } \frac{2,3 \text{ tok}}{0,0416 \text{ s}} \approx \mathbf{55,3 \text{ tok/s}} \quad (\mathbf{+6 \text{ a } +8\% \text{ en decode general B1}}).$$
 
 ## 5. Riesgo para la calidad
 **Ninguno (bit-exacto)**. No altera ningún vector, peso ni selección matemática del router; únicamente optimiza qué expertos residen en la VRAM física del acelerador.
