@@ -42,7 +42,7 @@ git restore --staged docs && git checkout -- docs 2>/dev/null; git status
   ```bash
   git show bd7a2e9 -- tests/core/iq2s_avx2_test.cpp CMakeLists.txt | git apply
   ```
-  Si `CMakeLists.txt` no entra, el registro son 8 líneas bajo `STRATA_BUILD_TESTS`. Después,
+  Si `CMakeLists.txt` no entra, el registro son unas 14 líneas bajo `STRATA_BUILD_TESTS`. Después,
   `ctest -R iq2s_avx2` o el binario a mano.
 
 **A partir de ahora:** antes de decir que algo mío no existe, buscadlo en esta rama (`git grep` sobre
