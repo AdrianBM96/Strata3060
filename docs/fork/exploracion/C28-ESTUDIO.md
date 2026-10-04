@@ -33,3 +33,17 @@ Refinamiento posible: solapar hand-off con cómputo (dúplex) o anillo R en VRAM
 
 Funciona y gana (~6 s @32K, ~13 s @86K), pero 2/3 del ahorro se van en el hand-off R.
 Prototipo solo con OK de Claude (paso 2).
+
+## Verificación contra LAYER-MAJOR.md (código, no estimaciones)
+
+- Ping-pong R: explorer dice BF16 2×671 MB @32K. El código dice FP32 (`take<float>`, `prefill.cpp:852`;
+  upload `T*D*4`, `:1629`): **2×1,31 GB @32K / 2×3,52 GB @86K**. Explorer subestima ×2 (no hay BF16).
+- KV 12 QSA: explorer asume Q4_0 (226 MB); producción es **int8** (`strata-swift-iq2_xs.json:26-27`,
+  12.288 B/tok/capa) → **384 MB @32K / 1,03 GB @86K**.
+- GDN fijo: 128×48×128+10240×3 = 817.152 floats (`layout.hpp:33-37`, `prefill.cpp:1559`) ≈ **118 MB** ✓.
+- Total real: **~3,1 GB @32K / ~8,2 GB @86K** (explorer: 2,1/5 GB).
+- ¿Cabe con el motor cargado (848 MiB libres)? **No**: el ping-pong FP32 (81.920×n B) deja de caber a
+  **n ≈ 10,8K tokens** → RAM fijada obligatoria (vía `hand_in_`, ya existe).
+- Techo expertos 20,7→3,5 s: aritmética correcta; pero explorer omite el hand-off → neto real **−6 s @32K**.
+- Veredicto: SE CONFIRMA la dirección y el techo de expertos, con tamaños corregidos al alza.
+  **Pido OK para el prototipo (paso 2).**
