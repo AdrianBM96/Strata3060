@@ -71,15 +71,12 @@ ni calidad.
 ## Cola (por orden)
 
 - [x] **C19** hecha (batería 2× HUMO + 2× CARGA, todo PASA) · [x] **C22** hecha (techo v2: precarga ≤1 ms, manda CPU).
-- [ ] **C23** (cierre: P02 descartado) · **C26** (kernel CPU: b verificado −16,5 %, a/c en obreros) ·
-  **C28** (prototipo OK en wt-C28) · **C24** (simplificado + burbuja sync + palancas 2,4,5) · **E1**
-  (+afinidad) · **C27** (waitB; absorbe C18) · **C29** (GPU densa en decode: a) fusionar 5×q8_1 b) MMVQ
-  ROWS=2 (si no bit-exacto, DESCARTADA) c) router+top10 d) argmax solo si greedy (verificado: temp>0
-  posible por request + logprobs → NO incondicional); techo −4/−5,5 ms, medir a,b primero) · **C14a**
-  (código verificado; medir a su turno) · **C16** (código verificado; medir a su turno) · **C20** ·
-  **C17** (script listo; falta CARGA; +MTP-DRAFT.md: coste ventana vs tokens 2,3,4,6,8 en ms/ventana con
-  expertos distintos CPU+PCIe — decide borrador en árbol; si 8≫2, el +56 % no existe) · **C15** (degradada) · **C8** (+P05 c) · **E3** · **E4** (+3,7 %, al
-  final) · **C21**.
+- [ ] **C23** (cierre) · **C27** (palanca 1 a obrero, PRIORIDAD) · **C26** (CERRADO: P08 archivado en
+  `patches/p08-interleave.patch`, se reabre sin round-trip; C26a cancelado) · **C28** (prototipo a obrero)
+  · **C24** (simplificado + burbuja sync + palancas 2,4,5) · **E1** (+afinidad) · **C29** (a,b primero;
+  d con gate) · **C14a** (código listo; medir a su turno) · **C16** (código listo; medir a su turno) ·
+  **C20** · **C17** (script listo; falta CARGA + árbol) · **C15** (degradada) · **C8** (+P05 c) · **E3** ·
+  **E4** (+3,7 %, al final) · **C21** · **C30** (oficina a obrero).
 - **C30** (oficina agéntica, Adrián; obrero en paralelo, sin motor: `docs/fork/oficina/` server.py+index.html+
   strata-oficina.service :8090; ref.jpg ya copiada; METRICAS.json creado; se asigna al liberar un obrero).
 - **N17.** `docs/fork/METRICAS.json` lo actualizo YO al adoptar algo y al terminar cada A/B (base orden 7,
@@ -121,7 +118,7 @@ ni calidad.
   espere el OK de Claude, poner `ESPERA: <qué>` en la línea ESTADO; si hay bloqueo, `BLOQUEO: <qué>`; si la cola
   está vacía, `COLA VACÍA`. No usarlo para descansar: si hay algo de la columna SÍ de N8, no se está esperando.
 
-- **N12.** Trabajo en paralelo real (C25 revisado): hasta 3 líneas = yo + 2 subagentes `obrero`
+- **N12.** Trabajo en paralelo real: hasta 4 líneas = yo + 3 subagentes `obrero`
   (`~/.config/opencode/agents/obrero.md`). Cada obrero lleva UN contrato entero en su worktree
   (`/tmp/opencode/wt-<C>`, rama `wt/<C>`) con su build aparte (`build-<C>/`). El obrero puede: leer, editar,
   compilar en su worktree (`nice -n 19`, `-j2`), ejecutar tests de SOLO CPU, escribir scripts y documentar en

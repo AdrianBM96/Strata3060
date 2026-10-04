@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C27-paso1 confirma palanca1 (yo) | C26a VNNI-down | C30 ampliación | 2026-10-04 22:52 UTC
+ESTADO: ALARMA OK (yo) | C27 obrero | C28 obrero | C30 obrero | 2026-10-04 22:58 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -54,3 +54,5 @@ ESTADO: C27-paso1 confirma palanca1 (yo) | C26a VNNI-down | C30 ampliación | 20
 | 2026-10-04 | C26-c | P09 refutada en RAM (x0,985-1,029, 2,6-5,1 GB/s: CPU-bound); C30 a obrero (wt-C30 staging) | bit-idéntico; archivar P09 salvo integración loader | - | C26a en curso |
 | 2026-10-04 | C30-amp | Ampliación Adrián (letterbox, panel+envío con token, kanban, N18/N19); TAREAS.json (21) creado; relay al obrero | - | - | En curso |
 | 2026-10-04 | C27-p1 | Perfil VERIFY_PROFILE (sin código): waitB 8-9, PCIe 1,0, waitA 0,37, waitCPU 1,1 ms/vent | waitB≫bytes → confirma palanca 1 (sin host callback); palanca 3 menor | - | Paso 2 obrero |
+| 2026-10-04 | ALARMA | B1 bench.py 6 en frío: 51,40 (+1,4% vs 50,70), sin throttling; binario+config idénticos | NO hay regresión: el −11% era harness (bench-chat temp 0,7) + calor | - | Producción sana |
+| 2026-10-04 | C26-fin | C26 cerrado: P08 en patches/p08-interleave.patch; C26a cancelado; N12→3 obreros; C27+C28 asignados | - | - | Cola nueva |
