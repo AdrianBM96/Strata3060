@@ -29,7 +29,7 @@ borrador. Tras cada cherry-pick, comprobar que siguen aplicando.
 | 1 | `4c3f599` + `92883e8` | `STRATA_GR_DOWN_MAX4` (#443): proyección GR para ventanas ≤4 tokens | **YA EN NUESTRO ÁRBOL** | Lo trae el 0.1.38 (con el "read once"). No hay que portar: solo A/B con la variable. |
 | 2 | `bce7fbb` | MTP chain / early: una espera por ronda de borrador | **ENTRELAZADO con layer-split** (8 hunks "split") | Cherry-pick suelto traería código multi-GPU. Extraer solo la parte de 1 GPU, o pedir a Claude. |
 | 3 | `f42c58f` | Kernels CPU AVX-VNNI + gather i-quant | **portado y verificado bit a bit, pero SIN ganancia → NO se activa** (rama `port/avx-vnni` guardada, no desplegada) | A/B 3+3: on 42,80 · off 43,25 tok/s → dentro del ruido (y con sesgo térmico a favor del on). Coincide con el fork: "con IQ2_XS dentro del ruido". |
-| 4 | `9de6561`+`785d255`+`9f3069b`(+`62e8c06`) | CPU assist en prefill | **portable, no bit-exacto** (1,3-1,9 % L2/experto) | El último. Puerta de calidad (§2 de `RESPUESTA_RONDA11`) además del A/B. |
+| 4 | `9de6561`+`785d255`+`9f3069b` | CPU assist en prefill | **portado limpio** (`port/cpu-assist`), **+5,7 % prefill corto PERO degrada la calidad** → **NO se activa** | A/B: on 547,8 · off 518,05 tok/s. Puerta de calidad: ΔNLL **+0,0026 ± 0,0012 sobre el ruido** (peor); PPL 1,109→1,113. Revertido. |
 
 ## NO portar (ver `ANALISIS_FORK_ARCHITECTDS.md`)
 
@@ -39,6 +39,22 @@ borrador. Tras cada cherry-pick, comprobar que siguen aplicando.
 - Chunks por tamaño de prompt → nuestro `auto` ya elige 6144 y nada entre 6144 y 8192 cabe.
 - `--vision-on-demand` → **candidato** (no descartado): permitiría traer la visión a Strata en la 3060
   sin ralentizar el texto. Hoy la visión la sirve nex-mini (:8080) porque el codificador no cabe junto al 125B.
+
+## Conclusión del port (2026-10-04)
+
+De todo el fork, **lo único adoptable es `PF_FUSED`** (que ya estaba en nuestro árbol). Los cuatro ports que
+Claude propuso:
+
+| # | Cambio | Veredicto |
+| --- | --- | --- |
+| 1 | `GR_DOWN_MAX4` | ya presente; +1,2 % (ruido) → **apagado** |
+| 2 | MTP chain | entrelazado con layer-split → **no portable suelto** (para Claude) |
+| 3 | AVX-VNNI + gather | bit-idéntico, **sin ganancia** (ruido) → **revertido** |
+| 4 | CPU assist | +5,7 % prefill corto, pero **degrada** (ΔNLL +0,0026) → **revertido** |
+
+**Por qué:** el fork está afinado para tarjetas rápidas y configuraciones multi-GPU. En una 3060 con IQ2_XS, sus
+ganancias de CPU (AVX-VNNI) quedan dentro del ruido, y su gran palanca (CPU assist) cambia la aritmética. El único
+cambio que aporta sin coste es el que ya teníamos.
 
 ## Registro
 
@@ -64,6 +80,13 @@ borrador. Tras cada cherry-pick, comprobar que siguen aplicando.
   ganó. Coincide con el fork ("con IQ2_XS la diferencia queda dentro del ruido"). Por la regla ("si no supera
   el ruido, se queda apagado"): **binario viejo restaurado**, fuente en `bebb18d`, rama `port/avx-vnni`
   guardada para el registro (no mergeada).
+- **2026-10-04 — #4 CPU assist: portado limpio, +5,7 % prefill corto, PERO degrada → revertido.** Los tres
+  commits (`9de6561`+`785d255`+`9f3069b`) cherry-pickearon **sin conflictos** (no dependían del troceado). A/B
+  de prefill a ~1.800 tok: on **547,8** · off **518,05** tok/s → **+5,7 %**, brazos agrupados. Puerta de calidad
+  (contexto 2.975 tok por lotes + continuación 1.123 por ventanas, `--short-read 1500`): A vs B top-1 100 %,
+  KL 0,0043, PPL 1,109→1,113, ΔNLL **+0,0041 ± 0,0011**; ruido A-A2 +0,0015 ± 0,0006 → **B es PEOR por
+  +0,0026 ± 0,0012**. Con la regla de no degradar: **binario bueno restaurado**, fuente en `bebb18d`, rama
+  `port/cpu-assist` guardada. (El fork medía "dentro del error estándar"; en nuestro equipo sale fuera.)
 - **2026-10-04 — #1 `STRATA_GR_DOWN_MAX4` medido: NO se activa.** A/B 3+3+3+3 (off/on/off/on), B1:
   off mediana **42,05 tok/s** (41,0-45,0), on **42,55** (40,9-44,0) → **+1,2 %, dentro del ruido** (el
   protocolo marca ~3 % de deriva; off1 salió a 71 °C y on2 a 78 °C). En Blackwell daba +2,1/+2,4 %, pero en
