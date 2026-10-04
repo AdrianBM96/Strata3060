@@ -9,34 +9,15 @@
   1,12 MB; down q2_0 en todas (~451 KB).
 - Acierto del motor 73-78 %; PCIe medida 11 GB/s; RAM: **pendiente STREAM** (provisional: `membw` 29,8 GB/s, 6 hilos).
 
-## Modelo por ventana (decode)
+## Modelo por ventana v2 (decode): t = Σ_capas [densa_L + max(CPU_L, PCIe_L + aciertos_L)] + draft
 
-- **GPU densa + aciertos** (inevitable): GEMV q8+qkv 2,4 + atención ~1 + head 1,8 + router 3,4 + shared ~1,2 +
-  resto denso ≈ **12-15 ms**.
-- **PCIe** = bytes_fallos_GPU / 11 GB/s. Hoy ~33 MB/ventana → **suelo 3,0 ms** (medido waitB 6,5-10: 2-3× por
-  granularidad y syncs).
-- **CPU** = bytes_fallos_CPU / BW_RAM. Hoy ~250 entradas/ventana × ~1,4 MB ≈ 350 MB → con 29,8 GB/s: **suelo
-  ~12 ms** (medido 14-19). Si STREAM de 6 hilos da menos, el suelo sube.
-- Solape de hoy: **suma** (ver contabilidad arriba). Techo con solape perfecto: **max()**.
+(Corrección: el `max()` global no es físico; las capas son secuenciales. Respuesta al solape, con file:line:
+el pool CPU arranca pronto por el doorbell (`layer.cpp:382-390`, publica ids+x antes de que la GPU siga), pero el
+stream espera la parte CPU en `wait_flag_ge(m_flag_, …)` (`verify.cpp:1085`) antes de `moe_hit_add` (l. 1091):
+solape parcial entre capas (también el plan split, `verify.cpp:540-548`), combinación en serie.)
 
-## Tabla (ms/ventana, B1)
-
-| | Real | Techo solape hoy (suma) | Techo solape perfecto (max) |
-| --- | ---: | ---: | ---: |
-| Decode | ~44 | ~30 (12 GPU + 3 PCIe + 12 CPU + 2,5 draft) | ~15-18 (manda la GPU/CPU mayor) |
-| +5 pts de acierto | — | ~−2 (menos CPU+PCIe) | — |
-| +10 pts de acierto | — | ~−4 | — |
-
-## Pérdida por etapa frente a su mínimo físico
-
-| Etapa | Real | Mínimo | Pérdida |
-| --- | ---: | ---: | --- |
-| waitB (PCIe) | 6,5-10 ms | 3,0 ms | ~4-7 ms (lanzamientos, syncs) |
-| CPU expertos | 14-19 ms | ~12 ms | ~2-7 ms (kernels, hilos) |
-| Espera GPU / host | 21-22 ms | solapable | es la suma, no un coste |
-
-## Prefill (con lo que hay; resto pendiente C24)
-
-- P2 128K medido: ~990 tok/s (~1 ms/token). Desglose por etapa: **pendiente C24**.
-- Proyección: cada chunk stremea casi todos los expertos no residentes una vez (~33 GB en IQ2_XS a 11 GB/s ≈
-  3 s fijos por chunk) + cómputo. A 32K y 86K: **pendiente C24**.
+Por capa (totales/48): densa 0,42 ms; CPU 0,33 ms; PCIe+aciertos 0,28 ms; draft 2,5 ms total.
+- Real: 0,42+0,33+0,28 = 1,03 ms/capa → ~44 ms + draft (syncs y lanzamientos incluidos).
+- Techo intra-capa: 0,42+max(0,33; 0,28) = 0,77 ms/capa → **~37 ms + draft**.
+- Techo con precarga (C15, PCIe_L→0): 0,42+max(0,33; 0,11) ≈ 0,75 ms/capa → **~36 ms + draft**.
+Conclusión honesta: el solape intra-capa vale ~7 ms; la precarga, ~1 ms más. El resto está en densa+CPU.
