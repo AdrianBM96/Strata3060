@@ -28,7 +28,7 @@ caché de expertos ~3.700 slots (el prompt pide ~3.020 prestados).
 | **Tier adaptativo asíncrono** (`11b1f25`) | **Sí, pero ya lo tocamos** | Tenemos el tier (`adapt_every=4`); el fork lo hace no bloqueante | Quita ~24 ms cada 4ª ventana (su caso); ya probamos `ADAPT_NOWAIT` y se revirtió |
 | **Verify window** (`58ec619`) | **Parcial** | PDL es **sm_90+** (no); lo demás (mmvq por warp, atención por lotes, SwiGLU plegado) sí | Premisa "tarjeta rápida": en la 3060 los kernels no son el cuello de lanzamiento |
 | **Chunks por tamaño de prompt** (`4711a9f`/`01ca5fd`) | **No nos cambia** | Nuestro `auto` ya elige **6144**; nada entre 6144 y 8192 cabe en nuestro caché | ~0% |
-| **Images on demand** (`--vision-on-demand`) | **No** | La visión la sirve el otro stack (:8080, nex-mini), no Strata | — |
+| **Images on demand** (`--vision-on-demand`) | **Sí, candidato** | Strata **sí** tiene visión (`engine/strata-vision` + `mmproj-Qwen3.8-Flash-Next-BF16.gguf`; `strata-iq2_xs.json` la usa). La apagamos **en swift** por VRAM y las imágenes van a nex-mini (:8080). Esta mejora **presta la VRAM del caché de expertos al codificador solo mientras hay imagen** | Permite visión en la 3060 **sin ralentizar el texto** |
 | **PDL** (`STRATA_DF_PDL`) | **No** | sm_90+ (Hopper/Blackwell); la 3060 es sm_86 | — |
 | **KV Q4_0 en el prompt** (`STRATA_DF_QB_Q4`) | **No** | Nosotros usamos `--kv int8` | — |
 | **Layer split / peer / dual-GPU / RAM residente con split** | **No** | Una sola tarjeta | — |
@@ -48,6 +48,9 @@ cores, #453 K/V del borrador en anillo) **ya están en Strata 0.1.38**, que es n
 3. **Kernels AVX-VNNI/gather** — bit-idénticos y baratos; en IQ2_XS probablemente ruido, pero se prueban.
 4. **`STRATA_GR_DOWN_MAX4`** — bit-idéntico, +2% según #443.
 5. **MTP chain/early** — bit-idéntico, ahorra lanzamientos en el spec.
+6. **`--vision-on-demand`** — para **traer la visión a Strata** en la 3060 (hoy la sirve nex-mini): presta la
+   VRAM del caché al codificador solo mientras hay imagen. Relevante si se quiere una sola pila; ver el matiz de
+   que la visión de Strata sí existe y solo está apagada en `swift`.
 
 ## Conflictos de integración (para quien lo porte)
 
