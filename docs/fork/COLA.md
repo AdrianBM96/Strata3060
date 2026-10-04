@@ -72,8 +72,9 @@ ni calidad.
 
 - [x] **C19** hecha (batería 2× HUMO + 2× CARGA, todo PASA) · [x] **C22** hecha (techo v2: precarga ≤1 ms, manda CPU).
 - [ ] **C23** (cerrando: P02 sin ganancia) · **E1** · **C24** (simplificado + burbuja sync; +palancas menores
-  2,4,5 de PREFILL-PCIE) · **C28** (prefill por capas: estudio ≤1p con file:line + techo PCIe 32K; prototipo
-  solo con OK) · **C26** (obrero, wt-P08) · **C27** (waitB; absorbe C18) · **E3** · **C16** (obrero1, wt-C16) ·
+  2,4,5 de PREFILL-PCIE) · **C28** (PROTOTIPO OK en wt-C28, nada de producción; sin hand-off: préstamo
+  slots decode ~5-6 GB para R+KV; superbloques si no cabe; R FP32; medir P3/P4, bench 32K/86K y decode tras
+  prefill) · **C26** (obrero, wt-P08) · **C27** (waitB; absorbe C18) · **E3** · **C16** (obrero1, wt-C16) ·
   **C14a** (código verificado; medir a su turno) · **C20** · **C17** (primero `--spec` 2vs3vs4) ·
   **C15** (degradada) · **C8** (+P05 c) · **E4** (+3,7 %, al final) · **C21**.
 - [x] **C18** absorbida por C27 (queda el diseño en `C18_DISENO.md`).
