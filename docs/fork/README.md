@@ -80,3 +80,4 @@ como tales.
 - **Total estimado del plan: +15-30 % de decode** y x4 de contexto por defecto, con la misma calidad. A medir en la
   Fase 0.
 | **[CHANGELOG.md](CHANGELOG.md)** | Una entrada por orden: fecha, nº, qué, resultado, commit y estado |
+| **[COLA.md](COLA.md)** | Norma permanente de CONTRATOS y la cola (C11, C10b, C14a, C15-C18, C8) |
