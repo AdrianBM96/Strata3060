@@ -22,6 +22,46 @@ arriesgar tareas o cuota.
 La propia evidencia que traéis lo dice: estas capas **ahorran coste y tiempo, no suben el éxito de la tarea.** No hay
 que venderlas como "mejor agente".
 
+## 0.1 Comprobado por mi cuenta (fuentes al final)
+
+Repasé por mi cuenta cómo se usa Jev con agentes de programación.
+
+**Lo que confirma vuestra investigación:**
+
+- **El uso más repetido es exactamente este guardarraíl.**
+  - **`toolgate`:** hook `PreToolUse` de Claude Code, reglas estáticas + juicio de Jev + política en YAML + registro
+    de auditoría local. Es la misma arquitectura que propongo en §2.
+  - **`jev-mcp`** tiene un ejemplo de "hook gate" que sirve para Claude Code, Codex, OpenCode y pi con el mismo
+    protocolo de hooks.
+- **El patrón de preguntas que más se cita, mejor que una sola `choice`:** antes de cada bash, write o edit, se
+  envía la tarea, el plan que declaró el agente y el comando, con **cuatro preguntas tipadas**:
+  1. ¿es irreversible?
+  2. ¿se sale de la tarea?
+  3. ¿cambia algo?
+  4. ¿qué alcance tiene?
+
+  **Lo adopto para §2:** tres `noul` y un `score` en vez de una `choice` `allow/deny/ask`. La regla de combinación es
+  código, no modelo: irreversible o fuera de la tarea con dudas → denegar.
+- **Los demás usos que se repiten:**
+  - detectar bucles (CONTINUE / WARN / REPLAN / HALT);
+  - verificar "he terminado" contra la evidencia del transcript;
+  - compactar contexto;
+  - el router rápido/fuerte;
+  - elegir skill;
+  - el linter semántico.
+- **La advertencia:** "type-safe no es correcto". Jev no alucina el formato, pero puede devolver una decisión
+  equivocada con confianza alta: un `noul` 0,02 para un `rm -rf /` deja pasar la llamada. Por eso las reglas van
+  antes que el modelo, y la puerta conformal se calibra con vuestros datos.
+
+**Lo que NO he podido confirmar:**
+
+- Las cifras concretas de vuestra investigación: "0,56-0,58 en errores", la banda 0,3-0,8, y "2,38 → 1,21
+  violaciones" de `jev-lint`.
+- El artículo de prefactor dice que TypeSafe **no ha publicado benchmarks independientes**, y no trae cifras de
+  calibración de Jev.
+
+No lo uso como argumento: lo que importa es medir **nuestro** System One con **nuestros** datos (§2, "Cómo se mide").
+
 ## 1. Dónde se engancha cada cosa (y por qué no todo es MCP)
 
 | Pieza | Mecanismo | Por qué |
@@ -210,3 +250,10 @@ Fuentes:
 - https://docs.litellm.ai/docs/proxy/call_hooks
 - https://opencode.ai/docs/go/
 - https://www.bitdoze.com/opencode-go-plan/
+- https://docs.typesafe.ai/introduction/coding-agents
+- https://github.com/jkudish/jev-mcp (y el ejemplo de hook gate, issue #51 / PR #52)
+- https://github.com/cobanov/awesome-jev/pull/126 (toolgate)
+- https://www.firecrawl.dev/blog/what-is-jev
+- https://github.com/Anil-matcha/awesome-jev-by-typesafe/blob/main/docs/coding-agent-use-cases.md
+- https://prefactor.tech/blog/jev-system-one-model-what-it-means-for-agent-evaluation
+- https://github.com/copyleftdev/jev-labs
