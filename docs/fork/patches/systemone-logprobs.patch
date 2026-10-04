@@ -1,8 +1,8 @@
 diff --git a/serve/server.py b/serve/server.py
-index 46e3fc3..4326539 100644
+index 5677b96..c3889c4 100644
 --- a/serve/server.py
 +++ b/serve/server.py
-@@ -479,6 +479,16 @@ class StrataEngine:
+@@ -686,6 +686,16 @@ class StrataEngine:
                  keys += f" penalty_last_n={pln}"
              else:
                  keys += " penalty_last_n=64"
@@ -19,15 +19,15 @@ index 46e3fc3..4326539 100644
          seed = sampling.get("seed")
          if isinstance(seed, int) and seed > 0:
              keys += f" seed={seed}"
-@@ -504,6 +514,7 @@ class StrataEngine:
-         has gone.  A consumer that stops early (or `cancel`) makes the engine STOP, so it does not run to max_new."""
+@@ -1115,6 +1125,7 @@ class StrataEngine:
+             return
          self.progress = None
          self.prefill_tok_s_mean = None
 +        self.last_logprobs = None      # --logprobs N: the prompt's last-position distribution
          # an image request takes the same sampling keys as text (#75: it used to decode greedily whatever was asked)
          head = f"GENI {int(max_new)}{self.sampling_keys(sampling or {})} {embeddings}" if embeddings else \
              f"GEN {int(max_new)}{self.sampling_keys(sampling or {})}"
-@@ -539,7 +550,19 @@ class StrataEngine:
+@@ -1150,7 +1161,19 @@ class StrataEngine:
                      done = True
                      raise EngineDied(f"the engine stopped unexpectedly (exit code {self.exit_code()})")
                  heard = time.monotonic()                  # any line is output: T, PP, RESUME, INFO ...
@@ -48,17 +48,17 @@ index 46e3fc3..4326539 100644
                      allow = silence
                      if cancel.is_set():
                          return
-@@ -1607,7 +1630,8 @@ class Service:
+@@ -2472,7 +2495,8 @@ class Service:
          for ev in parser.finish():
              yield "event", ev
          yield "done", {"finish": finish, "completion_tokens": n, "reused": (timings or {}).get("cache_n", 0),
--                       "timings": timings}
-+                       "timings": timings,
+-                       "timings": timings, "reasoning_tokens": thinking_n}
++                       "timings": timings, "reasoning_tokens": thinking_n,
 +                       "strata_logprobs": getattr(self.engine, "last_logprobs", None)}
  
  
  def prompt_tokens_seen(prompt_tokens: int, last: dict) -> int:
-@@ -1798,6 +1822,8 @@ def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel
+@@ -2663,6 +2687,8 @@ def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel
                               "prompt_tokens_details": {"cached_tokens": x.get("reused") or 0}}
              if x.get("timings"):
                  last["timings"] = x["timings"]          # llama.cpp's field: the speed its clients show
@@ -67,7 +67,7 @@ index 46e3fc3..4326539 100644
              yield last
  
  
-@@ -1842,6 +1868,8 @@ def openai_collect(chunks) -> dict:
+@@ -2707,6 +2733,8 @@ def openai_collect(chunks) -> dict:
             "usage": last["usage"]}
      if last.get("timings"):
          out["timings"] = last["timings"]
@@ -77,10 +77,10 @@ index 46e3fc3..4326539 100644
  
  
 diff --git a/src/program/generate.cpp b/src/program/generate.cpp
-index a7c77d0..294cdd9 100644
+index 6502ac3..f686a30 100644
 --- a/src/program/generate.cpp
 +++ b/src/program/generate.cpp
-@@ -171,6 +171,13 @@ struct Options {
+@@ -252,6 +252,13 @@ struct Options {
      float temperature = 1.0f;
      std::string dump_logits;          // one line of logits per generated position
      int64_t logits_stride = 1;        // storage selection; all prompt tokens remain conditioned
@@ -94,7 +94,7 @@ index a7c77d0..294cdd9 100644
      /// **THE RESIDUAL, SO THE HEAD CAN BE CHECKED WITHOUT THE LAYERS.**
      ///
      /// C1 fails (LEDGER L116) and the pipeline is `embed -> 48 layers -> head`.  Dumping `R` splits it in half:
-@@ -501,6 +508,8 @@ void usage() {
+@@ -603,6 +610,8 @@ void usage() {
                   "  --seed S             enable sampling with this Philox seed\n"
                   "  --top-k N --top-p F --temperature F\n"
                   "  --dump-logits PATH   write one line of raw logits per position\n"
@@ -103,7 +103,7 @@ index a7c77d0..294cdd9 100644
                   "  --logits-stride N    store every Nth row plus final input (default 1); N>1 requires --max-new 1\n"
                   "  --dump-residual PATH write the final R (hc x n_embd, f32) for head bisection\n"
                   "  --dump-layers PATH   write R after EVERY layer, per position: the C1 bisection ladder\n"
-@@ -859,6 +868,53 @@ int argmax(const std::vector<float>& v) {
+@@ -1023,6 +1032,53 @@ int argmax(const std::vector<float>& v) {
      return best;
  }
  
@@ -157,7 +157,7 @@ index a7c77d0..294cdd9 100644
  // ---- --serve's conversation cache.  A chat or an agent sends the whole conversation again with every request, and
  // reading it again is what made a long session wait minutes for every turn.  What a sequence leaves behind splits in
  // two, and only one half needs copying:
-@@ -1123,6 +1179,13 @@ int main(int argc, char** argv) {
+@@ -1296,6 +1352,13 @@ int main(int argc, char** argv) {
          else if (a == "--top-p") o.top_p = (float) std::atof(next("--top-p"));
          else if (a == "--temperature") o.temperature = (float) std::atof(next("--temperature"));
          else if (a == "--dump-logits") o.dump_logits = next("--dump-logits");
@@ -171,7 +171,7 @@ index a7c77d0..294cdd9 100644
          else if (a == "--logits-stride") {
              if (have_logits_stride) { std::fprintf(stderr, "--logits-stride must be supplied only once\n"); return 2; }
              if (!strata::program::logits_selection::parse_stride(next("--logits-stride"), o.logits_stride)) {
-@@ -5073,6 +5136,8 @@ int main(int argc, char** argv) {
+@@ -6265,6 +6328,8 @@ int main(int argc, char** argv) {
              float req_min_p = 0.0f, req_penalty_repeat = 1.0f, req_penalty_freq = 0.0f, req_penalty_present = 0.0f;
              int req_penalty_last_n = 0;
              int req_cvec = 1;   // cvec=0|1: a loaded control vector for this request (on when absent)
@@ -180,7 +180,7 @@ index a7c77d0..294cdd9 100644
              // tuning keys (setup's calibration measures settings without restarting the engine): the PCIe share of
              // the missed experts and the draft-probability floor, for this request only
              double req_pcie_frac = o.pcie_frac, req_spec_min_p = o.spec_min_p;
-@@ -5089,6 +5154,18 @@ int main(int argc, char** argv) {
+@@ -6281,6 +6346,18 @@ int main(int argc, char** argv) {
                      const std::string key = tok.substr(0, eq);
                      const float fv = std::strtof(tok.c_str() + eq + 1, nullptr);
                      if (key == "cvec") req_cvec = std::atoi(tok.c_str() + eq + 1);
@@ -199,7 +199,7 @@ index a7c77d0..294cdd9 100644
                      else if (key == "temperature") req_temperature = fv;
                      else if (key == "top_p") req_top_p = fv;
                      else if (key == "top_k") req_top_k = std::atoi(tok.c_str() + eq + 1);
-@@ -5609,8 +5686,25 @@ int main(int argc, char** argv) {
+@@ -7003,8 +7080,25 @@ int main(int argc, char** argv) {
                          if (i >= o.prompt_cache_root) root_at = i;
                          break;
                      }
@@ -226,7 +226,7 @@ index a7c77d0..294cdd9 100644
                  if (to <= at) continue;
                  err.clear();
                  const bool win = windows_ok(at, to);
-@@ -5660,9 +5754,9 @@ int main(int argc, char** argv) {
+@@ -7057,9 +7151,9 @@ int main(int argc, char** argv) {
              const double prompt_ms = std::chrono::duration<double, std::milli>(Clock::now() - r0).count();
              std::printf("REUSED %lld\n", (long long) resume);   // the prompt is read; the first window comes next
              std::fflush(stdout);
@@ -239,7 +239,7 @@ index a7c77d0..294cdd9 100644
              std::vector<int32_t> drafts((size_t) S, 0), window((size_t) S), outv((size_t) S);
              std::vector<float> dprob((size_t) S, 0.0f);
              std::vector<int32_t> sbuf((size_t) S, 0);
-@@ -5676,7 +5770,7 @@ int main(int argc, char** argv) {
+@@ -7073,7 +7167,7 @@ int main(int argc, char** argv) {
              // what the session holds once this request is done: the prompt read so far, then every committed token
              std::vector<int32_t> consumed;
              consumed.reserve((size_t) (n + max_new + S));
@@ -248,7 +248,7 @@ index a7c77d0..294cdd9 100644
              const char* finish = "length";
              const Clock::time_point d0 = Clock::now();
              // STRATA_DECODE_TIMING=1: where a request's decode time goes (one line per request)
-@@ -5705,7 +5799,7 @@ int main(int argc, char** argv) {
+@@ -7104,7 +7198,7 @@ int main(int argc, char** argv) {
                      T = 1;
                      while (T < S_mtp && dprob[(size_t) T - 1] >= (float) req_spec_min_p) ++T;
                  }
@@ -257,7 +257,7 @@ index a7c77d0..294cdd9 100644
                  // a repeat of earlier context (prompt lookup) where the MTP's own first guess agrees: the policy takes it
                  // when its expected tokens per ms, from the measured acceptance and window costs, beat the MTP window's
                  bool from_sfx = false;
-@@ -5723,6 +5817,10 @@ int main(int argc, char** argv) {
+@@ -7122,6 +7216,10 @@ int main(int argc, char** argv) {
                  if (p + T > o.max_context) break;
                  window[0] = x;
                  for (int i = 1; i < T; ++i) window[(size_t) i] = from_sfx ? sbuf[(size_t) i - 1] : drafts[(size_t) i - 1];
@@ -268,7 +268,7 @@ index a7c77d0..294cdd9 100644
                  drive.d.layers = 0;
                  drive.d.experts = 0;
                  drive.d.failed = false;
-@@ -5749,7 +5847,21 @@ int main(int argc, char** argv) {
+@@ -7148,7 +7246,21 @@ int main(int argc, char** argv) {
                  }
                  int a = 0;
                  while (a < T - 1 && window[(size_t) a + 1] == outv[(size_t) a]) ++a;
@@ -290,7 +290,7 @@ index a7c77d0..294cdd9 100644
                  const Clock::time_point tw1 = Clock::now();
                  std::thread adapt_thr;   // the adaptive tier beside the commit and the draft (as in generate)
                  bool adapt_ok = true;
-@@ -5762,11 +5874,14 @@ int main(int argc, char** argv) {
+@@ -7161,11 +7273,14 @@ int main(int argc, char** argv) {
                  }
                  // the window's first a + 1 tokens are in the session now (the last output is not: it is next x)
                  for (int i = 0; i <= a; ++i) consumed.push_back(window[(size_t) i]);
@@ -308,7 +308,7 @@ index a7c77d0..294cdd9 100644
                      std::printf("T %d\n", (int) outv[(size_t) i]);
                      strata::core::progress_beat();
                      ++produced_n;
-@@ -5774,6 +5889,18 @@ int main(int argc, char** argv) {
+@@ -7173,6 +7288,18 @@ int main(int argc, char** argv) {
                      eos = std::find(o.eos_ids.begin(), o.eos_ids.end(), (int64_t) outv[(size_t) i]) != o.eos_ids.end();
                  }
                  std::fflush(stdout);
@@ -327,7 +327,7 @@ index a7c77d0..294cdd9 100644
                  ++rounds;
                  const Clock::time_point tw2 = Clock::now();
                  // coupled drafts with penalties: the next window's row-0 history (`consumed` holds this window's
-@@ -6613,6 +6740,14 @@ int main(int argc, char** argv) {
+@@ -8077,6 +8204,14 @@ int main(int argc, char** argv) {
                          std::fprintf(stderr, "strata generate: STRATA_DUMP_FIRST_LOGITS: cannot write %s\n", fl);
                      if (f) std::fclose(f);
                  }

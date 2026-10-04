@@ -59,6 +59,7 @@ como tales.
 | **[AUDITORIA_CACHE_EXPERTOS.md](AUDITORIA_CACHE_EXPERTOS.md)** | Auditoría de la caché de expertos en VRAM: cómo decide hoy, cuatro rasgos que pueden costar, un simulador sobre trazas reales con el óptimo teórico como techo (`ops/cache-sim.py`), y un contador de copias por petición en el motor |
 | **[MEDICION_CACHE_EXPERTOS.md](MEDICION_CACHE_EXPERTOS.md)** | Ronda medida: el simulador pasado con una traza propia (1.101 ventanas). **Swaps validados al motor** (24,0 vs 23,92 por ventana); el **acierto difiere** (sim 56,4% vs motor 60-73%). Margen: 56% actual -> 83% techo; LRU simple 71%; los flags solo dan +6% copiando 3,5x |
 | **[RESPUESTA_CACHE_EXPERTOS.md](RESPUESTA_CACHE_EXPERTOS.md)** | Caché de expertos: el desajuste explicado (el motor deja fuera los fallos PCIe; simulador validado a 0,3 puntos) y `fetch-admit`, una política que guarda lo que ya cruzó el PCIe sin copiar nada extra |
+| **[INTEGRACION_V0139.md](INTEGRACION_V0139.md)** | Strata v0.1.39 integrada en el fork (merge, nada perdido): qué trae para la 3060 (top-k 11x más rápido a 512K, kernels de GPU del decode), cómo desplegarla con vuelta atrás, el parche de System One regenerado, y qué medir |
 | **[SYSTEMONE.md](SYSTEMONE.md)** | System One completo: el cambio del motor, la API, operación, actualización y rollback |
 | **[ops/](ops/)** | Los ficheros de despliegue (`ada-decide.py`, `fit-calibration.py`, `logpos-compare.py`, `apply-tuning.sh`, `free-vram.sh`, `strata-switch.sh`, `serve-strata.sh`) y sus tests |
 
