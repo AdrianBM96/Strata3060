@@ -84,6 +84,19 @@ brazo `on` coincide **exactamente** con el `off` que tiene al lado (`on1==off1`,
 `temperature 0`, en la misma instancia, el `content` sale idéntico pero la **longitud del razonamiento** varía,
 236 vs 253 tokens). El tier adaptativo ya avisa de que no es bit-exacto run-to-run. **El flag no añade deriva.**
 
-**Pendiente (para Claude):** la puerta de calidad fuerte es *teacher-forcing* (log-verosimilitud de una
-continuación fija con y sin el flag), como validó upstream el camino Q2_0 ("tan cerca de FP16 como MMQ"). El test
-de salida emparejada es una señal, no una garantía.
+**Puerta de calidad (método de Claude, `RESPUESTA_RONDA11` §2) — PASA.**
+
+Teacher-forcing con `ops/logpos-compare.py`: contexto de **15.251 tokens por LOTES** (petición 1, donde actúa el
+flag) y su **continuación de 2.603 tokens por VENTANAS** (petición 2, como mensaje del asistente, `cache_n=15246`),
+con `--short-read 4096 --adapt-every 100000` y `STRATA_LOGPOS`. Brazos A (off), B (on), A2 (off, suelo de ruido),
+**2.602 posiciones** cada uno:
+
+| | top-1 | top-5/10 | KL | PPL | ΔNLL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **A vs B** | 99,8 % | 0,898 / 0,904 | 0,0030 | 1,055 → 1,050 | **−0,0046 ± 0,0005** |
+| A vs A2 (ruido) | 100,0 % | 0,901 / 0,911 | 0,0020 | 1,055 → 1,058 | +0,0030 ± 0,0004 |
+
+**ΔNLL de B sobre el ruido: −0,0076 ± 0,0006 nats/token → B es MEJOR.** El 99,8 % de acuerdo de top-1 y la KL de
+0,003 dicen que predice lo mismo; y la NLL de B cae **dentro (mejor) del suelo de ruido**. La mejora de prefill
+(+5,2 %) **no cuesta calidad**. (Matiz: la continuación es muy predecible — PPL ≈ 1,05 — así que mide sobre tokens
+fáciles; la comparación relativa sigue siendo válida.)

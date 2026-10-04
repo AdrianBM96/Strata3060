@@ -20,7 +20,7 @@ caché de expertos ~3.700 slots (el prompt pide ~3.020 prestados).
 
 | Cambio del fork | ¿Aplica? | Por qué | Ganancia esperada en la 3060 |
 | --- | --- | --- | --- |
-| **`STRATA_PF_FUSED=1`** (expertos int8 fusionados en el prompt) | **Sí, ya lo tenemos (opt-in)** | Nuestro pack es nativo y `moe_fused_iq` cubre IQ2_XXS/IQ2_S | **+5,2% medido** (abajo), adoptado |
+| **`STRATA_PF_FUSED=1`** (expertos int8 fusionados en el prompt) | **Sí, ya lo tenemos (opt-in)** | Nuestro pack es nativo y `moe_fused_iq` cubre IQ2_XXS/IQ2_S | **+5,2% medido y puerta de calidad PASADA**, adoptado |
 | **CPU assist en prefill** (`STRATA_PREFILL_CPU`) | **Sí** | Prompts **< 3.072 tokens** (incrementos de chat, decisiones) están atados a las copias PCIe | 1,35-1,49x en <1.000 tok (su medida); **no es bit-exacto** |
 | **Kernels CPU AVX-VNNI + gather i-quant** (`f42c58f`) | **Sí** | Nuestra CPU tiene `avx_vnni` y es solo P-cores | **bit-idéntico**; en IQ2_XS ellos lo miden "dentro del ruido" |
 | **MTP chain / MTP early** (`bce7fbb`) | **Sí** | Usamos `--spec 4 --mtp` | 1 lanzamiento+espera por ronda de borrador en vez de por paso |

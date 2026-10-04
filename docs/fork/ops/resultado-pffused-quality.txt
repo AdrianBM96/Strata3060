@@ -1,0 +1,4 @@
+A vs B:  posiciones 2602 | top-1 igual 99.8 % | top-5/10 0.898/0.904 | KL 0.0030 | PPL 1.055 -> 1.050 | ΔNLL -0.0046 ± 0.0005
+A vs A2: posiciones 2602 | top-1 igual 100.0 % | top-5/10 0.901/0.911 | KL 0.0020 | PPL 1.055 -> 1.058 | ΔNLL +0.0030 ± 0.0004   (ruido)
+
+ΔNLL de B sobre el ruido: -0.0076 ± 0.0006 nats/token -> B es MEJOR
