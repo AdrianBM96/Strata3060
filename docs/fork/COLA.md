@@ -50,25 +50,17 @@ que no esté subido y documentado.
 
 - [ ] **C19** (en curso). Batería tester en `docs/fork/ops/tester/`. Recursos: tester+motor (excluye benchmarks).
   Hecho cuando: HUMO y CARGA pasan 2 veces seguidas, CARGA ≤20 min.
-- [ ] **C14a.** `STRATA_MTP_HIST=1`. Recursos: motor/GPU para compilar+medir; tester para CARGA. Donde decía
-  "sesión de 30+ min", ahora es el juego CARGA más la comprobación de volumen. Hecho cuando: bit a bit igual
-  apagada, cobertura top 128/256/384 y aceptación del borrador.
-- [ ] **C15.** `STRATA_PREGATE_STATS=1` según ORDENES §15 (lo implementa el agente). Recursos: motor/GPU;
-  tester para CARGA. Igual sustitución de la sesión por CARGA + volumen.
-- [ ] **C16.** `STRATA_ROUTE_GAP_STATS=1` según §16. Recursos y sustitución iguales que C15.
-- [ ] **C17.** Según §17 con script sobre logs + CARGA para el tráfico. Recursos: tester+motor.
-- [ ] **C20** (antes paso 4 de la orden 11). `--kv-resident 16384`. Recursos: motor/GPU. Medir VRAM liberada y
-  huecos ganados, B1/B2 6+6, acierto de bloques KV y decode con 32K y 86K de contexto. Solo con OK y sin OOM.
-- [ ] **C8.** Rejilla del simulador a) b) a+b. Recursos: solo CPU. Hecho cuando: la tabla con el criterio de §8.
-- [ ] **C18** (solo estudio, sin código). Recursos: ninguno (lectura). Entrega en `docs/fork/C18_DISENO.md`
-  (máx. 1 página).
-- [ ] **C21** (orden de Adrián). Nuestra versión contra Strata 0.1.39 virgen. Recursos: motor/GPU (A/B con swaps).
-  Va al final, con la cola vacía.
-
-- **N6.** CANDADO DEL MOTOR (`/tmp/strata-motor.lock`). 1) Antes de lanzar tester, crear el lock con: quién,
-  qué juego, hora de inicio y config del motor. Borrarlo al terminar, incluso si falla (`trap` en run.sh).
-  2) Mientras exista, PROHIBIDO: reiniciar, parar o redesplegar el motor o litellm; cambiar flags o variables;
-  lanzar bench.py, logpos-compare o cualquier petición a :8081/:4000; compilar con más de 2 hilos (`-j2` máx. con
-  `nice -n 19`); cache-sim o lo que use >1 núcleo minutos. Sí se puede: leer, editar, scripts, documentar.
-  3) Antes de CUALQUIER acción de esa lista, comprobar el lock y esperar. 4) Lock de >40 min: avisar a Claude, no
-  borrarlo. 5) Al revés igual: nada de tester mientras corre un benchmark propio.
+- [ ] **C22.** Techo teórico (solo cálculo, sin motor; recursos: ninguno). Decode y prefill máximos en esta
+  máquina y pérdida por etapa. Entrega en `docs/fork/C22_TECHO.md` (máx. 1 página).
+- [ ] **C23.** Eficiencia de expertos en CPU (recursos: CPU y motor; N5/N6). GB/s por tipo e hilos vs STREAM;
+  ISA por kernel; reparto entre hilos; fijado a P-cores. Hasta 3 candidatos con techo.
+- [ ] **C24.** Perfil del prefill (recursos: motor; N5/N6). `bench-prefill.py` a 32K y 86K; desglose en ms/1K
+  tokens; tabla en `docs/fork/C24_PREFILL.md` + hasta 3 candidatos.
+- [ ] **C14a.** `STRATA_MTP_HIST=1` (código hecho, compila; falta medir con CARGA).
+- [ ] **C15.** `STRATA_PREGATE_STATS=1` según ORDENES §15.
+- [ ] **C16.** `STRATA_ROUTE_GAP_STATS=1` según §16.
+- [ ] **C17.** Según §17 con script sobre logs + CARGA.
+- [ ] **C20.** `--kv-resident 16384` (era paso 4 de la orden 11).
+- [ ] **C8.** Rejilla del simulador a) b) a+b.
+- [ ] **C18** (solo estudio, sin código). Entrega en `docs/fork/C18_DISENO.md` (máx. 1 página).
+- [ ] **C21** (orden de Adrián). Nuestra versión contra Strata 0.1.39 virgen, con la cola vacía.
