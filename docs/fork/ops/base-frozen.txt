@@ -1,0 +1,27 @@
+===== routing2.bin (frozen profile) =====
+7086 windows (~20581 tokens), 3696 slots, start: static (profile); counted from the first window
+policy                                   hit/entry  hit/dist  eng.hit  swaps/w free/w    copied/w    PCIe/w
+static (profile)                          38.52 %  37.38 %  44.23 %     0.00   0.00      0.0 MB   0.00 ms
+adapt every=4 decay=0.7 swaps=96          58.97 %  55.23 %  64.56 %    23.77   0.00     32.9 MB   2.99 ms
+adapt every=4 decay=0.7 swaps=96 cross    58.90 %  55.24 %  64.48 %    23.74   0.00     32.8 MB   2.98 ms
+fetch-admit alone                         63.19 %  60.40 %  68.26 %     0.00  86.74      0.0 MB   0.00 ms
+fetch-admit + adapt                       66.89 %  63.31 %  71.77 %    23.00  73.99     31.8 MB   2.89 ms
+lru (per layer)                           73.12 %  68.86 %  77.41 %   328.68   0.00    454.4 MB  41.31 ms
+belady (ceiling, per layer)               85.23 %  82.78 %  87.49 %   117.15   0.00    162.0 MB  14.72 ms
+belady (ceiling, global)                  85.97 %  83.73 %  88.05 %   111.35   0.00    153.9 MB  13.99 ms
+
+belady knows the future: it is the ceiling, not a policy.  The gap between `adapt` (deployed flags) and `belady (per layer)` is what any within-layer rule could still win; `belady (global)` adds moving slots between layers.
+
+===== routing.bin (frozen profile) =====
+1101 windows (~3543 tokens), 3696 slots, start: static (profile); counted from the first window
+policy                                   hit/entry  hit/dist  eng.hit  swaps/w free/w    copied/w    PCIe/w
+static (profile)                          34.67 %  33.66 %  40.16 %     0.00   0.00      0.0 MB   0.00 ms
+adapt every=4 decay=0.7 swaps=96          56.63 %  51.65 %  62.44 %    23.91   0.00     33.1 MB   3.00 ms
+adapt every=4 decay=0.7 swaps=96 cross    56.71 %  51.68 %  62.51 %    23.92   0.00     33.1 MB   3.01 ms
+fetch-admit alone                         58.31 %  55.40 %  63.73 %     0.00 106.23      0.0 MB   0.00 ms
+fetch-admit + adapt                       62.34 %  58.35 %  67.66 %    23.50  89.87     32.5 MB   2.95 ms
+lru (per layer)                           70.95 %  66.21 %  75.54 %   383.45   0.00    530.1 MB  48.19 ms
+belady (ceiling, per layer)               83.50 %  80.70 %  86.08 %   141.89   0.00    196.2 MB  17.83 ms
+belady (ceiling, global)                  84.26 %  81.71 %  86.67 %   134.33   0.00    185.7 MB  16.88 ms
+
+belady knows the future: it is the ceiling, not a policy.  The gap between `adapt` (deployed flags) and `belady (per layer)` is what any within-layer rule could still win; `belady (global)` adds moving slots between layers.

@@ -45,7 +45,35 @@ cerrando **~3 de los ~23 puntos** que faltaban.
 - Los números de `free/w` (73-86 por ventana) dicen que **hay mucho que admitir gratis** — el *staging* del PCIe ya
   trae ~30 % de los fallos.
 
-## 5. Qué te pido
+## 5. Profundización (`fetch-admit` a fondo; recoge el trabajo del analista)
+
+Se barrió la rejilla sobre la traza larga (127 + 73 puntos, `ops/grid-routing2*.txt`) y con perfil congelado
+(`ops/grid-frozen-both.txt`, que confirma que el resultado no depende del perfil de arranque). Conclusión:
+
+**`fetch-admit` gana en toda la rejilla, y lo mejor es que gana también con POCAS copias.** Lo que hoy se copia
+(32,9 MB/ventana) es mayoritariamente innecesario una vez que lo gratis se admite:
+
+| Política | eng.hit | swaps/w | MB/w | vs hoy |
+| --- | ---: | ---: | ---: | --- |
+| adapt e=4 d=0.7 s=96 (**hoy**) | 64,58 % | 23,79 | 32,9 | — |
+| fa+adapt e=2 d=0.7 s=8 | **70,26 %** | 3,99 | **5,5** | +5,7 pts con **1/6** de copias |
+| fa+adapt e=2 d=0.7 s=16 | **71,02 %** | 7,92 | 10,9 | +6,4 pts con 1/3 de copias |
+| fa+adapt e=2 d=0.7 s=32 | **72,03 %** | 15,20 | 21,0 | +7,4 pts con 2/3 de copias |
+| fa+adapt e=2 d=0.7 s=48 | 72,71 % | 21,61 | 29,9 | +8,1 pts, aún menos que hoy |
+| fetch-admit alone | 68,2 % | 0 | 0,0 | +3,6 pts **gratis** |
+
+**Recomendación para el cambio de motor**: `fetch-admit + adapt` con `every=2`, `decay=0.7` y `swaps` bajo
+(**16-32**). Da **71-72 %** (hoy 64,6 %) copiando **11-21 MB** (hoy 33 MB). Es decir: **+6-7 puntos de acierto y
+menos tráfico de PCIe a la vez**. El `every=2` duplica la frecuencia de revisión pero con pocas copias sale a
+cuenta; el `decay=0.7` se mantiene.
+
+**Robustez**: con perfil congelado los números se repiten (fa+adapt 70-73 %, adapt 64-68 %); no es un artefacto del
+perfil de arranque. En la traza corta (1.101 ventanas) también gana (67,66 % vs 62,44 %).
+
+**Lo que sigue pendiente de Claude**: el cambio de motor (§4 de `MEDICION_FETCH_ADMIT.md`) con variable de A/B, y
+decidir los ~3 puntos del acierto (§1).
+
+## 6. Qué te pido
 
 1. **Decidir §1**: los ~3 puntos que quedan del acierto (¿`pcie_frac`, la fórmula del 77>>8/16, o el prefill?).
 2. **Escribir el cambio de motor de §4** (tu "copiar el blob PCIe al hueco del que sale") **con variable de A/B**,
