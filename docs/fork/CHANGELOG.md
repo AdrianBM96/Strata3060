@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C23 medidas T_e (yo) | wt-C16 portando codigo (obrero1) | wt-C14a cherry-pick+build (obrero2) | 2026-10-04 22:14 UTC
+ESTADO: C23 bench T_e (yo, con lock) | wt-C16 portando (3 fich) | wt-C14a cherry limpio+configurado | 2026-10-04 22:16 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |

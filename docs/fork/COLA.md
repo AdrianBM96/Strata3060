@@ -69,9 +69,10 @@ ni calidad.
 
 ## Cola (por orden)
 
-- [ ] **C19** (en curso) · **C23** (+barrido T_e=1,4,8,16,32,64 por tipo, 6 hilos; clave para E4) · **E1** · **C24**
-  (+confirmar ~72 ms/capa PCIe: 440 expertos × 1,8 MB) · **E4** · **E3** · **C16** · **E2** · **C14a** · **C20** ·
-  **C17** · **C15** · **C8** · **C21**.
+- [x] **C19** hecha (batería 2× HUMO + 2× CARGA, todo PASA) · [x] **C22** hecha (techo v2: precarga ≤1 ms, manda CPU).
+- [ ] **C23** (en curso, mis medidas: T_e=1,4,8,16,32,64 por tipo, 6 hilos; P02/P06/P08/P09) · **E1** · **C24**
+  (+confirmar ~72 ms/capa PCIe) · **E4** · **E3** · **C16** (obrero1, wt-C16) · **E2** · **C14a** (obrero2,
+  wt-C14a) · **C20** · **C17** · **C15** (degradada) · **C8** (+P05 c) · **C18** · **C21**.
 
 - **N10.** Agente `explorer` (agy con Gemini 3.8 Flash, panel w1:pM). Solo investiga y propone a Claude.
   Preguntas de investigación cerradas (máx. 1 por contrato):
