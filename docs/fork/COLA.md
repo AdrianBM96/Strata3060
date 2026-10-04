@@ -77,7 +77,8 @@ ni calidad.
   ROWS=2 (si no bit-exacto, DESCARTADA) c) router+top10 d) argmax solo si greedy (verificado: temp>0
   posible por request + logprobs → NO incondicional); techo −4/−5,5 ms, medir a,b primero) · **C14a**
   (código verificado; medir a su turno) · **C16** (código verificado; medir a su turno) · **C20** ·
-  **C17** (script listo; falta CARGA) · **C15** (degradada) · **C8** (+P05 c) · **E3** · **E4** (+3,7 %, al
+  **C17** (script listo; falta CARGA; +MTP-DRAFT.md: coste ventana vs tokens 2,3,4,6,8 en ms/ventana con
+  expertos distintos CPU+PCIe — decide borrador en árbol; si 8≫2, el +56 % no existe) · **C15** (degradada) · **C8** (+P05 c) · **E3** · **E4** (+3,7 %, al
   final) · **C21**.
 - [x] **C18** absorbida por C27 (queda el diseño en `C18_DISENO.md`).
 - Nota: `-b/-ub 128` de llama.cpp no aplica a los chunks de Strata (diseño distinto); sin acción.
