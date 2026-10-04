@@ -71,7 +71,8 @@ class Policies(unittest.TestCase):
 
     def test_belady_is_the_ceiling(self):
         res = [S.run_static(self.ws, self.start), S.run_adapt(self.ws, self.start), S.run_lru(self.ws, self.start),
-               S.run_adapt(self.ws, self.start, cross=True)]
+               S.run_adapt(self.ws, self.start, cross=True), S.run_fetch_admit(self.ws, self.start),
+               S.run_fetch_admit(self.ws, self.start, adapt=False)]
         bl = S.run_belady(self.ws, self.start, per_layer=True)
         bg = S.run_belady(self.ws, self.start)
         for r in res:
@@ -90,6 +91,16 @@ class Policies(unittest.TestCase):
         for cross in (False, True):
             r = S.run_adapt(self.ws, small, cross=cross, every=2, swaps=500)
             self.assertGreater(r.swaps, 0)
+
+
+class EngineMetric(unittest.TestCase):
+    def test_the_pcie_share_is_left_out_like_the_engine_does(self):
+        # one layer, 10 distinct misses, nothing resident: 77/256 of 10 -> 3 over PCIe, 7 on the CPU
+        w = [S.Counter({e: 1 for e in range(10)})] + [S.Counter() for _ in range(S.N_LAYER - 1)]
+        r = S.Result("x")
+        fetched = r.add(w, set())
+        self.assertEqual(fetched[0], [7, 8, 9])                  # the LAST misses in routing order
+        self.assertEqual(r.cpu_e, 7)
 
 
 class Cli(unittest.TestCase):

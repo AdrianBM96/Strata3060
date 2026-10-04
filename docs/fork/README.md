@@ -58,6 +58,7 @@ como tales.
 | **[RESPUESTA_SYSTEMONE_AGENTES.md](RESPUESTA_SYSTEMONE_AGENTES.md)** | System One como capa de decisión para agentes: primero un guardarraíl de comandos (hook `PreToolUse`, reglas + System One + puerta asimétrica), la delegación a otros modelos en modo sombra, y el reparto del trabajo |
 | **[AUDITORIA_CACHE_EXPERTOS.md](AUDITORIA_CACHE_EXPERTOS.md)** | Auditoría de la caché de expertos en VRAM: cómo decide hoy, cuatro rasgos que pueden costar, un simulador sobre trazas reales con el óptimo teórico como techo (`ops/cache-sim.py`), y un contador de copias por petición en el motor |
 | **[MEDICION_CACHE_EXPERTOS.md](MEDICION_CACHE_EXPERTOS.md)** | Ronda medida: el simulador pasado con una traza propia (1.101 ventanas). **Swaps validados al motor** (24,0 vs 23,92 por ventana); el **acierto difiere** (sim 56,4% vs motor 60-73%). Margen: 56% actual -> 83% techo; LRU simple 71%; los flags solo dan +6% copiando 3,5x |
+| **[RESPUESTA_CACHE_EXPERTOS.md](RESPUESTA_CACHE_EXPERTOS.md)** | Caché de expertos: el desajuste explicado (el motor deja fuera los fallos PCIe; simulador validado a 0,3 puntos) y `fetch-admit`, una política que guarda lo que ya cruzó el PCIe sin copiar nada extra |
 | **[SYSTEMONE.md](SYSTEMONE.md)** | System One completo: el cambio del motor, la API, operación, actualización y rollback |
 | **[ops/](ops/)** | Los ficheros de despliegue (`ada-decide.py`, `fit-calibration.py`, `logpos-compare.py`, `apply-tuning.sh`, `free-vram.sh`, `strata-switch.sh`, `serve-strata.sh`) y sus tests |
 

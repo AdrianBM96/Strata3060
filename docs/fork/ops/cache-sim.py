@@ -25,11 +25,20 @@ Policies:
                 soonest.  It knows the future, so no real policy reaches it: it is the ceiling
   belady-layer  the same optimum with today's per-layer budgets: the ceiling of any within-layer rule
 
+  fetch-admit   the PCIe share of each window's misses (the last --pcie-frac of the distinct misses in routing order,
+                at most 16: what the engine copies over PCIe into staging and then drops) is KEPT in the cache, in
+                place of the least-used resident of that layer that this window did not route.  No extra PCIe
+                copy: the blob crossed the link anyway.  Alone, or with the deployed adapt on top
+
 Metrics:
-  hit/entry     hits / routed entries (token x k): the engine's "decode expert cache hit rate"
+  hit/entry     hits / routed entries (token x k)
+  eng.hit       hits / (hits + CPU misses), entries: the ENGINE's "decode expert cache hit rate", which leaves the PCIe
+                share of the misses out of both counts (generate.cpp: "the ones read over PCIe are in neither count").
+                Compare THIS column with the engine's log line
   hit/distinct  hits / distinct experts per layer per window: what the CPU really computes (a missed expert runs once
                 per window for all its tokens)
-  swaps/win     experts copied into VRAM per window (each ~1.38 MB over PCIe, which the decode's own copies also use)
+  swaps/win     experts copied into VRAM per window by the policy (each ~1.38 MB over PCIe, which the decode's own
+                copies also use); free/w: experts kept from the PCIe share (no extra copy)
 
 The simulator's `adapt` with the deployed flags should give about the hit rate the engine logs for the same
 session.  If it does not, the simulator is wrong, not the engine: check that first.
@@ -94,16 +103,38 @@ def oracle_static(windows, slots: int) -> set[int]:
 
 
 # ------------------------------------------------------------------ policies
+PCIE_NUM = 77            # round(0.30 * 256): --pcie-frac 0.30, what the probe set on the 3060
+STAGING = 16             # verify.hpp kStagingBlobs: at most this many PCIe blobs per layer-window
+
+
+def pcie_share(c, resident, base) -> list[int]:
+    """The keys of this layer-window's misses the engine reads over PCIe: the last (nmiss * num) >> 8 distinct misses
+    in routing order (expert_source.cpp:1907-1940), at most STAGING."""
+    misses = [base + e for e in c if (base + e) not in resident]   # Counter keeps first-routed order
+    m = min((len(misses) * PCIE_NUM) >> 8, STAGING)
+    return misses[len(misses) - m:] if m else []
+
+
 class Result:
     def __init__(self, name: str):
         self.name, self.hit_e, self.n_e, self.hit_d, self.n_d, self.swaps, self.windows = name, 0, 0, 0, 0, 0, 0
+        self.cpu_e = 0                                            # entries of misses the CPU computes
+        self.free = 0                                             # experts kept from the PCIe share
         self.layer_hit = [0] * N_LAYER                            # distinct hits / lookups per layer
         self.layer_n = [0] * N_LAYER
 
-    def add(self, w, resident) -> None:
+    def add(self, w, resident) -> list[list[int]]:
+        """Counts one window; -> per layer, the keys read over PCIe."""
         self.windows += 1
+        fetched = []
         for l, c in enumerate(w):
             base = l * N_EXPERT
+            pc = pcie_share(c, resident, base)
+            fetched.append(pc)
+            pcs = set(pc)
+            for e, n in c.items():
+                if (base + e) not in resident and (base + e) not in pcs:
+                    self.cpu_e += n
             for e, n in c.items():
                 hit = (base + e) in resident
                 self.n_e += n
@@ -113,12 +144,15 @@ class Result:
                 if hit:
                     self.hit_e += n
                     self.hit_d += 1
+        return fetched
 
     def row(self) -> str:
         he = self.hit_e / self.n_e if self.n_e else 0.0
         hd = self.hit_d / self.n_d if self.n_d else 0.0
+        eng = self.hit_e / (self.hit_e + self.cpu_e) if (self.hit_e + self.cpu_e) else 0.0
         sw = self.swaps / self.windows if self.windows else 0.0
-        return (f"{self.name:34s} {100 * he:6.2f} % {100 * hd:6.2f} %  {sw:7.2f}  "
+        fr = self.free / self.windows if self.windows else 0.0
+        return (f"{self.name:40s} {100 * he:6.2f} % {100 * hd:6.2f} % {100 * eng:6.2f} %  {sw:7.2f} {fr:6.2f}  "
                 f"{sw * BLOB_MB:7.1f} MB  {sw * BLOB_MB / PCIE_GBS:5.2f} ms")
 
 
@@ -180,6 +214,77 @@ def run_adapt(windows, start: set[int], every=4, decay=0.7, swaps=96, cross=Fals
             usage[k] *= decay
             if usage[k] < 1e-3:
                 del usage[k]
+    return r
+
+
+def run_fetch_admit(windows, start: set[int], adapt=True, every=4, decay=0.7, swaps=96, name=None) -> Result:
+    """Keep the PCIe share of each window's misses in the cache (no extra copy), evicting the least-used resident of
+    the same layer that this window did not route.  With `adapt`, the deployed rule runs on top."""
+    r = Result(name or ("fetch-admit + adapt" if adapt else "fetch-admit alone"))
+    resident = set(start)
+    by_layer: dict[int, set[int]] = defaultdict(set)
+    for k in resident:
+        by_layer[k // N_EXPERT].add(k)
+    usage: dict[int, float] = defaultdict(float)
+    pending: list[int] = []
+
+    def evict(k):
+        resident.discard(k)
+        by_layer[k // N_EXPERT].discard(k)
+
+    def admit(k):
+        resident.add(k)
+        by_layer[k // N_EXPERT].add(k)
+
+    for wi, w in enumerate(windows):
+        for k in pending:
+            admit(k)
+        pending = []
+        fetched = r.add(w, resident)
+        for l, c in enumerate(w):
+            base = l * N_EXPERT
+            for e, n in c.items():
+                usage[base + e] += n
+        # the PCIe share stays: it replaces the least-used resident this window did not route
+        for l, keys in enumerate(fetched):
+            if not keys:
+                continue
+            routed = {l * N_EXPERT + e for e in w[l]}
+            pool = sorted((usage.get(k, 0.0), k) for k in by_layer[l] if k not in routed)
+            for k, (vu, vk) in zip(keys, pool):
+                if usage.get(k, 0.0) <= vu:
+                    break
+                evict(vk)
+                pending.append(k)
+                r.free += 1
+        if adapt and (wi + 1) % every == 0:
+            out = []
+            cands: dict[int, list] = defaultdict(list)
+            for k, u in usage.items():
+                if k not in resident and k not in pending and u >= 2.0:
+                    cands[k // N_EXPERT].append((u, k))
+            for l, cand in cands.items():
+                vict = sorted((usage.get(k, 0.0), k) for k in by_layer[l])
+                cand.sort(reverse=True)
+                for (cu, ck), (vu, vk) in zip(cand, vict):
+                    if cu < vu + 1.5:
+                        break
+                    out.append((cu - vu, ck, vk))
+            out.sort(reverse=True)
+            done = set()
+            for _g, ck, vk in out[:swaps]:
+                if vk in done or vk not in resident:
+                    continue
+                done.add(vk)
+                evict(vk)
+                pending.append(ck)
+                r.swaps += 1
+        if (wi + 1) % every == 0:                                 # the same forgetting, with or without adapt
+            for k in list(usage):
+                usage[k] *= decay
+                if usage[k] < 1e-3:
+                    del usage[k]
+        assert len(resident) + len(pending) <= len(start), "the cache grew past its slots"
     return r
 
 
@@ -277,8 +382,11 @@ def main(argv=None) -> int:
     ap.add_argument("--swaps", type=int, default=96)
     ap.add_argument("--grid", action="store_true", help="also sweep --adapt-every/--adapt-decay/--adapt-swaps")
     ap.add_argument("--per-layer", action="store_true", help="the deployed adapt's hit rate per layer")
+    ap.add_argument("--pcie-frac", type=float, default=0.30, help="the engine's PCIe share of misses (log: PCIe probe)")
     a = ap.parse_args(argv)
 
+    global PCIE_NUM
+    PCIE_NUM = max(0, min(256, int(a.pcie_frac * 256.0 + 0.5)))
     windows = read_windows(a.trace, a.max_windows)
     if not windows:
         raise SystemExit("the trace has no windows")
@@ -292,7 +400,8 @@ def main(argv=None) -> int:
     tokens = sum(max((sum(c.values()) for c in w), default=0) for w in windows) // 10   # k = 10 entries per token
     print(f"{len(windows)} windows (~{tokens} tokens), {a.slots} slots, start: {sname}; "
           "counted from the first window")
-    print(f"{'policy':34s} {'hit/entry':>8s} {'hit/dist':>9s}  {'swaps/w':>7s}  {'copied/w':>10s}  {'PCIe/w':>8s}")
+    print(f"{'policy':40s} {'hit/entry':>8s} {'hit/dist':>9s} {'eng.hit':>8s}  {'swaps/w':>7s} {'free/w':>6s}  "
+          f"{'copied/w':>10s}  {'PCIe/w':>8s}")
 
     def report(res: Result):
         print(res.row(), flush=True)
@@ -301,6 +410,8 @@ def main(argv=None) -> int:
     deployed = run_adapt(body, start, a.every, a.decay, a.swaps)
     report(deployed)
     report(run_adapt(body, start, a.every, a.decay, a.swaps, cross=True))
+    report(run_fetch_admit(body, start, adapt=False))
+    report(run_fetch_admit(body, start, adapt=True, every=a.every, decay=a.decay, swaps=a.swaps))
     report(run_lru(body, start))
     if a.grid:
         for every, decay, swaps in itertools.product((2, 4, 8), (0.5, 0.7, 0.85, 0.95), (32, 96, 256)):
