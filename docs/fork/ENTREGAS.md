@@ -126,3 +126,16 @@ Estado: medida (6 pasadas por prueba, config adoptada: 0.1.39 + `FETCH_ADMIT` + 
 
 Incidencia: B4 se saltó las 6 primeras (mi `bench.py` vive en `~/Strata/bench/`, pero `REPO` espera
 `docs/fork/ops/bench.py` para el corpus). Relanzado desde el sitio correcto: 6/6 bien.
+
+## Orden 9. Perfil de la GPU en la configuración nueva
+
+Estado: medida (0.1.39 + `FETCH_ADMIT` + tope 3072; perfil retirado después).
+
+- **Desglose por ventana B1** (~2,3 tokens/ventana, ~44 ms/ventana = verify ~42 + draft ~2,5):
+  - GPU-reach wait ~22 ms + per-layer host ~14-19 ms (casi todo CPU expertos ~15-18 ms) + stage ~0,3.
+  - Por etapa (capas GDN, ms/ventana): hc-read1+router **3,4** · q8+qkv gemv 2,4 · head 1,8 · waitB (PCIe) **9-10** ·
+    VRAM hits 5,2 · waitCPU 0,9-2,5 · copy+combine 0,5. Capas QSA: ~5 ms (atención 0,8, q+q-idx 1,2).
+  - **Lo que más pesa**: la espera PCIe (waitB 6,5-10,2) y los expertos de CPU (~4-4,6 ms/ventana con ~5 entradas).
+- **B2**: ~43 ms/ventana, mismo reparto.
+- **Nodos del grafo**: ventana de 1 token **3.149** nodos; 3 tokens 3.226; 4 tokens 3.265 (casi todo type0 + ~12 memcpy).
+- Sin `ncu` en la máquina: no hay DRAM throughput de kernels.
