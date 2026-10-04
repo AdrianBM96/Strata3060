@@ -64,11 +64,12 @@ ni calidad.
   prefijo común por cliente (logs C10b), velocidad NVMe/RAM, si el motor restaura estado de fichero (file:line).
   Techo: segundos de TTFT ahorrados con prefijo de 20K.
 - [ ] **E4.** Prefill por dos vías (estudio, tras C24). Repartir expertos no residentes entre PCIe (11 GB/s) y CPU
-  (RAM) para terminar a la vez. Techo con C24+C23.
+  (RAM) para terminar a la vez. Techo con C24+C23. Entrada: P11+P12 y `exploracion/E4-PREP.md`.
 
 ## Cola (por orden)
 
-- [ ] **C19** (en curso) · **C23** · **E1** · **C24** · **E3** · **C16** · **E2** · **C14a** · **E4** · **C20** ·
+- [ ] **C19** (en curso) · **C23** (+barrido T_e=1,4,8,16,32,64 por tipo, 6 hilos; clave para E4) · **E1** · **C24**
+  (+confirmar ~72 ms/capa PCIe: 440 expertos × 1,8 MB) · **E4** · **E3** · **C16** · **E2** · **C14a** · **C20** ·
   **C17** · **C15** · **C8** · **C21**.
 
 - **N10.** Agente `explorer` (agy con Gemini 3.8 Flash, panel w1:pM). Solo investiga y propone a Claude.
