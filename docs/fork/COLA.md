@@ -64,3 +64,7 @@ que no esté subido y documentado.
 - [ ] **C8.** Rejilla del simulador a) b) a+b.
 - [ ] **C18** (solo estudio, sin código). Entrega en `docs/fork/C18_DISENO.md` (máx. 1 página).
 - [ ] **C21** (orden de Adrián). Nuestra versión contra Strata 0.1.39 virgen, con la cola vacía.
+
+- **N7.** A tester solo se le lanza desde run.sh, que espera bloqueando y deja el resultado en resultados/.
+  Prohibido mandarle prompts sueltos a mano. Si alguna vez hace falta uno suelto, siempre con `--wait` y su
+  timeout, nunca sin esperar.
