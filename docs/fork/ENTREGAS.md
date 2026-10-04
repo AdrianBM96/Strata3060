@@ -183,3 +183,31 @@ ganado en total.
 ## Nota: Mac mini aparcado
 
 Adrián, 2026-10-04: el Mac mini queda **descartado por ahora** (también el piloto Bonsai). No se hace nada ahí.
+
+## Órdenes 6 y 10. Logs: herramientas no declaradas y reutilización de prefijos
+
+Estado: medidas (informe completo en `/tmp/opencode/orden6-10.md`; periodo 2026-10-02→04, 1.872 peticiones).
+
+**Orden 6** (no declaradas):
+
+| Cliente (uso real, 1 semana) | Llamadas | No declaradas | Comportamiento |
+| --- | ---: | ---: | --- |
+| Claude Code | ~24 | **0** | errores solo de ejecución; sin bucles |
+| pi | 204 | **0** | fallos de tests del modelo; sin bucles |
+| omp/opencode | ~1.500 | **0** | reintento acotado (8 bash idénticos), terminó bien |
+| ada-cli | 37 | **0** | obedece bloqueos de shell; sin bucles |
+
+El único caso: **6 × `read_file` en el harness** (tope3.jsonl, tarea edit), aceptadas en silencio. El servidor
+**no filtra** (`OutputParser`: cualquier `<function=NOMBRE>` pasa). **Veredicto propuesto: no cambiar nada** —
+con 0 casos en uso real, filtrar devolvería un error que ningún cliente maneja de forma especial.
+
+**Orden 10** (prefijos):
+
+- Reúso global del motor: **56 %** (8,76M/15,61M); prefill total 10.582 s. TTFT proxy mediana 1.076 ms
+  (≥90 %: 309 ms; 0 %: 1.682 ms).
+- El gasto se concentra en **161 relecturas íntegras grandes (6.507 s, 61 %)** y **205 arranques (1.989 s)**.
+- Causas: compactación **0 casos**; expulsión plausible (evictions=164 con slots=4 y ≥4 clientes solapados);
+  cambio-pronto **no medible** (sin contenido de prompts). Flags: `--prompt-cache-root 256`;
+  `--prompt-cache`/`--prompt-cache-every` ausentes → defaults **6/16384**. `RESUME` no se loguea (0 líneas).
+- **Veredicto propuesto**: menos rearranques en días de agente; más slots si conviven ≥4 clientes. Nada de
+  cambiar prefijos a ciegas (sin evidencia).
