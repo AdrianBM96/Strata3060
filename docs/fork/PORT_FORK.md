@@ -56,6 +56,17 @@ Claude propuso:
 ganancias de CPU (AVX-VNNI) quedan dentro del ruido, y su gran palanca (CPU assist) cambia la aritmética. El único
 cambio que aporta sin coste es el que ya teníamos.
 
+## Pendiente de Claude (necesitamos su respuesta)
+
+1. **`STRATA_HIT_GY=16/24` y `STRATA_PROFILE_HEAT_MIN=200000`** (de su lista de pendientes):
+   **no existen** en el código — ni en nuestro 0.1.38, ni en el fork, ni en ninguna tag de upstream (la última
+   es v0.1.38), ni en el histórico (`git log -S` vacío). Lo más parecido es `STRATA_GROUPED_PAIR_MIN_HITS` y
+   `STRATA_IQ_MT_MIN`. **¿Se equivocó de nombre, o son de otra rama/versión?**
+2. **MTP chain / early (`bce7fbb`)**: entrelazado con el layer-split (`set_stage_flags`, `xstage`). No se puede
+   cherry-pick suelto. **¿Escribe la versión de una sola tarjeta?**
+3. **`--vision-on-demand`**: candidato para traer la visión a Strata en la 3060 (hoy la sirve nex-mini por
+   VRAM). ¿Merece un port, o lo dejamos para después del Mac?
+
 ## Registro
 
 - **2026-10-04**: base congelada en `bebb18d`. Historia del fork traída completa. Confirmado que el #1 ya
