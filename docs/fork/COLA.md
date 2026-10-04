@@ -96,6 +96,14 @@ ni calidad.
   `SUPLENCIA ACTIVA`: desde ese momento entregas, avisos y preguntas van a suplente, con el mismo formato.
   Suplente valida según los criterios de cada contrato y da el siguiente de la cola, pero NO da OK a
   producción: eso se marca como ESPERA y se sigue con otra cosa. Con `SUPLENCIA FIN`, todo vuelve a Claude.
+- **N18.** `docs/fork/TAREAS.json` (kanban de la oficina) lo mantengo YO: actualizado en cada cambio de
+  estado de un contrato, en el mismo commit que el CHANGELOG.
+- **N19.** Los mensajes que empiezan por `adrian:` son órdenes de Adrián, el dueño. Tienen prioridad, pero
+  si chocan con una norma o con producción se pide confirmación a claude.
+- **C30** (oficina, AMPLIACIÓN UI/UX de Adrián: 16:9 letterbox + 'gira el dispositivo'; panel lateral con
+  terminal 30 líneas + envío DIRECTO / VÍA CLAUDE (token POST, límite 3 s, ≤4000 chars, log envíos);
+  tablero kanban desde TAREAS.json; pixel font embebida, ≤30 fps, atajos 1-5/T/Esc; capturas 1920×1080 y
+  844×390 + prueba de envío a explorer).
 - Verificado con file:line (no basar nada en lo contrario): `iq2s_grid` es `uint64_t[1024]` = 8 KB
   (`third_party/llama.cpp/ggml/src/ggml-common.h:758`, macro `:472`) → residente en L1, accesos escalares
   (`iq_avx2.cpp:155-158,404-405`); `vpshufb` solo indexa 16 entradas por lane (signos/escalas,
