@@ -40,3 +40,11 @@ y se anotan en el CHANGELOG.
 - [ ] **C18** (solo estudio, sin código). La copia PCIe en paralelo con los aciertos. Entrega en
   docs/fork/C18_DISENO.md, máximo 1 página: dónde está hoy la dependencia (file:line), qué sync o evento hay que
   mover, y el techo en ms/ventana con los datos de la 9.
+
+## Norma permanente: agente de pruebas `tester`
+
+Existe `tester` (pi con ada-next, panel w1:pH, cwd del repo). Toda prueba que necesite que el MODELO trabaje como
+agente (sesiones reales ≥20-30 min de C14a/C15/C17, tareas largas con herramientas, comprobar una config nueva desde
+un cliente) la hace tester. NO usar Claude ni ningún modelo en la nube para eso. Cómo: `herdr agent prompt tester
+"<tarea cerrada>" --wait --timeout <ms>`; después `herdr agent read tester`. Los benchmarks (bench.py,
+logpos-compare) se lanzan por shell, como ahora. Antes de cada sesión de tester, apuntar la config del motor activa.
