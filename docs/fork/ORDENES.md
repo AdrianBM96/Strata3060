@@ -66,3 +66,47 @@ El modelo llamó 6 veces a `read_file`, que no estaba en la lista.
   6 pasadas cada una.
 - **Después:** actualizad `RESUMEN_FINAL.md` con la configuración y las cifras nuevas.
 - **Entrega:** la tabla. Es la base contra la que se medirá todo lo siguiente.
+
+## 8. Caché: dos políticas más en el simulador (solo simulador, sin tocar el motor)
+
+Base: `fetch-admit + adapt` de `ops/cache-sim.py`, lo desplegado hoy. Añadid dos variantes, cada una con su test en
+`test_cache_sim.py`:
+
+**a) Dos memorias.**
+
+- Además del contador de hoy (corto: × `decay` cada `every` ventanas), uno largo con decaimiento lento (×0,98 en cada
+  revisión).
+- Puntuación para elegir víctima y candidato: `corto + w × largo`.
+- Rejilla: `w` ∈ {0,5; 1; 2; 4} y decaimiento largo ∈ {0,95; 0,98; 0,995}.
+- **Idea:** no echar especialistas que se usan siempre solo porque no salieron en las últimas palabras.
+
+**b) Coste por tipo.**
+
+- Un fallo de un IQ2_S cuesta más CPU que uno de IQ1_M. Medid el coste por experto y tipo en el i5, por ejemplo con
+  `native_expert_bench` o `native_expert_parity`: µs por experto y token de IQ2_S, IQ2_XXS e IQ1_M en gate/up, más el
+  `down` q2_0.
+- Sacad el tipo de cada capa del log de carga.
+- El uso de cada experto se multiplica por el coste de su capa al elegir víctima.
+- Columna nueva **`cpu ms/w`**: los fallos que calcula la CPU (sin la parte PCIe), multiplicados por su coste.
+
+**Entrega:** la tabla del simulador con vuestra traza larga, con `fetch-admit + adapt` como referencia y lo mejor de
+a), b) y a+b, mirando `eng.hit`, `cpu ms/w`, `swaps/w` y `free/w`.
+
+**Criterio:** solo propongo cambio de motor si alguna gana ≥ 2 puntos de `eng.hit`, o ≥ 5 % de `cpu ms/w`, sin más
+swaps. Si ninguna, la caché se da por cerrada.
+
+## 9. Perfil de la GPU en la configuración nueva
+
+Con todo lo adoptado (0.1.39 + `FETCH_ADMIT` + el tope), una respuesta de B1 y otra de B2 con
+`STRATA_VERIFY_PROFILE=1 STRATA_DECODE_TIMING=1`, y `STRATA_VERIFY_NODES=1` una vez.
+
+**Entrega:**
+
+- el desglose por etapa en ms por ventana, como en `MEDICION_RONDA5.md` §3;
+- tokens por ventana;
+- el número de nodos del grafo.
+
+**Opcional, si tenéis `ncu`:** el ancho de banda conseguido (DRAM throughput) de los 3 kernels más largos.
+
+Con esto elijo el siguiente cambio de motor que no altere ningún bit. Los candidatos: MMVQ con 2 filas por bloque, la
+copia PCIe en paralelo con los aciertos, el *pipelining* del GR y la rejilla de aciertos.
