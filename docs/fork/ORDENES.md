@@ -216,7 +216,9 @@ esa sesión.
   unos 300 huecos para el modelo principal. Con +318 huecos medimos +2,8 % de decode.
 - **Si no, se descarta.**
 
-**b) ¿Se puede adivinar qué expertos pedirá la capa siguiente?** (solo simulador, con vuestra traza larga)
+**b) SUSTITUIDA por la orden 15.** No la hagáis: el router de verdad predice mejor que una tabla de ids.
+
+~~**b) ¿Se puede adivinar qué expertos pedirá la capa siguiente?** (solo simulador, con vuestra traza larga)~~
 
 - En `cache-sim.py`, un modo `--predict`:
   - con la primera mitad de la traza, una tabla de coincidencias "experto e en la capa L → experto f en la capa L+1";
@@ -235,3 +237,95 @@ PCIe (`waitB`) está a la vista, diseño la precarga:
 - la copia empieza antes, mientras la GPU calcula la parte densa de la capa anterior.
 
 Si no se cumplen las dos condiciones, se descarta.
+
+---
+
+## Órdenes 15-17: cambiar la arquitectura (ver `PLAN_ARQUITECTURA.md`)
+
+**Prioridad:** por encima de la 8. Las tres son **instrumentación opcional**:
+
+- una variable cada una;
+- apagada por defecto, con coste cero sin ella;
+- nada cambia en producción.
+
+**Un commit por orden. Comprobad antes de medir** que con la variable apagada B1 sale bit a bit igual (ajustes de
+siempre).
+
+## 15. Medir el *pre-gating* (decide el cambio A)
+
+**`STRATA_PREGATE_STATS=1`.** En cada capa L < 47 de la ventana de verificación:
+
+1. **Elegid el estado:**
+   - Mirad qué vector lee el router de L+1. Por las hiperconexiones es la salida de `hc-read1` de L+1.
+   - Construid el mismo vector **con el estado disponible al empezar la capa L**: el *residual* de entrada de L, con la
+     misma lectura `hc-read1` y la normalización de L+1.
+   - Si no se puede con los pesos de L+1, usad la mejor aproximación y explicad cuál.
+2. **Predecid:** aplicad el router de L+1 a ese vector y sacad el top-k, con k = 10, 16 y 24.
+3. **Comparad** con lo que L+1 elige de verdad. Por token y capa:
+   - **recall de los 10 reales;**
+   - **recall de los fallos de caché de L+1** (los que no estaban en VRAM);
+   - **recall de la parte PCIe** de esos fallos.
+4. **Igual con L+2,** a partir del mismo estado, para saber si se puede precargar dos capas antes.
+5. **Al salir, una tabla por k:**
+   - las medias globales;
+   - y por tipo de capa (GDN / QSA).
+
+**Entrega:**
+
+- la tabla, con una sesión de agente real de ≥ 20 minutos, y B1 y B4;
+- y cuánto cuesta el GEMV extra en ms/ventana, con `STRATA_VERIFY_PROFILE`.
+
+**Criterio:**
+
+- **Si el recall de la parte PCIe con k = 16 es ≥ 60 %,** escribo el cambio A: copiar al *staging* nada más predecir y
+  reutilizar lo que acierte, con el mismo resultado bit a bit.
+- **Si es < 40 %,** se descarta.
+
+## 16. Medir cuántos fallos tienen un residente "casi igual" (decide el cambio B)
+
+**`STRATA_ROUTE_GAP_STATS=1`.** En cada token y capa, después del top-k del router:
+
+1. Para cada experto elegido que **no esté en VRAM**, buscad entre los **no elegidos y residentes** el de mayor
+   puntuación.
+2. Guardad dos números:
+   - la diferencia de puntuación **en las unidades que use el router**. Decid cuáles: logit, o probabilidad tras
+     softmax/sigmoid;
+   - el peso normalizado que tenía el experto fallado.
+3. **Al salir, el histograma de la diferencia relativa**, en estos cortes: < 1 %, < 2 %, < 5 %, < 10 % y < 20 %.
+   - en % de los fallos;
+   - aparte, para los fallos cuyo peso era < 5 %.
+
+**Entrega:** el histograma, con la misma sesión real y B1. Pegad también 5 ejemplos de token/capa con las 14 mejores
+puntuaciones, para que vea la forma.
+
+**Criterio:**
+
+- **Si ≥ 30 % de los fallos tienen un residente a < 5 %,** escribo el cambio B: opcional, con un δ elegible, y la puerta
+  de calidad de `PLAN_ARQUITECTURA.md` §3.B.
+- **Si no, se descarta.**
+
+## 17. Dónde falla el borrador (decide el cambio C)
+
+Con `suffix-draft-stats.patch` y lo que ya cuente el motor, en una sesión real de agente de ≥ 30 minutos:
+
+- **los tokens por ventana**, por tipo de contenido:
+  - pensamiento;
+  - prosa;
+  - código nuevo;
+  - código copiado del contexto;
+  - JSON de llamada a herramienta.
+
+  Clasificadlo por el estado del parser del servidor y, para separar el código copiado, si el texto aparece en el
+  contexto.
+- **La aceptación del MTP por posición** dentro del borrador: 1.º, 2.º, 3.º, 4.º token.
+- **Cuánto tiempo de la sesión** se va en cada tipo.
+
+**Entrega:** la tabla. No hay que implementar nada nuevo salvo la clasificación, que puede ser un script sobre el log.
+
+**Criterio:** si el pensamiento y el código nuevo son > 50 % del tiempo con < 2 tokens por ventana, preparo el plan de
+adaptar la cabeza MTP a nuestras sesiones.
+
+## Validación de la orden 5
+
+**VALIDADA.** El tope se queda en **3072**. Con 4096, una de las tres repeticiones de la tarea larga no actuó, y además
+gastó 619 s. El criterio (3/3) no se cumple. El tema se cierra.
