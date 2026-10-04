@@ -34,6 +34,16 @@ Refinamiento posible: solapar hand-off con cómputo (dúplex) o anillo R en VRAM
 Funciona y gana (~6 s @32K, ~13 s @86K), pero 2/3 del ahorro se van en el hand-off R.
 Prototipo solo con OK de Claude (paso 2).
 
+## Regla de diseño: superbloques alineados a checkpoints (Claude)
+
+Los límites de superbloque se alinean con `prompt_cache_every/root_at` (`generate.cpp:513-516,5398,5456`:
+checkpoints cada 16384 desde el root 2048; `checkpoint_at(L)` + partes por etapa). Al acabar las 48 capas
+de un superbloque, el estado en el límite está completo y el checkpoint se toma igual que hoy.
+Tamaño = mín(cabe en huecos prestados, distancia al siguiente checkpoint). Sin prefill bifásico ni RAM fijada.
+Checklist del prototipo: flush conv1d de GDN en los límites (historia en el estado capturado), tokens de
+imagen iguales, y bit-exactitud contra prefill actual **con checkpoints activados**.
+Nota: a 32K la rejilla (2048, 18432) parte en 2-3 superbloques → cada experto se trae 2-3× (no 1×, no 6×).
+
 ## Verificación contra LAYER-MAJOR.md (código, no estimaciones)
 
 - Ping-pong R: explorer dice BF16 2×671 MB @32K. El código dice FP32 (`take<float>`, `prefill.cpp:852`;
