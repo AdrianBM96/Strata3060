@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C23 P02-A/B fondo (yo, con lock) | C26 wt-P08 paso b | wt-C16 portando | C27 creado | 2026-10-04 22:29 UTC
+ESTADO: C28 estudio (yo) | C26 wt-P08 paso b | wt-C16 portando | lock libre | 2026-10-04 22:32 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -37,3 +37,5 @@ ESTADO: C23 P02-A/B fondo (yo, con lock) | C26 wt-P08 paso b | wt-C16 portando |
 | 2026-10-04 | beellama | BEELLAMA-TRUCOS al repo + N14 (vigía 07:13, CUP) + E2 tras C26 + C17 spec-primero + E1 afinidad | spec existe (generate:459, prod spec4); workers en físicos 1-5 (pool:276); sin pesos BF16 en disco | - | Anotado |
 | 2026-10-04 | E2+N15 | E2 fusionado con C26 (Adrián: nada de re-cuantizar); N15 (ningún cambio que altere pesos) | - | - | Vigente |
 | 2026-10-04 | C27 | waitB en decode (tras C26, absorbe C18); DECODE-PCIE al repo | citas con deriva: HostFunc verify:1703 (prod:1265), 1 memcpyAsync en verify (copias en s2_expert_grouped); CUDA 12.0 SIN BatchAsync (palanca 3 como está: imposible); pinned:388 loguea, sin línea en log prod | - | Paso 1 tras P02 |
+| 2026-10-04 | C23-P02 | MT_MIN=1 A/B 6+6 ×2 runs (12+12): +0,38 % (ruido; patrón bloque = artefacto térmico) | def 43,93±1,29 vs mt 44,10±1,61; deriva 67→77C; P02 muerto como palanca B1 | - | Descartado B1 |
+| 2026-10-04 | C28 | Prefill por capas (tras C24, ante C26); PREFILL-PCIE al repo; E4 ya al final | - | - | Estudio paso 1 |
