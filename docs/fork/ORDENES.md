@@ -121,15 +121,14 @@ poned `ada-next` como modelo por defecto de opencode, para que no falle al arran
 
 ---
 
-## Órdenes 10-13: lo que queda sin medir (2026-10-04)
+## Órdenes 10-14: lo que queda sin medir (2026-10-04)
 
-Repaso de todo `docs/fork/`. Quedan cuatro palancas sin medir. Ninguna cambia el texto que sale, salvo la 13 si
-falla, y para eso lleva su detector.
+Repaso de todo `docs/fork/`. Quedan palancas sin medir. Ninguna cambia el texto que sale.
 
 **Orden de ejecución:**
 
-- La 10 y la 12 se pueden hacer ya: solo leen.
-- La 11 y la 13, después de la 7, contra la línea base nueva.
+- La 10 se puede hacer ya: solo lee.
+- La 11, después de la 7, contra la línea base nueva.
 
 ## 10. Reutilización de prefijos en agentes (R5 de `PLAN_MAESTRO.md`, nunca medida)
 
@@ -175,59 +174,64 @@ Hoy quedan 627 MiB libres, y 450 MiB más dieron +318 huecos y +2,8 % de decode 
    - el acierto de bloques KV y el decode con 32K y 86K de contexto (por si el streaming del KV pierde).
 - **Criterio:** se queda lo que gane sin OOM en el pico y sin bajar el decode a 86K.
 
-## 12. PCIe: ¿por qué 11 GB/s en un Gen4 x16? (diagnóstico, 15 minutos)
+## 12 y 13: RETIRADAS
 
-El enlace está bien (`MEDICION_RONDA8.md`), pero nadie midió lo que da el hardware con una copia normal.
+Adrián tiene razón, ya estaban vistas:
 
-- **Qué:** un programa de ~30 líneas con `cudaMemcpyAsync` H2D desde memoria `cudaHostAlloc`, 256 MiB, 20 veces, en
-  GB/s. Tres casos:
-  - solo;
-  - con `membw` leyendo RAM a la vez en 6 hilos (el reparto real con los expertos en CPU);
-  - desde memoria normal (sin fijar).
-- **Entrega:** las tres cifras.
-- **Lectura:**
-  - **≈ 22-25 GB/s solo:** el hardware da el doble que nuestra copia. Entonces escribo el cambio de la ruta de copia
-    (el *staging* fijado con DMA en lotes grandes) y subir `pcie_frac`.
-  - **≈ 11 GB/s:** el límite es la plataforma (la RAM a 2133), y el tema se cierra.
+- **12 (PCIe):** `RESPUESTA_RONDA8.md` §2 ya comprobó que la sonda usa memoria fijada y DMA. Los 11 GB/s son de la
+  máquina, y lo que falte está en la BIOS, que no se puede tocar en remoto. El trabajo sigue siendo **esconder la
+  copia**, no acelerarla (orden 9).
+- **13 (reloj de la VRAM):** se podría poner por software, pero `RESPUESTA_RONDA7.md` §6 ya concluyó que importa poco:
+  las GEMV usan el 44-61 % del ancho de banda y las limita el kernel, no la memoria. El reinicio remoto no es problema
+  (ya comprobado), así que **solo se reabre si el perfil de la orden 9 muestra kernels pegados al ancho de banda**. Lo
+  que hay ahí se busca con la orden 9.
 
-## 13. Reloj de la memoria de la GPU (solo con el visto bueno de Adrián; después de la 7)
+## 14. Caché de expertos: lo que queda por medir
 
-El decode está limitado por el lado GPU, y ese lado está limitado por el ancho de banda de la VRAM. Subir el reloj de
-la GDDR6 es la única palanca de hardware sin tocar la BIOS. Las pruebas de potencia de antes eran de otra cosa.
+La caché **no está cerrada**:
 
-**El riesgo:** sin acceso físico, un cuelgue duro dejaría el PC parado hasta finales de mes. Por eso:
+- el motor acierta 73-78 %;
+- el techo teórico del simulador (Belady) está en ~85 %.
 
-1. **Antes de nada, el perro guardián:**
-   - `lsmod | grep -i -E "iTCO|wdt"` y `wdctl`;
-   - si hay watchdog hardware, `RuntimeWatchdogSec=30s` en `/etc/systemd/system.conf`;
-   - y comprobad que un `echo c > /proc/sysrq-trigger` en una ventana de mantenimiento **reinicia solo**.
-   - **Si no se reinicia solo, la orden se cancela.**
-2. **Que no persista:**
-   - el offset se pone con NVML (`nvmlDeviceSetMemClkVfOffset` o `nvmlDeviceSetClockOffsets`; LACT o `nvidia_oc`
-     sirven);
-   - **nunca** en un servicio que arranque solo;
-   - un reinicio lo quita.
-3. **Pasos de +250 MHz.** En cada paso:
-   - B1 con los ajustes bit a bit (`STRATA_IQ_MT_MIN=1 --prompt-cache 0 --adapt-swaps 0 --pcie-frac 0`, temperatura
-     0): **el texto debe ser idéntico al de reloj de serie.** Si cambia un solo token, la VRAM corrompe: bajad dos pasos
-     y parad;
-   - B1 con la config normal;
-   - y `nvidia-smi -q -d ECC,PERFORMANCE`.
-4. **Parad cuando:**
-   - el tok/s deje de subir (la GDDR6 reintenta errores y se nota antes como caída de velocidad);
-   - o al llegar a +1500.
+La orden 8 prueba dos políticas. Esta mira las otras dos vías. Solo hay que medir, sin cambiar nada en producción.
 
-   Quedaos dos pasos por debajo del mejor.
-- **Entrega:**
-  - la tabla paso / tok/s / bit a bit;
-  - el watchdog comprobado;
-  - el paso propuesto.
+**a) La capa del borrador (MTP): 836 MiB con sus 512 expertos siempre en VRAM.**
 
-  Lo aplico yo tras validar, con una prueba larga de 1 hora (B1 en bucle) antes de dejarlo puesto.
+1. Mirad en el código si el motor ya cuenta el uso de cada experto de esa capa (solo leer; `generate.cpp:3011` es
+   donde se monta).
+2. Si no lo cuenta, añadid un contador opcional:
+   - `STRATA_MTP_HIST=1`;
+   - un `uint32` por experto, sumado en el host donde se enruta el borrador;
+   - al salir, se vuelca a un fichero.
 
-## Ideas en estudio (sin orden todavía)
+   Con la variable apagada no debe haber ningún coste.
+3. Una sesión real de agente de ≥ 30 minutos.
 
-- **La capa del borrador (MTP) ocupa 836 MiB con sus 512 expertos siempre en VRAM.** Si su uso está tan concentrado
-  como el de las capas normales, dejar residentes solo los más usados liberaría cientos de MiB para la caché
-  principal. Antes necesito saber si el motor puede volcar el enrutado de esa capa. Si podéis, decidme qué hay en el
-  código para ello (solo leer).
+**Entrega:** qué fracción de los usos cubren los 128, 256 y 384 expertos más usados, y la aceptación del borrador de
+esa sesión.
+
+**Criterio:**
+
+- **Si 256 cubren ≥ 95 %,** escribo el cambio: dejar residentes solo los más usados del borrador. Liberaría ~400 MiB,
+  unos 300 huecos para el modelo principal. Con +318 huecos medimos +2,8 % de decode.
+- **Si no, se descarta.**
+
+**b) ¿Se puede adivinar qué expertos pedirá la capa siguiente?** (solo simulador, con vuestra traza larga)
+
+- En `cache-sim.py`, un modo `--predict`:
+  - con la primera mitad de la traza, una tabla de coincidencias "experto e en la capa L → experto f en la capa L+1";
+  - con la segunda mitad, predecir los k más probables de L+1 a partir de los 10 de L, con k = 10 y 20;
+  - medir la precisión y la cobertura **solo sobre los fallos** de la caché.
+
+  La referencia: "los mismos que el token anterior en esa capa".
+- Con su test en `test_cache_sim.py`.
+
+**Entrega:** la tabla de precisión y cobertura de los dos predictores, con k 10 y 20.
+
+**Criterio:** si la tabla acierta ≥ 60 % de los fallos con k = 10 **y** la orden 9 muestra que la espera de la copia
+PCIe (`waitB`) está a la vista, diseño la precarga:
+
+- los bytes son los mismos;
+- la copia empieza antes, mientras la GPU calcula la parte densa de la capa anterior.
+
+Si no se cumplen las dos condiciones, se descarta.
