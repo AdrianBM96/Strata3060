@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C19 entregada | siguiente C23 | ninguno | 2026-10-04 21:59 UTC
+ESTADO: C23 barrido T_e en curso | siguiente E1 (tras C23) | ninguno | 2026-10-04 22:13 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -25,3 +25,5 @@ ESTADO: C19 entregada | siguiente C23 | ninguno | 2026-10-04 21:59 UTC
 | 2026-10-04 | C22 | Techo teórico (sin STREAM) | decode real 44ms vs 30 suma / 15-18 max; +5pts~-2ms | - | STREAM pendiente |
 | 2026-10-04 | E3 | KV persistente (estudio) | 12MB/1K int8; NVMe 3,7GB/s; motor no restaura de fichero; techo ~20s/sesion | - | Estudio hecho |
 | 2026-10-04 | C19 | Batería validada (timing real) | HUMO 2x (11s); CARGA 2x T1-T7 todo PASA (T1 10s, T2 45s, T3 26-36s, T4 20-26s, T5 20s, T6 26-35s, T7 6-12s) | - | Entregada |
+| 2026-10-04 | E1 | Checklist E1-PREP al repo (reglas: diagnosticar, madvise, A/B por palanca, nada persistente) | 252 líneas copiadas a exploracion/ | - | Checklist listo; mide tras C23 |
+| 2026-10-04 | C25 | Subagentes lector+codigo + N12 | lector (deny edit/shell salvo lectura) y codigo (solo wt-*) creados; lector verificado sin escritura | - | Hecho |

@@ -53,10 +53,11 @@ Norma N9: al menos 1 contrato E de cada 3. Los E empiezan por un ESTUDIO barato 
 y solo se implementan con OK de Claude. Mismos criterios: más tps de decode o de prefill, sin perder contexto
 ni calidad.
 
-- [ ] **E1.** SO y hardware sin BIOS (recursos: motor; tras el lock). turbostat//proc en B1 (frecuencia P-cores,
-  throttling PL1/PL2, governor, C-states, THP en expertos CPU); probar reversible: governor performance,
-  /dev/cpu_dma_latency=0, hugepages, `nvidia-smi -lgc`, persistence mode. A/B 6+6 B1/B2. Entrega: tabla con
-  ganancia+IC y qué persistir con systemd.
+- [ ] **E1.** SO y hardware sin BIOS (recursos: motor; tras el lock). Checklist: `exploracion/E1-PREP.md`
+  (cifras de explorer son estimaciones; medir). Reglas: 1) primero diagnosticar durante B1 (`nvidia-smi -q -d
+  PERFORMANCE,TEMPERATURE` + turbostat: MHz real, PkgWatt, throttle); si no hay throttling, no aplicar `-lgc`;
+  2) THP en `madvise`, no `always`; 3) cada palanca por separado con A/B 6+6 de B1, solo se combinan las que
+  ganan con IC>0; 4) nada persistente (systemd) sin OK de Claude.
 - [ ] **E2.** Formato de expertos para la CPU (tras C23). Si la CPU limita por cálculo: (a) reempaquetar la copia
   CPU bit-exacto para AVX2/VNNI, o (b) Q2_K/Q3_K desde pesos originales (con puerta de calidad). Estudio: µs/experto
   por formato, bytes extra, RAM total.
@@ -83,3 +84,10 @@ ni calidad.
 - **N11.** Vigilante automático: si paso más de 3 min idle, empuja a seguir con la cola. Cuando de verdad se
   espere el OK de Claude, poner `ESPERA: <qué>` en la línea ESTADO; si hay bloqueo, `BLOQUEO: <qué>`; si la cola
   está vacía, `COLA VACÍA`. No usarlo para descansar: si hay algo de la columna SÍ de N8, no se está esperando.
+
+- **N12.** Subagentes opencode (C25): `lector` (solo lectura: sin write/edit, bash solo grep/rg/cat/git
+  log/show/diff; lee código, logs y docs con file:line) y `codigo` (edita SOLO en su worktree
+  `/tmp/opencode/wt-<contrato>`, rama `wt/<contrato>`; nunca compila; entrega un diff y el dueño lo integra).
+  Yo soy el ÚNICO dueño del motor, tester, lock, compilación, benchmarks, git en la rama principal
+  (commit/push) y COLA/CHANGELOG: los subagentes no tocan nada de eso. Máximo 2 subagentes a la vez y nunca
+  dos `codigo` sobre el mismo fichero. Usarlos para adelantar trabajo de N8 mientras el motor está ocupado.
