@@ -80,3 +80,17 @@ Estado: medida y entregada (75 llamadas en total).
 - **Veredicto propuesto: tope 3072 por defecto** (actúa en todo lo medido, corto y largo). 4096 solo donde haya
   `max_tokens` ≥ 16384 **y** tarea corta; sin medir 4096×16384 en tarea larga, no se recomienda en general. La
   reserva de acción sale sola (`max_tokens` − tope).
+
+## Orden 4. Tope 3072 por defecto
+
+Estado: aplicado y verificado.
+
+- **Diff de la config** (`strata-swift-iq2_xs.json`): añadida la clave `"reasoning_budget_tokens": 3072` (único
+  cambio; verificado con `diff` contra el backup previo).
+- **El servidor no anuncia el tope en el log** (no hay línea que lo diga). Verificado **por efecto**: una petición
+  que pensaría largo se cierra con thinking de ~12K caracteres (≈ 3.072 tokens) frente a ~31K+ sin tope.
+- **Claude Code, tarea larga** (TASK.md): **actúa**, 288 s, `minisql.py` + `test_minisql.py`, 20 tests propios OK,
+  **25/25** en el corrector objetivo.
+- **opencode + ada-next, tarea larga**: **actúa**, 409 s, ambos ficheros, **25/25** en el corrector. (Sin `--model`
+  va a un cloud bloqueado por país: "This model is not available in your country".)
+- **Veredicto propuesto: el tope 3072 se queda** (es barato, no degrada, y evita el atasco en ambos clientes).
