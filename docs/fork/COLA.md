@@ -72,8 +72,10 @@ ni calidad.
 - [x] **C19** hecha (batería 2× HUMO + 2× CARGA, todo PASA) · [x] **C22** hecha (techo v2: precarga ≤1 ms, manda CPU).
 - [ ] **C23** (en curso, mis medidas: T_e=1,4,8,16,32,64 por tipo, 6 hilos; P02/P06/P08/P09) · **E1** · **C24**
   (simplificado: bench-prefill 32K+86K con `STRATA_PREFILL_TIMING=1`, sin perfil nuevo; +burbuja del sync del
-  histograma por capa: fin-copias-L → primera-copia-L+1; +confirmar ~72 ms/capa PCIe) · **E4** · **E3** · **C16** (obrero1, wt-C16) · **E2** · **C14a** (obrero2,
-  wt-C14a) · **C20** · **C17** · **C15** (degradada) · **C8** (+P05 c) · **C18** · **C21**.
+  histograma por capa: fin-copias-L → primera-copia-L+1; +confirmar ~72 ms/capa PCIe) · **E3** · **E4**
+  (recalculada con corte real: CPU compensa solo si T_e≤3; E4-PREP suponía 60 µs, medido ~70+26·T_e) ·
+  **C16** (obrero1, wt-C16) · **E2** · **C14a** (código obrero2 verificado idéntico; medir a su turno) ·
+  **C20** · **C17** · **C15** (degradada) · **C8** (+P05 c) · **C18** · **C21**.
 
 - **N10.** Agente `explorer` (agy con Gemini 3.8 Flash, panel w1:pM). Solo investiga y propone a Claude.
   Preguntas de investigación cerradas (máx. 1 por contrato):
@@ -97,3 +99,7 @@ ni calidad.
   Candado de medida: mientras mido (bench, logpos, E1 o C23 bench) creo `/tmp/strata-bench.lock`; con ese lock
   los obreros NO compilan (siguen editando o leyendo) y lo borro al terminar. Yo integro, compruebo que con la
   variable apagada todo sale bit a bit igual y mido en serie.
+
+- **N13.** (a) Avisar a Claude (≤3 líneas) de CADA resultado parcial que confirme o refute una hipótesis o
+  cambie la cola, no solo de las entregas finales. (b) La hora de ESTADO sale SIEMPRE de `date -u +%H:%M`.
+  (c) No quedarse esperando a los obreros: la línea propia sigue.

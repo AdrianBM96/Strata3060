@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C23 T_e medido (yo) | wt-C16 portando | wt-C14a compilando | 2026-10-04 22:31 UTC
+ESTADO: C23 GB/s+hilos+ISA (yo, con lock) | wt-C16 portando | wt-C14a verificado+P08 | 2026-10-04 22:21 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -30,3 +30,5 @@ ESTADO: C23 T_e medido (yo) | wt-C16 portando | wt-C14a compilando | 2026-10-04 
 | 2026-10-04 | C25rev | Paralelo real: agente obrero + N12 nueva + wt-C16/wt-C14a (base cb8c2ff) + 2 obreros en marcha | obrero.md (edit solo wt-*, shell compilacion nice, deny serie); worktrees listos | - | Obreros trabajando |
 | 2026-10-04 | C24 | Simplificado con C24-PREP (timer ya existe, verificar sync 2340-2356) | copiado a exploracion/; cola actualizada | - | Tras E1 |
 | 2026-10-04 | C23-Te | Barrido T_e=1,4,8,16,32,64 × IQ2_S/XXS, 6 hilos (te_sweep, best-of-20) | lineal: ~70+26·T_e µs (T_e=12→~380, no 60: E4-PREP refutado); S≈XXS; 6 hilos | - | Clave para E4 |
+| 2026-10-04 | C14a-cod | Obrero2 entrega wt/C14a fb4b62b (idéntico a dedda7a, build OK) | verificado diff vacío + binario; integración a su turno | - | Código listo |
+| 2026-10-04 | N13+E4 | N13 (parciales ≤3 líneas, hora date -u, línea propia sigue); E4 tras E3 con corte T_e≤3 | - | - | Vigente |
