@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C23 P02-A/B fondo (yo, con lock) | C26 wt-P08 paso b | wt-C16 portando | E2 fusionado (N15) | 2026-10-04 22:26 UTC
+ESTADO: C23 P02-A/B fondo (yo, con lock) | C26 wt-P08 paso b | wt-C16 portando | C27 creado | 2026-10-04 22:29 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -36,3 +36,4 @@ ESTADO: C23 P02-A/B fondo (yo, con lock) | C26 wt-P08 paso b | wt-C16 portando |
 | 2026-10-04 | C26 | Kernel CPU IQ2 (tras C23): VNNI, R2/R4, P09 con te_sweep+parity; CPU-KERNELS al repo; E4 al final (+3,7%) | grid 8KB L1 (ggml-common.h:758) y vpshufb lane-local (iq_avx2:314...) verificados; wt-P08 hace paso b | - | En curso |
 | 2026-10-04 | beellama | BEELLAMA-TRUCOS al repo + N14 (vigía 07:13, CUP) + E2 tras C26 + C17 spec-primero + E1 afinidad | spec existe (generate:459, prod spec4); workers en físicos 1-5 (pool:276); sin pesos BF16 en disco | - | Anotado |
 | 2026-10-04 | E2+N15 | E2 fusionado con C26 (Adrián: nada de re-cuantizar); N15 (ningún cambio que altere pesos) | - | - | Vigente |
+| 2026-10-04 | C27 | waitB en decode (tras C26, absorbe C18); DECODE-PCIE al repo | citas con deriva: HostFunc verify:1703 (prod:1265), 1 memcpyAsync en verify (copias en s2_expert_grouped); CUDA 12.0 SIN BatchAsync (palanca 3 como está: imposible); pinned:388 loguea, sin línea en log prod | - | Paso 1 tras P02 |
