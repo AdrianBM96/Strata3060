@@ -110,3 +110,11 @@ Con todo lo adoptado (0.1.39 + `FETCH_ADMIT` + el tope), una respuesta de B1 y o
 
 Con esto elijo el siguiente cambio de motor que no altere ningún bit. Los candidatos: MMVQ con 2 filas por bloque, la
 copia PCIe en paralelo con los aciertos, el *pipelining* del GR y la rejilla de aciertos.
+
+## Validación de la orden 4
+
+**VALIDADA.** El tope 3072 se queda. La verificación por efecto (~12K caracteres de pensamiento, frente a 31K+) y las
+dos tareas largas a 25/25 bastan.
+
+**Nota aparte, sin orden:** opencode sin `--model` va a un modelo en la nube bloqueado por país. Si Adrián quiere,
+poned `ada-next` como modelo por defecto de opencode, para que no falle al arrancar sin argumentos.
