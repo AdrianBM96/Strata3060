@@ -179,3 +179,7 @@ ganado en total.
 - **Extra**: también contra la **última oficial** que haya entonces (si upstream avanzó), para el % total visible.
 - **Método**: el de siempre (alternar binarios con md5 verificado, B1/B2/B4/P1/P2, `bench.py compare`) + puerta de
   calidad (`logpos-compare`) para que el % no esconda degradación.
+
+## Nota: Mac mini aparcado
+
+Adrián, 2026-10-04: el Mac mini queda **descartado por ahora** (también el piloto Bonsai). No se hace nada ahí.
