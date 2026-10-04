@@ -140,6 +140,21 @@ Estado: medida (0.1.39 + `FETCH_ADMIT` + tope 3072; perfil retirado después).
 - **Nodos del grafo**: ventana de 1 token **3.149** nodos; 3 tokens 3.226; 4 tokens 3.265 (casi todo type0 + ~12 memcpy).
 - Sin `ncu` en la máquina: no hay DRAM throughput de kernels.
 
+**Corrección del agente (orden 9)**: en mi primera tabla puse "CPU expertos ~4-5 ms" como tiempo. **Mal**: el
+código (`generate.cpp:7384-7391`) divide conteos por (ventanas×48 capas): **4,35 son expertos distintos y 5,19
+entradas POR CAPA-VENTANA (conteos)**. El **tiempo** es el `[CPU 14,44-18,72]` del mismo renglón: **~14-19 ms por
+ventana** en total. Tabla corregida:
+
+| Etapa (por ventana, B1, total ~44 ms) | ms |
+| --- | ---: |
+| Espera de llegada a GPU | 21-22 |
+| Cómputo CPU de expertos (~4-5 misses por capa) | **14-19** |
+| Espera PCIe (waitB) | 6,5-10 |
+| Router + cabeza + atención | ~5-6 |
+| Draft | ~2,5 |
+
+Conclusión corregida: **la CPU (14-19 ms) pesa más que el PCIe (9-10 ms)**.
+
 ## Orden 11. VRAM: quién la usa y si caben más expertos
 
 Estado: medida. **Sin aplicar nada** (espera validación).
