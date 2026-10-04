@@ -4868,11 +4868,22 @@ int main(int argc, char** argv) {
             for (size_t i = 0; i < host_res.size(); ++i) resident[i] = host_res[i] >= 0;
             for (const auto& p : pending) resident[(size_t) p.first] = 1;
             std::string e;
+            // STRATA_PROFILE_HEAT_MIN=N (opt-in): once this run has counted >= N routed entries per layer (tokens x
+            // the model's top-k; each entry is worth 1 / (1 - decay) in `heat` over its decays), rank by the counted
+            // routing across all layers.  Below N the counts are too few to move slots between layers
+            static const double heat_min = [] {
+                const char* v = std::getenv("STRATA_PROFILE_HEAT_MIN");
+                return v != nullptr ? std::atof(v) : 0.0;
+            }();
+            double total = 0.0;
+            for (const double h : heat) total += h;
+            const double per_layer = total * (1.0 - (double) o.adapt_decay) / (double) g.n_layers;
+            const bool heat_first = heat_min > 0.0 && per_layer >= heat_min;
             const auto ranked = strata::core::rank_learned_profile(g.n_layers, g.n_expert, resident, heat,
-                                                                   profile_loaded);
+                                                                   profile_loaded, heat_first);
             if (strata::core::write_expert_profile(o.expert_profile_save, g.n_layers, g.n_expert, ranked, e))
-                std::fprintf(stderr, "strata serve: expert profile saved to %s (%s)\n", o.expert_profile_save.c_str(),
-                             why);
+                std::fprintf(stderr, "strata serve: expert profile saved to %s (%s%s)\n", o.expert_profile_save.c_str(),
+                             why, heat_first ? ", ranked by routing across layers" : "");
             else
                 std::fprintf(stderr, "strata serve: the expert profile was not saved: %s\n", e.c_str());
             profile_saved_at = Clock::now();

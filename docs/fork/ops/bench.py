@@ -17,7 +17,9 @@ Pruebas (temperatura 0; las de "prompt nuevo" llevan un nonce al principio para 
 | --- | --- | --- |
 | B1 | respuesta de 1.024 tokens con razonamiento, contexto corto | decode tokens/s |
 | B2 / B3 | turno de agente: 512 tokens tras 32K / 128K de contexto (el contexto se lee antes, sin medir) | decode tokens/s |
+| B4 | turno de agente que COPIA: tras 32K de código, reescribir 80 líneas de un fichero del contexto tal cual (lo que hace un agente al editar: `old_string`, ficheros enteros). Es donde el borrador por búsqueda en el prompt (`--suffix-draft`) acierta; B1-B3 casi no lo usan | decode tokens/s (+ `accept_rate` de los borradores) |
 | P1 / P2 | prompt nuevo de 24K / 128K tokens | prefill tokens/s |
+| P3 / P4 | turno de agente: 32K ya leídos + un resultado de herramienta NUEVO de ~600 / ~4.000 tokens (cada pasada distinto). Es el tiempo que espera un agente en cada turno: la cola por el camino por lotes (P3, < 1.024 tokens) y por el de copia completa (P4) | segundos hasta el primer token (`ttft_s`) |
 | S1 | System One: estado nuevo de ~500 tokens + 4 preguntas | segundos de la tanda |
 | S2 | System One: 4 preguntas DISTINTAS sobre el estado de S1 ya leído | segundos de la tanda |
 | S3 | System One masivo: --bulk ítems cortos, la misma pregunta | ítems por segundo |
@@ -40,10 +42,11 @@ import uuid
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-TESTS = ("B1", "B2", "B3", "P1", "P2", "S1", "S2", "S3")
-METRIC = {"B1": "decode_tps", "B2": "decode_tps", "B3": "decode_tps", "P1": "prompt_tps", "P2": "prompt_tps",
+TESTS = ("B1", "B2", "B3", "B4", "P1", "P2", "P3", "P4", "S1", "S2", "S3")
+METRIC = {"B1": "decode_tps", "B2": "decode_tps", "B3": "decode_tps", "B4": "decode_tps", "P1": "prompt_tps",
+          "P2": "prompt_tps", "P3": "ttft_s", "P4": "ttft_s",
           "S1": "wall_s", "S2": "wall_s", "S3": "items_per_s"}
-HIGHER_IS_BETTER = {"decode_tps": True, "prompt_tps": True, "wall_s": False, "items_per_s": True}
+HIGHER_IS_BETTER = {"decode_tps": True, "prompt_tps": True, "wall_s": False, "items_per_s": True, "ttft_s": False}
 CHARS_PER_TOKEN = 3.4          # código y markdown con el tokenizador de Qwen; el tamaño real sale en prompt_tokens
 
 REASONING_PROMPT = ("A warehouse robot moves on a 12x12 grid from (0,0) to (11,11), only right or up, and must avoid "
@@ -79,6 +82,30 @@ def corpus(tokens: int) -> str:
             parts.append(line)
             size += len(line)
     return "".join(parts)[:want]
+
+
+def copy_target(ctx: str, lines: int = 80) -> tuple[str, str] | None:
+    """B4: un fichero del contexto entero (no el último, que puede estar cortado) con al menos `lines` líneas ->
+    (ruta, sus primeras `lines` líneas).  Determinista: siempre el mismo para el mismo contexto."""
+    marks = [i for i in range(len(ctx)) if ctx.startswith("\n// ===== ", i)]
+    for a, b in reversed(list(zip(marks, marks[1:]))):
+        head, _, body = ctx[a + 1:b].partition("\n")
+        rows = body.split("\n")
+        if len(rows) > lines + 5:
+            return head.removeprefix("// ===== ").removesuffix(" ====="), "\n".join(rows[:lines])
+    return None
+
+
+def tool_result(i: int, tokens: int) -> str:
+    """El resultado de una herramienta (un log de tests), distinto para cada i, de ~`tokens` tokens."""
+    rnd = random.Random(5000 + i)
+    lines = [f"$ pytest -q tests/  # run {i}"]
+    while len("\n".join(lines)) < tokens * CHARS_PER_TOKEN:
+        mod = rnd.choice(["engine", "server", "cache", "router", "draft", "kv"])
+        lines.append(f"tests/test_{mod}.py::test_case_{rnd.randint(1, 999)} "
+                     f"{rnd.choice(['PASSED', 'PASSED', 'PASSED', 'FAILED', 'SKIPPED'])} "
+                     f"[{rnd.randint(0, 100)}%] ({rnd.random() * 3:.2f}s)")
+    return "\n".join(lines)
 
 
 def state_text(i: int, tokens: int = 500) -> str:
@@ -126,13 +153,19 @@ def get(url: str, timeout: float = 10) -> dict:
 
 
 def chat(server: str, system: str, user: str, max_tokens: int, effort: str, timeout: float) -> dict:
+    return chat_msgs(server, system, [{"role": "user", "content": user}], max_tokens, timeout, effort)
+
+
+def chat_msgs(server: str, system: str, messages: list, max_tokens: int, timeout: float, effort: str = "none") -> dict:
     body = {"model": "strata", "max_tokens": max_tokens, "temperature": 0, "reasoning_effort": effort,
-            "messages": ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": user}]}
+            "messages": ([{"role": "system", "content": system}] if system else []) + messages}
     t0 = time.monotonic()
     d = post(server.rstrip("/") + "/v1/chat/completions", body, timeout)
     t = d.get("timings") or {}
     u = d.get("usage") or {}
-    return {"wall_s": time.monotonic() - t0, "prompt_tokens": u.get("prompt_tokens"),
+    dn, da = t.get("draft_n"), t.get("draft_n_accepted")
+    return {"accept_rate": (da / dn) if dn and da is not None else None, "text": (d.get("choices") or [{}])[0]
+            .get("message", {}).get("content"),"wall_s": time.monotonic() - t0, "prompt_tokens": u.get("prompt_tokens"),
             "completion_tokens": u.get("completion_tokens"), "cache_n": t.get("cache_n"), "prompt_n": t.get("prompt_n"),
             "prompt_tps": t.get("prompt_per_second"), "decode_tps": t.get("predicted_per_second"),
             "predicted_n": t.get("predicted_n"), "draft_n": t.get("draft_n"), "draft_n_accepted": t.get("draft_n_accepted")}
@@ -155,12 +188,42 @@ def run_test(test: str, a, max_context: int | None, run_idx: int) -> dict:
         chat(srv, system, ctx + "\n\n" + AGENT_QUESTION, 1, "none", to)           # lee el contexto (no se mide)
         r = chat(srv, system, ctx + "\n\n" + AGENT_QUESTION, 512, "none", to)     # el mismo prompt: solo decode
         return r
+    if test == "B4":
+        n = 32768
+        if not fits(n):
+            return {"skipped": f"max_context {max_context} < {n}"}
+        ctx = corpus(n - 1200)
+        tgt = copy_target(ctx)
+        if tgt is None:
+            return {"skipped": "no hay un fichero de 80+ líneas en el contexto"}
+        path, want = tgt
+        ask = (f"Output the first 80 lines of the file `{path}` exactly as they appear above, character for "
+               "character, inside one code block. No commentary.")
+        system = f"{nonce} You are a careful coding agent."
+        chat(srv, system, ctx + "\n\n" + ask, 1, "none", to)                    # lee el contexto (no se mide)
+        r = chat(srv, system, ctx + "\n\n" + ask, 768, "none", to)
+        got = r.get("text") or ""
+        r["copied_ok"] = want.strip()[:2000] in got                            # copió de verdad (si no, no vale)
+        return r
     if test in ("P1", "P2"):
         n = 24576 if test == "P1" else 131072
         if not fits(n):
             return {"skipped": f"max_context {max_context} < {n}"}
         return chat(srv, f"{nonce} You are a careful coding agent.", corpus(n - 200) + "\n\nSummarize in one line.",
                     1, "none", to)
+    if test in ("P3", "P4"):
+        n, tail = 32768, (600 if test == "P3" else 4000)
+        if not fits(n + tail):
+            return {"skipped": f"max_context {max_context} < {n + tail}"}
+        ctx = corpus(n - 600)
+        system = "You are a careful coding agent."                  # sin nonce: el contexto se reutiliza entre pasadas
+        msgs = [{"role": "user", "content": ctx + "\n\n" + AGENT_QUESTION},
+                {"role": "assistant", "content": "I will run the tests first."}]
+        chat_msgs(srv, system, msgs + [{"role": "user", "content": "ok"}], 1, to)   # deja el contexto leído
+        out = tool_result(run_idx * 1000 + int(time.time()) % 1000, tail)           # la cola, siempre nueva
+        r = chat_msgs(srv, system, msgs + [{"role": "user", "content": f"Tool result:\n{out}\n\nWhat failed?"}], 1, to)
+        r["ttft_s"] = r["wall_s"]
+        return r
     if test in ("S1", "S2", "S3"):
         if not a.decide:
             return {"skipped": "sin --decide"}
@@ -206,13 +269,16 @@ def cmd_run(a) -> int:
                 rec["error"] = str(e)[:300]
             if not a.keep_answers:
                 rec.pop("answers", None)
+                rec.pop("text", None)
             with out.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             m = METRIC[test]
             val = rec.get(m)
+            extra = (f"  borradores aceptados {rec['accept_rate']:.0%}" if isinstance(rec.get("accept_rate"), float)
+                     else "") + ("  (NO copió el texto)" if rec.get("copied_ok") is False else "")
             print(f"[{a.tag}] {test} pasada {r + 1}/{a.runs}: "
-                  + (f"{m} = {val:.2f}" if isinstance(val, (int, float)) else rec.get("skipped") or rec.get("error", "?")),
-                  flush=True)
+                  + (f"{m} = {val:.2f}" if isinstance(val, (int, float)) else rec.get("skipped") or rec.get("error", "?"))
+                  + extra, flush=True)
     return 0
 
 

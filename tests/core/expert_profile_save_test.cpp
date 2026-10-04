@@ -42,6 +42,14 @@ int main() {
     check(r0.size() == 12 && r0[0] == Pair(0, 2) && r0[1] == Pair(1, 1) && r0[2] == Pair(2, 0) &&
           r0[3] == Pair(1, 3) && r0[4] == Pair(0, 1) && r0[5] == Pair(0, 0), "without heat: resident, then prior");
 
+    // heat_first: the counted routing across every layer, residency only breaks ties
+    const std::vector<Pair> rh = strata::core::rank_learned_profile(L, E, resident, heat, prior, true);
+    const std::vector<Pair> hhead = {{2, 3}, {1, 1}, {0, 0}, {0, 2}, {2, 0}, {1, 3}, {0, 1}, {0, 3}};
+    for (size_t i = 0; i < hhead.size() && i < rh.size(); ++i)
+        check(rh[i] == hhead[i], "heat_first: by heat, then resident, then the prior, then the index");
+    check(strata::core::rank_learned_profile(L, E, resident, {}, prior, true) == r0,
+          "heat_first without counts: the same as resident first");
+
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "strata_profile_save_test";
     std::filesystem::create_directories(dir);
     const std::string path = (dir / "learned.bin").string();

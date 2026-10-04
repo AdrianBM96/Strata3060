@@ -762,7 +762,14 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
                                hit_xs_ + (size_t) tb * (N / 32), hit_scratch_, hit_out, cs);
             }
         };
-        grouped(p_ptr, p_start, p_counts, 0);
+        // STRATA_HIT_GY=N (opt-in, for an A/B): the VRAM groups' launch with N block rows striding over the groups
+        // instead of cap of them.  A window holds ~17 hit groups of a cap of 10 T, so most rows started only to
+        // return; the results do not depend on gridDim.y (iq_kernels.cu, native_gu_kernel's note)
+        static const int64_t hit_gy = [] {
+            const char* v = std::getenv("STRATA_HIT_GY");
+            return v != nullptr ? (std::max)((int64_t) 0, (int64_t) std::atoll(v)) : (int64_t) 0;
+        }();
+        grouped(p_ptr, p_start, p_counts, hit_gy);
         stamp(l, 20, grp);
         if (device_plan_) wait_flag_ge_or(m_flagB_, ring, skip_ + grp, cs);
         else wait_flag_ge(m_flagB_, ring, cs);                 // the PCIe share is in staging (DMA) or mapped

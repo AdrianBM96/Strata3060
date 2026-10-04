@@ -72,7 +72,8 @@ bool read_expert_profile(const std::string& path, int64_t n_layers, int64_t n_ex
 std::vector<std::pair<int32_t, int32_t>> rank_learned_profile(int64_t n_layers, int64_t n_expert,
                                                               const std::vector<uint8_t>& resident,
                                                               const std::vector<double>& heat,
-                                                              const std::vector<std::pair<int32_t, int32_t>>& prior) {
+                                                              const std::vector<std::pair<int32_t, int32_t>>& prior,
+                                                              bool heat_first) {
     const size_t n = (size_t) (n_layers * n_expert);
     std::vector<int64_t> prior_rank(n, INT64_MAX);
     for (size_t r = 0; r < prior.size(); ++r) {
@@ -87,8 +88,9 @@ std::vector<std::pair<int32_t, int32_t>> rank_learned_profile(int64_t n_layers, 
     auto res = [&](int64_t i) { return (size_t) i < resident.size() && resident[(size_t) i] != 0; };
     auto ht = [&](int64_t i) { return (size_t) i < heat.size() ? heat[(size_t) i] : 0.0; };
     std::stable_sort(order.begin(), order.end(), [&](int64_t a, int64_t b) {
-        if (res(a) != res(b)) return res(a);
+        if (!heat_first && res(a) != res(b)) return res(a);
         if (ht(a) != ht(b)) return ht(a) > ht(b);
+        if (res(a) != res(b)) return res(a);
         if (prior_rank[(size_t) a] != prior_rank[(size_t) b]) return prior_rank[(size_t) a] < prior_rank[(size_t) b];
         return a < b;
     });

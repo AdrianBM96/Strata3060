@@ -41,9 +41,17 @@ class Fake(BaseHTTPRequestHandler):
         if self.path == "/v1/systemone":
             return self._send({"answers": {k: {"choice": "x"} for k in body["questions"]}})
         n = sum(len(m["content"]) for m in body["messages"]) // 4
+        text = ""
+        last = body["messages"][-1]["content"]
+        if "Output the first 80 lines of the file `" in last:     # B4: copia de verdad las líneas pedidas
+            path = last.rsplit("Output the first 80 lines of the file `", 1)[1].split("`", 1)[0]
+            body_ = last.split(f"// ===== {path} =====\n", 1)[1]
+            text = "```\n" + "\n".join(body_.split("\n")[:80]) + "\n```"
         self._send({"usage": {"prompt_tokens": n, "completion_tokens": body["max_tokens"]},
+                    "choices": [{"message": {"content": text}}],
                     "timings": {"cache_n": 0, "prompt_n": n, "prompt_per_second": 900.0,
-                                "predicted_per_second": 40.0, "predicted_n": body["max_tokens"]}})
+                                "predicted_per_second": 40.0, "predicted_n": body["max_tokens"],
+                                "draft_n": 100, "draft_n_accepted": 80}})
 
 
 class Run(unittest.TestCase):
@@ -55,13 +63,22 @@ class Run(unittest.TestCase):
             with tempfile.TemporaryDirectory() as t:
                 out = str(Path(t) / "b.jsonl")
                 B.main(["run", "--server", url, "--decide", url, "--tag", "A", "--runs", "2", "--bulk", "3",
-                        "--tests", "B1,B2,B3,P1,S1,S2,S3", "--out", out])
+                        "--tests", "B1,B2,B3,B4,P1,P3,P4,S1,S2,S3", "--out", out])
                 rows = B.load(out)
         finally:
             srv.shutdown()
             srv.server_close()
         by = {(r["test"], r["run"]): r for r in rows}
-        self.assertEqual(len(rows), 14)
+        self.assertEqual(len(rows), 20)
+        self.assertGreater(by[("P3", 0)]["ttft_s"], 0)
+        p34 = [b["messages"][-1]["content"] for p, b in Fake.seen
+               if p == "/v1/chat/completions" and b["messages"][-1]["content"].startswith("Tool result:")]
+        self.assertEqual(len(set(p34)), len(p34))                    # la cola es nueva en cada pasada
+        self.assertGreater(len(max(p34, key=len)), 4000 * 3)          # P4: ~4.000 tokens
+        self.assertEqual(by[("B4", 0)]["decode_tps"], 40.0)
+        self.assertTrue(by[("B4", 0)]["copied_ok"])                  # pidió líneas que están en el contexto
+        self.assertAlmostEqual(by[("B4", 1)]["accept_rate"], 0.8)
+        self.assertNotIn("text", by[("B4", 0)])
         self.assertEqual(by[("B1", 0)]["decode_tps"], 40.0)
         self.assertEqual(by[("P1", 1)]["prompt_tps"], 900.0)
         self.assertIn("skipped", by[("B3", 0)])                      # 128K no cabe en 64K
