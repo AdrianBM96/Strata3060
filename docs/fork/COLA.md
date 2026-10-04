@@ -19,9 +19,10 @@ y se anotan en el CHANGELOG.
 
 ## Cola (por orden)
 
-- [ ] **C11.** `--expert-cache 4124`. Hecho cuando: A/B 6+6 de B1, B2 y B4 contra la base de la 7, y prueba de pico
-  (96K + imagen + B1) sin OOM. Si gana con IC>0 y sin OOM, pedir OK para adoptarlo. Después, el mismo contrato con
-  `--kv-resident 16384`.
+- [x] **C11-bis.** Encontrar qué limita los huecos (solo lectura). Hecho: `generate.cpp:3283` (auto:
+  slots=(free-reserva)/blob, reserva=(700+prefill_mib)MiB+58MiB draft) y `generate.cpp:3356-3374` (sized-slots:
+  tope=free-700MiB; 4124 pedidos→3732). Los 848 MiB del pico no sirven: 700 van reservados + 256 de LOW.
+- [ ] **C11.** `--expert-cache 4124`. EN PAUSA (con +38 huecos no hay nada medible). Reabrir solo si baja la reserva.
 - [ ] **C10b.** Alcance: solo el servidor Python. Registro por petición: cliente, RESUME n, tokens de prompt, slot
   y expulsiones, y el índice del primer token distinto frente al mejor prefijo en cada relectura de más del 50 %.
   `--prompt-cache 12`. Hecho cuando: lleva 48 h de uso real y se da el reparto de causas.

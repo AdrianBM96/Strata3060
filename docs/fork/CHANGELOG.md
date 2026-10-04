@@ -17,3 +17,4 @@ Commit + push en cada entrada.
 | 2026-10-04 | 14a | ¿Cuenta el borrador usos? | No (enrutado en device); contador pedido a Claude | 5d7b59b | Entregada |
 | 2026-10-04 | — | Orden Adrián: virgen-vs-nuestra | Registrada; stock 0.1.39 compilada | 9a62b00 | Pendiente |
 | 2026-10-04 | 11 | A/B 4124 vs auto (B1/B2/B4 6+6) | En curso | — | En curso |
+| 2026-10-04 | C11-bis | Qué limita los huecos a 3732 | auto=3283, tope=free-700 en 3356-3374; 848 del pico menos reserva+LOW | - | C11 en pausa |
