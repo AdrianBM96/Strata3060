@@ -42,11 +42,12 @@ y se anotan en el CHANGELOG.
 
 ## Norma permanente: agente de pruebas `tester`
 
-Existe `tester` (pi con ada-next, panel w1:pH, cwd del repo). Toda prueba que necesite que el MODELO trabaje como
-agente (sesiones reales ≥20-30 min de C14a/C15/C17, tareas largas con herramientas, comprobar una config nueva desde
-un cliente) la hace tester. NO usar Claude ni ningún modelo en la nube para eso. Cómo: `herdr agent prompt tester
-"<tarea cerrada>" --wait --timeout <ms>`; después `herdr agent read tester`. Los benchmarks (bench.py,
-logpos-compare) se lanzan por shell, como ahora. Antes de cada sesión de tester, apuntar la config del motor activa.
+Existe `tester` (pi con ada-next, panel w1:pH, cwd del repo). Solo sirve cuando el contrato pide una SESIÓN
+REAL DE AGENTE con ada-next como carga (C14a, C15 y C17: generar tráfico de agente de 20-30 min mientras los
+contadores registran). tester NO valida ni testea soluciones (eso se hace con bench.py, logpos-compare y los
+tests). tester y los benchmarks NUNCA a la vez (comparten el motor y se contaminan las cifras). Cómo:
+`herdr agent prompt tester "<tarea cerrada>" --wait --timeout <ms>`; después `herdr agent read tester`.
+Antes de cada sesión de tester, apuntar la config del motor activa.
 
 ## Norma permanente: adopción en el mismo día
 
