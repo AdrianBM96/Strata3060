@@ -153,3 +153,16 @@ Estado: medida. **Sin aplicar nada** (espera validación).
 - **Veredicto propuesto**: subir a ~4.100 huecos **si** Claude lo valida; son +12 % de caché. Nota: el pico incluye
   los búferes del prefill largo, que toma prestados huecos — con más huecos fijos, el prefill largo tiene menos
   margen. Alternativa: quitar el micro-LLM (:8082) y sumar sus 246 MiB.
+
+## Orden 14a. ¿Cuenta el motor el uso de la capa del borrador?
+
+Estado: mirado (solo lectura). **No lo cuenta.**
+
+- `drive.d.usage` cubre solo las capas del modelo principal (`g.n_layers × g.n_expert`). La capa del borrador
+  (512 expertos residentes) no entra.
+- Su enrutado se resuelve **en el dispositivo** (`mtp.cpp:582-583`: `native_router_top10` o `router_top10` sobre
+  `logits_`, ids en el búfer `ids_` de T×K int32 por ronda). Contarlo en el host exige un punto de relectura que
+  no pare el pipeline.
+- **No lo implemento yo**: el punto de relectura es diseño de motor (un mal sitio mete un sync por ventana).
+  **Pido a Claude el contador `STRATA_MTP_HIST=1`** como especifica la orden (uint32 por experto, volcado al
+  salir, coste cero apagado). Cuando esté, mido la sesión de ≥30 min y la aceptación del borrador.
