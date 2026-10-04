@@ -1,9 +1,22 @@
 # Norma de trabajo: CONTRATOS (permanente desde 2026-10-04)
 
+## Normas permanentes
+
+- **N1.** Tras cualquier compactación o reinicio del contexto: releer COLA.md y las 5 últimas entradas del
+  CHANGELOG antes de hacer nada.
+- **N2.** Push SOLO a `claude/strata-rtx3060-optimization-zfgxq8`. Nunca a `main`.
+- **N3.** Al principio del CHANGELOG, una línea de ESTADO que se reescribe en cada commit:
+  `ESTADO: <contrato en curso> | <paso> | <bloqueo o ninguno> | <fecha y hora>`.
+- **N4.** Cada entrega lleva el hash del commit y el diffstat. Las cifras van a la tabla del CHANGELOG, no solo
+  al mensaje.
+- **N5.** Todo contrato declara qué recursos usa: motor/GPU, CPU y tester. Dos contratos que usan el motor nunca
+  van a la vez. Mientras el motor esté ocupado, adelantar trabajo que no lo use (código, lectura, scripts).
+
 ## Formato de contrato (todos así)
 
 - ID / Objetivo (una frase).
 - Alcance: ficheros y funciones que se pueden tocar. Nada fuera de ahí.
+- Recursos: motor/GPU, CPU, tester (exclusión mutua del motor).
 - Hecho cuando: criterios verificables.
 - Medición: siempre METODO_MEDICION.md (alternar, 6+6, `bench.py compare`; bit a bit con los ajustes de siempre;
   `logpos-compare` si puede cambiar texto).
@@ -17,37 +30,12 @@ Al cerrar un contrato, empezar el siguiente de la cola sin esperar. Escribir a C
 (b) pedir OK para tocar producción; (c) un bloqueo real, con file:line y 2 opciones. Las dudas menores se deciden
 y se anotan en el CHANGELOG.
 
-## Cola (por orden)
-
-- [x] **C11-bis.** Encontrar qué limita los huecos (solo lectura). Hecho: `generate.cpp:3283` (auto:
-  slots=(free-reserva)/blob, reserva=(700+prefill_mib)MiB+58MiB draft) y `generate.cpp:3356-3374` (sized-slots:
-  tope=free-700MiB; 4124 pedidos→3732). Los 848 MiB del pico no sirven: 700 van reservados + 256 de LOW.
-- [x] **C11.** CERRADA sin adoptar (solo +38 huecos: 3732 vs 3694; la reserva de 700 MiB es del prefill largo y no se toca). Producción como estaba (auto).
-- [x] **C10b.** Registro + `--prompt-cache 12` desplegados (verificado con 2 peticiones: reused 0→68,
-  first_diff=68). Quedan 48 h de uso real para el reparto de causas.
-- [ ] **C14a.** `STRATA_MTP_HIST=1`. Alcance: mtp.cpp junto a router_top10 y la salida del proceso. Histograma
-  uint32[512] en el dispositivo, atomicAdd en el mismo stream, sin sync por ventana; apagado, solo un if en el
-  host. Hecho cuando: con la variable apagada B1 sale bit a bit igual, y se da la cobertura top 128/256/384 y la
-  aceptación del borrador en sesión de 30+ min.
-- [ ] **C15.** `STRATA_PREGATE_STATS=1` según ORDENES §15. Mismo patrón. Hecho cuando: bit a bit igual apagada, la
-  tabla de recall por k (10/16/24), L+1 y L+2, por GDN/QSA y por la parte PCIe, y el coste en ms/ventana.
-- [ ] **C16.** `STRATA_ROUTE_GAP_STATS=1` según §16. Hecho cuando: bit a bit igual apagada, el histograma por
-  cortes y 5 ejemplos.
-- [ ] **C17.** Según §17, con un script sobre los logs. Hecho cuando: la tabla de tokens/ventana por tipo de
-  contenido, la aceptación por posición y el % de tiempo.
-- [ ] **C8.** Rejilla completa del simulador, a) b) a+b. Hecho cuando: la tabla con el criterio de §8.
-- [ ] **C18** (solo estudio, sin código). La copia PCIe en paralelo con los aciertos. Entrega en
-  docs/fork/C18_DISENO.md, máximo 1 página: dónde está hoy la dependencia (file:line), qué sync o evento hay que
-  mover, y el techo en ms/ventana con los datos de la 9.
-
 ## Norma permanente: agente de pruebas `tester`
 
-Existe `tester` (pi con ada-next, panel w1:pH, cwd del repo). Solo sirve cuando el contrato pide una SESIÓN
-REAL DE AGENTE con ada-next como carga (C14a, C15 y C17: generar tráfico de agente de 20-30 min mientras los
-contadores registran). tester NO valida ni testea soluciones (eso se hace con bench.py, logpos-compare y los
-tests). tester y los benchmarks NUNCA a la vez (comparten el motor y se contaminan las cifras). Cómo:
-`herdr agent prompt tester "<tarea cerrada>" --wait --timeout <ms>`; después `herdr agent read tester`.
-Antes de cada sesión de tester, apuntar la config del motor activa.
+Solo sirve cuando el contrato pide una SESIÓN REAL DE AGENTE con ada-next como carga (batería C19: HUMO para
+"¿arranca y responde?", CARGA para generar tráfico mientras los contadores registran). tester NO valida ni testea
+soluciones (eso se hace con bench.py, logpos-compare y los tests). tester y los benchmarks NUNCA a la vez
+(comparten el motor y se contaminan las cifras).
 
 ## Norma permanente: adopción en el mismo día
 
@@ -57,3 +45,22 @@ configuración y push a la rama del fork `AdrianBM96/Strata3060` rama `claude/st
 commit), actualizar RESUMEN_FINAL.md (configuración y cifras vigentes) y, si cambia el despliegue,
 ESTADO_DESPLIEGUE.md; 3) si es un parche nuevo, dejarlo también en `docs/fork/patches/`. No se da por adoptado nada
 que no esté subido y documentado.
+
+## Cola (por orden)
+
+- [ ] **C19** (en curso). Batería tester en `docs/fork/ops/tester/`. Recursos: tester+motor (excluye benchmarks).
+  Hecho cuando: HUMO y CARGA pasan 2 veces seguidas, CARGA ≤20 min.
+- [ ] **C14a.** `STRATA_MTP_HIST=1`. Recursos: motor/GPU para compilar+medir; tester para CARGA. Donde decía
+  "sesión de 30+ min", ahora es el juego CARGA más la comprobación de volumen. Hecho cuando: bit a bit igual
+  apagada, cobertura top 128/256/384 y aceptación del borrador.
+- [ ] **C15.** `STRATA_PREGATE_STATS=1` según ORDENES §15 (lo implementa el agente). Recursos: motor/GPU;
+  tester para CARGA. Igual sustitución de la sesión por CARGA + volumen.
+- [ ] **C16.** `STRATA_ROUTE_GAP_STATS=1` según §16. Recursos y sustitución iguales que C15.
+- [ ] **C17.** Según §17 con script sobre logs + CARGA para el tráfico. Recursos: tester+motor.
+- [ ] **C20** (antes paso 4 de la orden 11). `--kv-resident 16384`. Recursos: motor/GPU. Medir VRAM liberada y
+  huecos ganados, B1/B2 6+6, acierto de bloques KV y decode con 32K y 86K de contexto. Solo con OK y sin OOM.
+- [ ] **C8.** Rejilla del simulador a) b) a+b. Recursos: solo CPU. Hecho cuando: la tabla con el criterio de §8.
+- [ ] **C18** (solo estudio, sin código). Recursos: ninguno (lectura). Entrega en `docs/fork/C18_DISENO.md`
+  (máx. 1 página).
+- [ ] **C21** (orden de Adrián). Nuestra versión contra Strata 0.1.39 virgen. Recursos: motor/GPU (A/B con swaps).
+  Va al final, con la cola vacía.
