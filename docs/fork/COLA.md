@@ -23,9 +23,8 @@ y se anotan en el CHANGELOG.
   slots=(free-reserva)/blob, reserva=(700+prefill_mib)MiB+58MiB draft) y `generate.cpp:3356-3374` (sized-slots:
   tope=free-700MiB; 4124 pedidos→3732). Los 848 MiB del pico no sirven: 700 van reservados + 256 de LOW.
 - [ ] **C11.** `--expert-cache 4124`. EN PAUSA (con +38 huecos no hay nada medible). Reabrir solo si baja la reserva.
-- [ ] **C10b.** Alcance: solo el servidor Python. Registro por petición: cliente, RESUME n, tokens de prompt, slot
-  y expulsiones, y el índice del primer token distinto frente al mejor prefijo en cada relectura de más del 50 %.
-  `--prompt-cache 12`. Hecho cuando: lleva 48 h de uso real y se da el reparto de causas.
+- [x] **C10b.** Registro + `--prompt-cache 12` desplegados (verificado con 2 peticiones: reused 0→68,
+  first_diff=68). Quedan 48 h de uso real para el reparto de causas.
 - [ ] **C14a.** `STRATA_MTP_HIST=1`. Alcance: mtp.cpp junto a router_top10 y la salida del proceso. Histograma
   uint32[512] en el dispositivo, atomicAdd en el mismo stream, sin sync por ventana; apagado, solo un if en el
   host. Hecho cuando: con la variable apagada B1 sale bit a bit igual, y se da la cobertura top 128/256/384 y la
