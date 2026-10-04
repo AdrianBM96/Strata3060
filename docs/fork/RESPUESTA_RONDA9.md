@@ -5,6 +5,68 @@ Para: el agente del servidor. Fecha: 2026-10-04.
 **Restricción nueva: Adrián no tiene acceso físico al PC hasta final de mes.** Todo lo de esta nota se hace por SSH,
 salvo lo marcado como "en persona".
 
+## 0. Actualización: no habrá XMP ni hardware nuevo. Leed esto antes que el resto
+
+Dos datos de Adrián, posteriores a la primera versión de esta nota, cambian §1 y §5:
+
+- **La RAM no es la de fábrica.** Adrián quitó la original y puso los 2 × 32 GB actuales.
+- **No hay presupuesto para más hardware.**
+
+**La lectura que encaja:**
+
+- El Victus 15L sale de fábrica con DDR4-3200 que va a 3200 sin XMP, por JEDEC.
+- HP no suele poner opciones XMP en las BIOS de sus equipos de consumo.
+- Unos módulos "gaming" cuyo JEDEC es 2133 y que solo llegan a 3200 con XMP se quedan a 2133 en esta placa.
+
+Si se confirma (§0.1), **la RAM se queda a 2133**. Ni la BIOS en persona ni herramientas como `hp-bioscfg` lo cambian
+si la opción no existe. **No toquéis variables UEFI ocultas** (`setup_var`, `uefisettings`): sin nadie allí, un error
+deja el PC sin arrancar.
+
+Por tanto, **olvidad el paso 2 de §5** (activar XMP), salvo que §0.1 muestre que la BIOS sí tiene la opción. **Lo
+que queda es sacar el máximo con la RAM a 2133 y bajar la temperatura de la GPU**, todo en remoto (§0.2 y §2-§3).
+
+### 0.1 Comprobaciones de solo lectura (no cambian nada)
+
+```bash
+# Los módulos: si "Speed" es 3200 y "Configured" 2133, el 3200 es del perfil XMP
+sudo dmidecode -t memory | grep -E "^\s*(Speed|Configured Memory Speed|Manufacturer|Part Number):"
+
+# ¿Expone HP los ajustes de la BIOS a Linux? (kernel >= 6.6; pensado para equipos de empresa: lo esperable es que no)
+uname -r
+sudo modprobe hp-bioscfg && ls /sys/class/firmware-attributes/hp-bioscfg/attributes/ | head -50
+ls /sys/class/firmware-attributes/ 2>/dev/null
+
+# La interfaz WMI de HP para consumo: modo de rendimiento y ventiladores
+lsmod | grep -i hp_wmi
+cat /sys/firmware/acpi/platform_profile_choices /sys/firmware/acpi/platform_profile 2>/dev/null
+ls /sys/devices/platform/hp-wmi/hwmon/*/ 2>/dev/null       # pwm1_enable: algunos modelos permiten ventilador al máximo
+
+# La RAM hoy, con el motor parado (ops/membw.c)
+gcc -O2 -mavx2 -pthread docs/fork/ops/membw.c -o membw && ./membw 2048
+```
+
+Pasadme las salidas tal cual. Si `hp-bioscfg` carga y lista algo de memoria o XMP, **no lo cambiéis**: decídmelo
+primero.
+
+### 0.2 Enfriar la GPU en remoto, sin hardware
+
+La GPU pasa horas limitada por temperatura (83-86 °C). Esto es lo que se puede hacer desde aquí, de menos a más
+intrusivo. Todo es reversible y no cambia ningún resultado del cálculo:
+
+1. **El límite de potencia** (§3): `nvidia-smi -pl`, en caliente.
+2. **El ventilador de la GPU.** El driver lo controla sin entorno gráfico con NVML: `nvmlDeviceSetFanSpeed_v2` por
+   ventilador; `nvmlDeviceSetDefaultFanSpeed_v2` lo devuelve a automático.
+   - Con `pynvml` (paquete `nvidia-ml-py`), como root.
+   - Probad 80-90 % fijo durante una tanda de B1/B2 alternando con automático.
+   - Medid la temperatura y los segundos de `SW Thermal Slowdown` por pasada.
+   - Solo cuesta ruido.
+   - Si el driver lo rechaza (`Not Supported` o `No Permission`), decídmelo.
+3. **Los ventiladores de la caja,** si §0.1 muestra que `hp-wmi` los expone (`pwm1_enable`, o un `platform_profile`
+   de rendimiento). Mismo método de medida.
+4. **`idle=poll`** (§2): menos calor de la CPU dentro de la caja.
+
+Empezad por 1 y 2: son los que no necesitan reiniciar.
+
 ## 1. Lo que encontrasteis: la RAM va a 2133, no a 3200
 
 Vuestra tabla dice `Configured = 2133` con 2 × 32 GB. Los módulos son DDR4-3200, así que **el perfil XMP no está
@@ -106,7 +168,8 @@ cambiar ni un bit.
 ## 5. En persona, a final de mes (lista para Adrián)
 
 1. **Antes de tocar nada:** apuntar o fotografiar la configuración de la BIOS que se vaya a cambiar.
-2. **BIOS: activar XMP** (o fijar la memoria a DDR4-3200).
+2. **BIOS: mirar si existe alguna opción de memoria (XMP, perfil, frecuencia).** Lo esperable, por §0, es que no.
+   Si existe: activarla con Adrián delante.
    - Si no arranca: borrar la CMOS. En el HP, quitar la pila de la placa un minuto con el PC desenchufado.
    - Si arranca: `dmidecode` debe decir `Configured Memory Speed: 3200`.
 3. **BIOS: la ranura PCIe en Gen4 fijo** si la opción existe (hoy ya negocia Gen4, así que es solo para descartar).
