@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: P08 A/B motor (yo, con lock) | C26a VNNI-down | C26c P09 | C28-RIESGOS archivado | 2026-10-04 22:44 UTC
+ESTADO: C26-b A/B +0% (yo) | C26a VNNI-down | C26c P09 | lock libre | 2026-10-04 22:46 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -49,3 +49,4 @@ ESTADO: P08 A/B motor (yo, con lock) | C26a VNNI-down | C26c P09 | C28-RIESGOS a
 | 2026-10-04 | C29 | GPU densa en decode (tras C27); DECODE-GPU al repo; cola nueva | (d) no incondicional: temp>0 por request (server:300, verify:2126) + logprobs; solo con gate greedy | - | Medir a,b primero |
 | 2026-10-04 | C17-tree | MTP-DRAFT.md al repo; medida árbol: ms/ventana vs 2,3,4,6,8 + expertos CPU/PCIe | con resto de C17, sin cola nueva | - | Motor tras P08 |
 | 2026-10-04 | C28-rie | C28-RIESGOS al repo (para briefing prototipo): R T×10240 FP32 ✓, checkpoint bifásico root 2048, zig-zag >32K | coherente con mi estudio; va al briefing wt-C28 | - | Archivado |
+| 2026-10-04 | C26-AB | A/B B1 6+6 P08+MTMIN vs prod (binarios con md5, producción restaurada 056819f9) | def 45,05±1,36 vs p08 45,00 (−0,1 % sin 1ª fría): kernel −16,5 % NO mueve B1 → CPU fuera del crítico (C22); NO se despliega | - | A producción no |
