@@ -226,3 +226,20 @@ con 0 casos en uso real, filtrar devolvería un error que ningún cliente maneja
   `--prompt-cache`/`--prompt-cache-every` ausentes → defaults **6/16384**. `RESUME` no se loguea (0 líneas).
 - **Veredicto propuesto**: menos rearranques en días de agente; más slots si conviven ≥4 clientes. Nada de
   cambiar prefijos a ciegas (sin evidencia).
+
+## C23. Eficiencia de expertos en CPU (cierre)
+
+Estado: medido. Instrumento `Strata/bench/te_sweep.cpp` (vía producción: pool 5+host, `run_split_multi_native`).
+
+- **Barrido T_e** (48 expertos, best-of-20, 6 hilos): ~70+26·T_e µs/experto (T_e=12→~380, no 60:
+  E4-PREP refutado ×6); IQ2_S≈IQ2_XXS; **limitada por cálculo** (8,7 GB/s « RAM).
+- **Hilos** (T_e=1/64 × 1-6 hilos × S/XXS/IQ1_M): sublineal; IQ1_M a T_e=64 2-3,6× más lento (siempre
+  ggml, `iq256_supported` no lo cubre: `iq_avx2.cpp:496`).
+- **ISA** (`native_expert.cpp`): gu/up S/XXS→AVX2 `iq256` si nt≥2 (`:112-117`); nt=1→ggml AVX1 (`:122`).
+  Down q2_0 (d=42, las 48 capas) y gu IQ1_M (29) SIEMPRE ggml mono-token (`:150-158`).
+- **P02** (MT_MIN=1): 12+12 con bench.py da +0,38 % (ruido, artefacto térmico) → descartado como palanca B1.
+- **P08** (interleave, `patches/p08-interleave.patch`, bit-idéntico): +28,7 % en kernel, 79,2→66,1 µs
+  con despacho, pero A/B B1 +0 % → CPU fuera del camino crítico. Archivado hasta que C27 quite el round-trip.
+- **P09** (contiguo): refutado en RAM (×1,0). **VNNI**: micro +2 % en caché, sin prueba en RAM.
+
+**Veredicto: la CPU tiene margen pero no manda; el crítico es waitB (C27).**
