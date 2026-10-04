@@ -73,8 +73,8 @@ ni calidad.
 
 - **N10.** Agente `explorer` (agy con Gemini 3.8 Flash, panel w1:pM). Solo investiga y propone a Claude.
   Preguntas de investigación cerradas (máx. 1 por contrato):
-  `herdr agent prompt explorer "opencode2: <pregunta>"`. Explorer no puede usar herdr: responde mediante
-  un vigilante que reparte su buzón; su salida está en `~/explorer/` (P<nn>.md, BUZON.md). Propuestas P<nn>
+  `herdr agent prompt explorer "opencode2: <pregunta>"`; responde por herdr directo (el buzón queda
+  retirado). Su salida está en `~/explorer/` (P<nn>.md). Propuestas P<nn>
   aprobadas por Claude → copiar de `~/explorer/` a `docs/fork/exploracion/` del repo con su commit. Nunca
   pedirle implementar nada ni aceptar de él trabajo nuevo. Empezar los mensajes a cualquier agente con
   `opencode2:`.
