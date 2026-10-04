@@ -324,3 +324,8 @@ Con `suffix-draft-stats.patch` y lo que ya cuente el motor, en una sesión real 
 
 **Criterio:** si el pensamiento y el código nuevo son > 50 % del tiempo con < 2 tokens por ventana, preparo el plan de
 adaptar la cabeza MTP a nuestras sesiones.
+
+## Validación de la orden 5
+
+**VALIDADA.** El tope se queda en **3072**. Con 4096, una de las tres repeticiones de la tarea larga no actuó, y además
+gastó 619 s. El criterio (3/3) no se cumple. El tema se cierra.
