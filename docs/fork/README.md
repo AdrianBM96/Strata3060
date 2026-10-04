@@ -45,6 +45,7 @@ como tales.
 | **[RESPUESTA_RONDA10.md](RESPUESTA_RONDA10.md)** | Ronda 10: la RAM a 2133 no frena a Strata (CPU al 54 % de la RAM, PCIe por debajo) y se cierra; `idle=poll` cerrado; lo pendiente es enfriar la GPU sin reiniciar (ventilador por NVML, límite de potencia, `hp-wmi`), medido con los contadores de frenado |
 | **[MEDICION_RONDA10.md](MEDICION_RONDA10.md)** | Ronda 10 medida: el **ventilador de la GPU al 100% quita el *thermal slowdown*** (26-33 s -> 0-1 s) y baja 4-6 C **sin cambiar los tok/s**; el límite de potencia (150 W) tampoco ayuda; y **`STRATA_PF_FUSED=1` = +5,2 % de prefill** (salida emparejada identica), **adoptado** |
 | **[ANALISIS_FORK_ARCHITECTDS.md](ANALISIS_FORK_ARCHITECTDS.md)** | Análisis del fork `architectds/Strata` para una sola 3060: qué aplica (PF_FUSED adoptado, CPU assist, AVX-VNNI, MTP chain, GR_DOWN_MAX4) y qué no (layer split, PDL sm_90+, chunks, images on demand) |
+| **[RESPUESTA_RONDA11.md](RESPUESTA_RONDA11.md)** | Ronda 11: hardware cerrado; la puerta de calidad de `PF_FUSED` con `logpos-compare` en dos peticiones; y el encargo de portar del fork `architectds` (`GR_DOWN_MAX4`, MTP chain, AVX-VNNI, CPU assist), en orden, desactivable y medido |
 | **[SYSTEMONE.md](SYSTEMONE.md)** | System One completo: el cambio del motor, la API, operación, actualización y rollback |
 | **[ops/](ops/)** | Los ficheros de despliegue (`ada-decide.py`, `fit-calibration.py`, `logpos-compare.py`, `apply-tuning.sh`, `free-vram.sh`, `strata-switch.sh`, `serve-strata.sh`) y sus tests |
 
