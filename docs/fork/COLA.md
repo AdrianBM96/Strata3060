@@ -71,12 +71,14 @@ ni calidad.
 ## Cola (por orden)
 
 - [x] **C19** hecha (batería 2× HUMO + 2× CARGA, todo PASA) · [x] **C22** hecha (techo v2: precarga ≤1 ms, manda CPU).
-- [ ] **C23** (cerrando: P02 sin ganancia) · **E1** · **C24** (simplificado + burbuja sync; +palancas menores
-  2,4,5 de PREFILL-PCIE) · **C28** (PROTOTIPO OK en wt-C28, nada de producción; sin hand-off: préstamo
-  slots decode ~5-6 GB para R+KV; superbloques si no cabe; R FP32; medir P3/P4, bench 32K/86K y decode tras
-  prefill) · **C26** (obrero, wt-P08) · **C27** (waitB; absorbe C18) · **E3** · **C16** (obrero1, wt-C16) ·
-  **C14a** (código verificado; medir a su turno) · **C20** · **C17** (primero `--spec` 2vs3vs4) ·
-  **C15** (degradada) · **C8** (+P05 c) · **E4** (+3,7 %, al final) · **C21**.
+- [ ] **C23** (cierre: P02 descartado) · **C26** (kernel CPU: b verificado −16,5 %, a/c en obreros) ·
+  **C28** (prototipo OK en wt-C28) · **C24** (simplificado + burbuja sync + palancas 2,4,5) · **E1**
+  (+afinidad) · **C27** (waitB; absorbe C18) · **C29** (GPU densa en decode: a) fusionar 5×q8_1 b) MMVQ
+  ROWS=2 (si no bit-exacto, DESCARTADA) c) router+top10 d) argmax solo si greedy (verificado: temp>0
+  posible por request + logprobs → NO incondicional); techo −4/−5,5 ms, medir a,b primero) · **C14a**
+  (código verificado; medir a su turno) · **C16** (código verificado; medir a su turno) · **C20** ·
+  **C17** (script listo; falta CARGA) · **C15** (degradada) · **C8** (+P05 c) · **E3** · **E4** (+3,7 %, al
+  final) · **C21**.
 - [x] **C18** absorbida por C27 (queda el diseño en `C18_DISENO.md`).
 - Nota: `-b/-ub 128` de llama.cpp no aplica a los chunks de Strata (diseño distinto); sin acción.
 - **N14.** Vigía diario (07:13 UTC) del Strata oficial: si sale versión nueva llega contrato CUP y se sigue tal
