@@ -14,6 +14,11 @@ F=/home/bazzite/Strata
 # STRATA_PF_FUSED=0 lo apaga (A/B). El motor hereda el entorno de server.py (env = dict(os.environ)).
 export STRATA_PF_FUSED="${STRATA_PF_FUSED:-1}"
 
+# fetch-admit (orden 2 de Claude): los expertos que ya cruzaron por PCIe se quedan en la cache en vez de
+# tirarse. Medido +2-7% de decode sin coste PCIe y sin diferencia de calidad (docs/fork/ENTREGAS.md, orden 2).
+# STRATA_FETCH_ADMIT=0 lo apaga (A/B).
+export STRATA_FETCH_ADMIT="${STRATA_FETCH_ADMIT:-1}"
+
 NEED_MIB=${STRATA_NEED_VRAM_MIB:-6500}
 M=$(cat "$F/.current-model" 2>/dev/null || echo swift-iq2_xs)
 CFG="$F/strata-${M}.json"
@@ -43,7 +48,7 @@ HAS_VISION=$(python3 -c "
 import json,sys
 try: d=json.load(open('$CFG'))
 except Exception: print('no'); raise SystemExit
-print('yes' if d.get('vision') else 'no')")
+print('yes' if (d.get('vision') or {}).get('gpu') else 'no')")
 
 if [ "$HAS_VISION" = "yes" ]; then
   "$F/free-vram.sh" >&2

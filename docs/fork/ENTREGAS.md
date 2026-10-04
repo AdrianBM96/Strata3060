@@ -40,3 +40,23 @@ Estado: desplegada y verificada; A/B contra la 0.1.38 en curso.
 
   **Veredicto propuesto orden 1: la 0.1.39 se queda con todo por defecto.** Ninguna variable resta ni aporta en
   decode; el +7,1 % / +9,0 % del motor nuevo es franco.
+
+## Orden 2. `STRATA_FETCH_ADMIT`
+
+Estado: verificada y **adoptada** (`serve-strata.sh` exporta `STRATA_FETCH_ADMIT=1`).
+
+- **Corrección: PASA.** El log dice `STRATA_FETCH_ADMIT: the PCIe share of the misses stays in the VRAM cache`;
+  `kept from the PCIe share` > 0 (miles por petición); respuesta coherente, sin basura. Acierto 73-78 %.
+- **Calidad: PASA** (`logpos-compare`, 2.602 posiciones): A vs B top-1 99,9 %, KL 0,0020; ΔNLL de B sobre el ruido
+  **+0,0015 ± 0,0008 → "sin diferencia medible"**.
+- **Velocidad** (B1/B2/B4, off/on/off/on, 3 pasadas; medianas):
+
+| Fase | B1 off→on | B2 off→on | B4 off→on |
+| --- | ---: | ---: | ---: |
+| flags de hoy | 45,25→47,55 (**+5,1 %**) | 42,75→45,75 (**+7,0 %**) | 42,4→44,55 (**+5,1 %**) |
+| every2/swaps32 | 45,7→47,1 (+3,1 %) | 47,1→46,55 (−1,2 %) | 43,2→44,55 (+3,1 %) |
+| every2/swaps16 | 46,95→48,05 (+2,3 %) | 47,2→49,2 (+4,2 %) | 46,2→44,05 (−4,7 %) |
+
+  El `on` gana o empata en casi todo (las dos celdas negativas son puntuales, dentro del ruido de B2/B4). Las
+  flags every2/swaps **no superan a las de hoy**, así que la config no se toca.
+- **Veredicto propuesto: adoptada con las flags de hoy.** `STRATA_FETCH_ADMIT=0` la apaga.
