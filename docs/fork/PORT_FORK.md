@@ -28,7 +28,7 @@ borrador. Tras cada cherry-pick, comprobar que siguen aplicando.
 | --- | --- | --- | --- | --- |
 | 1 | `4c3f599` + `92883e8` | `STRATA_GR_DOWN_MAX4` (#443): proyección GR para ventanas ≤4 tokens | **YA EN NUESTRO ÁRBOL** | Lo trae el 0.1.38 (con el "read once"). No hay que portar: solo A/B con la variable. |
 | 2 | `bce7fbb` | MTP chain / early: una espera por ronda de borrador | **ENTRELAZADO con layer-split** (8 hunks "split") | Cherry-pick suelto traería código multi-GPU. Extraer solo la parte de 1 GPU, o pedir a Claude. |
-| 3 | `f42c58f` | Kernels CPU AVX-VNNI + gather i-quant | **portable** (no depende de layer-split) | Choca con `row_dot_iq2s` en `iq_avx2.cpp`; mantener ambos y que `STRATA_IQ2S_BLOCK` siga vivo. Pasar `tests/core/iq2s_avx2_test.cpp`. |
+| 3 | `f42c58f` | Kernels CPU AVX-VNNI + gather i-quant | **portado y verificado bit a bit, pero SIN ganancia → NO se activa** (rama `port/avx-vnni` guardada, no desplegada) | A/B 3+3: on 42,80 · off 43,25 tok/s → dentro del ruido (y con sesgo térmico a favor del on). Coincide con el fork: "con IQ2_XS dentro del ruido". |
 | 4 | `9de6561`+`785d255`+`9f3069b`(+`62e8c06`) | CPU assist en prefill | **portable, no bit-exacto** (1,3-1,9 % L2/experto) | El último. Puerta de calidad (§2 de `RESPUESTA_RONDA11`) además del A/B. |
 
 ## NO portar (ver `ANALISIS_FORK_ARCHITECTDS.md`)
@@ -43,4 +43,28 @@ borrador. Tras cada cherry-pick, comprobar que siguen aplicando.
 ## Registro
 
 - **2026-10-04**: base congelada en `bebb18d`. Historia del fork traída completa. Confirmado que el #1 ya
-  está. A/B de `STRATA_GR_DOWN_MAX4` en curso.
+  está.
+- **2026-10-04 — #3 `f42c58f` (AVX-VNNI) cherry-pick:** rama `port/avx-vnni`, commit `f77a640`. Conflictos:
+  `docs/DUAL_GPU.md` (borrado: doc del fork, no lo queremos) y `src/kernels/cpu/iq_avx2.cpp`. El fork añade un
+  parámetro de plantilla `bool VN` (AVX-VNNI) a `row_dot_any`/`row_dot_iq2xs`/`row_dot`; nosotros teníamos ahí
+  el despacho de nuestro kernel IQ2_S. **Resuelto quedándonos con los dos**: `row_dot_any<TY,NT,VN>` mantiene
+  `if constexpr (TY==22){ if (iq2s_block) row_dot_iq2s<NT>(...); else row_dot<TY,NT,VN>(...); }`. `row_dot_iq2s`
+  no usa VN (ya está vectorizado con madd/maddubs), así que no se le añade. `iq_avx2.hpp`, `q2_avx2.cpp` y
+  `native_expert.cpp` se fusionaron solos. **Compilado OK.**
+- **2026-10-04 — #3 verificación bit a bit:** `tests/core/iq2s_avx2_test.cpp` que citaba Claude **no existe**
+  (ni en el fork). `iq_parity` cubre solo los kernels de **GPU** (no llama a los de CPU). El test que **sí** cubre
+  el camino CPU es **`native_expert_parity`** (no registrado en ctest; se ejecuta a mano). Con nuestro shard,
+  capa 0: `iq2_s avx2 gate rows vs ggml vec_dot: rel 3,23e-08`, `gpu decode-once vs per-entry: bitwise equal`,
+  **0 fallos**. Comparado **con** VN/gather (defecto) y **sin** ellos (`STRATA_NO_AVXVNNI=1 STRATA_IQ_GATHER=0`):
+  el diff del volcado completo **solo difiere en las líneas de tiempo** (230 vs 266 us) → los resultados
+  aritméticos son **idénticos** → **bit-idéntico confirmado**. Binario nuevo desplegado (backup en
+  `engine/strata.bak-pre-avxvnni`). A/B de velocidad en curso.
+- **2026-10-04 — #3 A/B de velocidad: SIN ganancia → revertido.** on 42,80 · off 43,25 tok/s (3+3) → ~1 %
+  por debajo, dentro del ruido; y el brazo `on1` salió a 69 °C (más frío, sesgo a favor del on) y aun así no
+  ganó. Coincide con el fork ("con IQ2_XS la diferencia queda dentro del ruido"). Por la regla ("si no supera
+  el ruido, se queda apagado"): **binario viejo restaurado**, fuente en `bebb18d`, rama `port/avx-vnni`
+  guardada para el registro (no mergeada).
+- **2026-10-04 — #1 `STRATA_GR_DOWN_MAX4` medido: NO se activa.** A/B 3+3+3+3 (off/on/off/on), B1:
+  off mediana **42,05 tok/s** (41,0-45,0), on **42,55** (40,9-44,0) → **+1,2 %, dentro del ruido** (el
+  protocolo marca ~3 % de deriva; off1 salió a 71 °C y on2 a 78 °C). En Blackwell daba +2,1/+2,4 %, pero en
+  la 3060 no se distingue. Se queda **apagado** (por defecto).
