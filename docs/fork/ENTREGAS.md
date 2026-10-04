@@ -60,3 +60,23 @@ Estado: verificada y **adoptada** (`serve-strata.sh` exporta `STRATA_FETCH_ADMIT
   El `on` gana o empata en casi todo (las dos celdas negativas son puntuales, dentro del ruido de B2/B4). Las
   flags every2/swaps **no superan a las de hoy**, así que la config no se toca.
 - **Veredicto propuesto: adoptada con las flags de hoy.** `STRATA_FETCH_ADMIT=0` la apaga.
+
+## Orden 3. Tope de pensamiento
+
+Estado: medida y entregada (75 llamadas en total).
+
+- **Matriz**: topes 3072/4096 × `max_tokens` 8192/16384 × 4 tareas (write, edit, tests, long multi-tool) × 3 reps,
+  más la tarea larga original (TASK.md, 18 llamadas previas). **Las 75 actúan (`tool_use`), 0 errores, 0 argumentos
+  inválidos.**
+- **Matiz importante**: con tareas **cortas**, 3072 y 4096 actúan siempre (56/56), con ambos `max_tokens`. El fallo
+  de 4096 solo aparece con la tarea **larga** (TASK.md, ~2,5K tokens de prompt) y `max_tokens=8192`: ahí 4096 falla
+  0/3 (se come el presupuesto pensando y muere por `max_tokens`) mientras ≤3072 actúa 12/12. El umbral depende del
+  tamaño de la tarea, no solo del tope.
+- **`max_tokens` real de los clientes**: opencode (límite de salida 32768 para ada-next) y pi (`maxTokens` 32768)
+  permiten salidas de ~32K; Claude Code no lo declara en sus ficheros, pero en la práctica también (el runaway de
+  `omp` generó 32.768 tokens).
+- **Aviso para el harness**: el modelo llamó 6 veces a `read_file`, que **no estaba** en la lista de herramientas.
+  El harness debe rechazar o mapear tools no declaradas.
+- **Veredicto propuesto: tope 3072 por defecto** (actúa en todo lo medido, corto y largo). 4096 solo donde haya
+  `max_tokens` ≥ 16384 **y** tarea corta; sin medir 4096×16384 en tarea larga, no se recomienda en general. La
+  reserva de acción sale sola (`max_tokens` − tope).
