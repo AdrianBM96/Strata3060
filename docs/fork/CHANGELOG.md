@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C27 A/B r3/6 (yo, con lock) | C28 obrero | BLOQUEO: C30 puerto 8090 (echo_hub) | 2026-10-04 23:40 UTC
+ESTADO: C27-FLAGB +0% (yo) | C28 obrero | BLOQUEO C30 puerto | 2026-10-04 23:54 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -53,6 +53,7 @@ ESTADO: C27 A/B r3/6 (yo, con lock) | C28 obrero | BLOQUEO: C30 puerto 8090 (ech
 | 2026-10-04 | C30-v4 | Dirección visual definitiva (ref-v4 abierta: SaaS claro, clay, 3 col); relay; TAREAS con pasos | - | - | En curso |
 | 2026-10-04 | C23-fin | Cierre en ENTREGAS (Te, hilos, ISA, P02/P08/P09/VNNI); TAREAS→HECHO | veredicto: CPU con margen pero manda waitB | - | Entregado |
 | 2026-10-04 | C26-bis | bench.py 6+6: B1 −0,16%±1,51, B2 +0,08%±2,91 (IC incluye 0); prod restaurada md5 OK | P08 se queda archivado; METRICAS actualizado (N17) | - | Archivado |
+| 2026-10-04 | C27-AB | FLAGB B1 6+6: −1,25%±1,68 (IC incluye 0, sin B2); perfil FLAGB: waitB 10,2 (no baja de 8-9) | palanca 1 refutada como está; prod restaurada | - | Revisar |
 | 2026-10-04 | C27-C28 | C27 OK (compila sin lock, A/B motor primero); C28 a desformatear (layer_major.cpp + gancho) | - | - | En curso |
 | 2026-10-04 | N20 | Acelerar: -j12 en crítico sin locks (C27 en marcha), solo target motor, ccache→Adrián, A/B B1 primero | - | - | Vigente |
 | 2026-10-04 | ccache | Instalado ccache 4.9.1 (apt, con sudo); binario C27 2ffae239 listo (falta commit obrero para A/B) | - | - | A/B pdte |
