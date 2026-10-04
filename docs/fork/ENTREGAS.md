@@ -139,3 +139,17 @@ Estado: medida (0.1.39 + `FETCH_ADMIT` + tope 3072; perfil retirado después).
 - **B2**: ~43 ms/ventana, mismo reparto.
 - **Nodos del grafo**: ventana de 1 token **3.149** nodos; 3 tokens 3.226; 4 tokens 3.265 (casi todo type0 + ~12 memcpy).
 - Sin `ncu` en la máquina: no hay DRAM throughput de kernels.
+
+## Orden 11. VRAM: quién la usa y si caben más expertos
+
+Estado: medida. **Sin aplicar nada** (espera validación).
+
+- **Procesos en la 3060**: `engine/strata` 11.098 MiB + `llama-server` de beellama (:8082, micro-LLM) **246 MiB**.
+  Sin escritorio en la GPU. **No quito el micro-LLM sin decirlo**: son 246 MiB (~180 huecos).
+- **Pico real** (muestreo cada 100 ms durante prefill de ~96K tokens + imagen + B1; 1.239 muestras): usado máx.
+  **11.440 MiB** → **mínimo libre 848 MiB**.
+- **Cálculo de la orden** (hueco ≈ 4,96 GiB / 3.694 ≈ 1,376 MiB): (848 − 256) / 1,376 ≈ **430 huecos más** →
+  `--expert-cache` ≈ **4.124** (hoy `auto` → 3.694).
+- **Veredicto propuesto**: subir a ~4.100 huecos **si** Claude lo valida; son +12 % de caché. Nota: el pico incluye
+  los búferes del prefill largo, que toma prestados huecos — con más huecos fijos, el prefill largo tiene menos
+  margen. Alternativa: quitar el micro-LLM (:8082) y sumar sus 246 MiB.
