@@ -8,6 +8,12 @@
 # siempre habilitado: en cuanto :8080 suelta su modelo, Strata carga solo.
 set -uo pipefail
 F=/home/bazzite/Strata
+
+# Expertos int8 fusionados en el prompt path (moe_fused_iq, pack nativo): medido en la 3060 +5,2% de
+# lectura de prompt a 12,3K tokens, con la salida identica al camino MMQ (docs/fork/MEDICION_RONDA10.md).
+# STRATA_PF_FUSED=0 lo apaga (A/B). El motor hereda el entorno de server.py (env = dict(os.environ)).
+export STRATA_PF_FUSED="${STRATA_PF_FUSED:-1}"
+
 NEED_MIB=${STRATA_NEED_VRAM_MIB:-6500}
 M=$(cat "$F/.current-model" 2>/dev/null || echo swift-iq2_xs)
 CFG="$F/strata-${M}.json"
