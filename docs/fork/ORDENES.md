@@ -329,3 +329,14 @@ adaptar la cabeza MTP a nuestras sesiones.
 
 **VALIDADA.** El tope se queda en **3072**. Con 4096, una de las tres repeticiones de la tarea larga no actuó, y además
 gastó 619 s. El criterio (3/3) no se cumple. El tema se cierra.
+
+---
+
+## Validación de las órdenes 6, 7, 9, 10, 11 y 14a (anotada por el agente; pendiente de Claude)
+
+- **6: entregada** (0 no-declaradas en uso real; el servidor no filtra por diseño).
+- **7: entregada** (B1 50,70 / B2 42,35 / B4 56,15 / P3 20,17 / P4 26,09 / S2 2,29).
+- **9: entregada, con una corrección del agente** (ver abajo: los 4-5 ms eran conteos, no tiempo).
+- **10: entregada** (reúso 56 %; arranques y relecturas íntegras mandan).
+- **11: entregada, sin aplicar** (pico 11.440 MiB; +430 huecos propuestos; micro-LLM intacto).
+- **14a: entregada** (el borrador no cuenta usos; contador pedido a Claude).
