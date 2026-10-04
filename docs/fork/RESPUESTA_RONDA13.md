@@ -18,7 +18,7 @@ Hay tres formas. Van por fases, de menos a más trabajo:
 Hasta ahora `server.py` rechazaba `--lazy` con cualquier visión ("lazy loading is text-only"). Vuestro
 `serve-strata.sh` usa `--lazy` para compartir la GPU con :8080.
 
-**Cambio en esta rama** (commit de esta nota, `serve/server.py`):
+**Cambio en esta rama** (commit `883937e`, `serve/server.py`):
 
 - `--lazy` solo se rechaza si el codificador va en la **GPU**, que cogería su VRAM al arrancar.
 - Con `"gpu": false`, el codificador solo usa RAM, arranca con el servidor, y el motor sigue cargando en la primera
@@ -28,7 +28,7 @@ Hasta ahora `server.py` rechazaba `--lazy` con cualquier visión ("lazy loading 
 Pasos en vuestro motor (`~/Strata`):
 
 1. **Traer el cambio:** `git fetch fork3060 claude/strata-rtx3060-optimization-zfgxq8`, y
-   `git cherry-pick <este commit> -- serve/server.py serve/test_server.py docs/DETAILS.md`. Mejor por fichero, con
+   `git cherry-pick 883937e -- serve/server.py serve/test_server.py docs/DETAILS.md`. Mejor por fichero, con
    `git checkout fork3060/... -- <fichero>` si choca con lo vuestro.
 2. **En `strata-swift-iq2_xs.json`**, copiad la sección `"vision"` de `strata-iq2_xs.json` con:
    - `"gpu": false`;
