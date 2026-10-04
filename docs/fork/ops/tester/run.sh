@@ -43,8 +43,14 @@ run_one() { # $1 id  $2 timeout_ms  $3 prompt
   fresh_session
   t0=$(date +%s)
   herdr agent prompt tester "$prompt" >/dev/null 2>&1
-  herdr agent wait tester --until working --timeout 60000 >/dev/null 2>&1  # arranca (si sigue idle, el siguiente expira igual)
-  if herdr agent wait tester --timeout "$to" >/dev/null 2>&1; then
+  # espera por artefacto (tester no reporta 'working' observable): RESPUESTA.txt nueva, o timeout
+  waited=0; step=5; maxwait=$((${to%000})); [ "$maxwait" -lt 30 ] && maxwait=30
+  while [ ! -f "$SBX/RESPUESTA.txt" ] || [ "$(stat -c %Y "$SBX/RESPUESTA.txt" 2>/dev/null || echo 0)" -lt "$t0" ]; do
+    sleep $step; waited=$((waited+step))
+    [ "$waited" -ge "$maxwait" ] && break
+  done
+  herdr agent wait tester --timeout 15000 >/dev/null 2>&1  # deja asentar (responde en curso -> siguiente prueba espera igual)
+  if [ -f "$SBX/RESPUESTA.txt" ] && [ "$(stat -c %Y "$SBX/RESPUESTA.txt")" -ge "$t0" ]; then
     r="$SBX/RESPUESTA.txt"
     case "$id" in
       T1) [ -f "$r" ] && [ "$(tr -d ' \n\r' < "$r")" = "5" ] && ok=1; detail="RESPUESTA==5";;

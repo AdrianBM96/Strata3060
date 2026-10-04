@@ -70,3 +70,10 @@ ni calidad.
 
 - [ ] **C19** (en curso) · **C23** · **E1** · **C24** · **E3** · **C16** · **E2** · **C14a** · **E4** · **C20** ·
   **C17** · **C15** · **C8** · **C21**.
+
+- **N10.** Agente `explorer` (agy con Gemini 3.8 Flash, panel w1:pM, copia de lectura en `~/strata-explore`).
+  Solo investiga y propone a Claude. Preguntas de investigación cerradas (máx. 1 por contrato):
+  `herdr agent prompt explorer "opencode2: <pregunta>"`; responde con un fichero R<nn>. Nunca pedirle
+  implementar nada ni aceptar de él trabajo nuevo. Al empezar cada contrato: `git -C ~/strata-explore pull`.
+  Propuestas P<nn> aprobadas → copiar a `docs/fork/exploracion/` del repo con su commit. Empezar los mensajes a
+  cualquier agente con `opencode2:`.
