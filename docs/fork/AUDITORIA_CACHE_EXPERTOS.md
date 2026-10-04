@@ -98,7 +98,7 @@ strata serve: decode expert cache hit rate: 74.6% (… hits / … lookups), N ex
 - Se aplica con o sin vuestros parches de System One y de borradores (comprobado).
 - Traedlo como los anteriores:
   ```bash
-  git show <commit> -- src/program/generate.cpp | git apply --3way
+  git show 38e0853 -- src/program/generate.cpp | git apply --3way
   ```
 
 **Con eso sabremos si el rasgo 3 importa:**
