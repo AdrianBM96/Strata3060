@@ -6,6 +6,16 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 SBX=/tmp/tester-sbx
+LOCK=/tmp/strata-motor.lock
+# N6 CANDADO DEL MOTOR: nadie toca el motor mientras tester corre (y viceversa).
+if [ -e "$LOCK" ]; then echo "CANDADO activo ($(cat "$LOCK" 2>/dev/null | head -1)): espera a que termine."; exit 1; fi
+{
+echo "quien=run.sh $1"
+echo "juego=$1"
+echo "inicio=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo -n "config="; md5sum /home/bazzite/Strata/engine/strata 2>/dev/null | cut -d' ' -f1
+} > "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
 RES="$DIR/resultados/$(date -u +%Y%m%d-%H%M)-$1.md"
 mkdir -p "$DIR/resultados"
 

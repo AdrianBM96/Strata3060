@@ -64,3 +64,11 @@ que no esté subido y documentado.
   (máx. 1 página).
 - [ ] **C21** (orden de Adrián). Nuestra versión contra Strata 0.1.39 virgen. Recursos: motor/GPU (A/B con swaps).
   Va al final, con la cola vacía.
+
+- **N6.** CANDADO DEL MOTOR (`/tmp/strata-motor.lock`). 1) Antes de lanzar tester, crear el lock con: quién,
+  qué juego, hora de inicio y config del motor. Borrarlo al terminar, incluso si falla (`trap` en run.sh).
+  2) Mientras exista, PROHIBIDO: reiniciar, parar o redesplegar el motor o litellm; cambiar flags o variables;
+  lanzar bench.py, logpos-compare o cualquier petición a :8081/:4000; compilar con más de 2 hilos (`-j2` máx. con
+  `nice -n 19`); cache-sim o lo que use >1 núcleo minutos. Sí se puede: leer, editar, scripts, documentar.
+  3) Antes de CUALQUIER acción de esa lista, comprobar el lock y esperar. 4) Lock de >40 min: avisar a Claude, no
+  borrarlo. 5) Al revés igual: nada de tester mientras corre un benchmark propio.
