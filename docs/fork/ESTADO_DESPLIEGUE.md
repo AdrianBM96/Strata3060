@@ -111,3 +111,12 @@ herdr agent start <nombre> --kind pi --pane <pane> -- /home/bazzite/.local/bin/a
 ```
 
 Verificado de extremo a extremo (responde por ada-next → Strata). En la web sale como agente `pi`.
+
+## Máquinas en herdr (`herdr machine`)
+
+| Máquina | Acceso | Estado |
+| --- | --- | --- |
+| mac-mini (100.98.211.55) | SSH `nicoaisdr@` con clave (instalada) + herdr 0.9.3 remoto | añadida y enabled |
+| macbook-air (100.99.86.60) | SSH `31017423Z@` con clave (instalada) + herdr 0.9.3 remoto | añadida y enabled |
+
+Desde herdr se controlan sus panes/agentes igual que en local.
