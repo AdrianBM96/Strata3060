@@ -1,0 +1,15 @@
+[Unit]
+Description=Oficina agentica v4 (monitor visual herdr, solo lectura + envios con token)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /tmp/opencode/wt-C30/oficina/server.py
+WorkingDirectory=/tmp/opencode/wt-C30/oficina
+Restart=on-failure
+# El token vive en ~/.config/strata-oficina/token (modo 600); la UI lo pide una vez.
+# Puerto 8090 por defecto (arg 1 = otro puerto). NO arrancar si el bench tiene lock
+# y el motor esta midiendo: el estado pasa solo a intervalo 30 s.
+
+[Install]
+WantedBy=default.target
