@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C23 GB/s+hilos+ISA (yo, con lock) | wt-C16 portando | wt-C14a verificado+P08 | 2026-10-04 22:21 UTC
+ESTADO: C23 cerrando (yo) | C26 creado, wt-P08 paso b | wt-C16 portando | prod OK | 2026-10-04 22:24 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -32,3 +32,5 @@ ESTADO: C23 GB/s+hilos+ISA (yo, con lock) | wt-C16 portando | wt-C14a verificado
 | 2026-10-04 | C23-Te | Barrido T_e=1,4,8,16,32,64 × IQ2_S/XXS, 6 hilos (te_sweep, best-of-20) | lineal: ~70+26·T_e µs (T_e=12→~380, no 60: E4-PREP refutado); S≈XXS; 6 hilos | - | Clave para E4 |
 | 2026-10-04 | C14a-cod | Obrero2 entrega wt/C14a fb4b62b (idéntico a dedda7a, build OK) | verificado diff vacío + binario; integración a su turno | - | Código listo |
 | 2026-10-04 | N13+E4 | N13 (parciales ≤3 líneas, hora date -u, línea propia sigue); E4 tras E3 con corte T_e≤3 | - | - | Vigente |
+| 2026-10-04 | prod-ck | Tras restart mtmin-ab (22:08): config producción exacta | mtmin.conf borrado, sin MT_MIN en environ; binario intacto 13:32 md5 056819f9 (0 refs MTP_HIST: var inerte); activos PF_FUSED=1, FETCH_ADMIT=1, PROFILE_HEAT_MIN, MTP_HIST_FILE | 056819f9 | Producción OK |
+| 2026-10-04 | C26 | Kernel CPU IQ2 (tras C23): VNNI, R2/R4, P09 con te_sweep+parity; CPU-KERNELS al repo; E4 al final (+3,7%) | grid 8KB L1 (ggml-common.h:758) y vpshufb lane-local (iq_avx2:314...) verificados; wt-P08 hace paso b | - | En curso |

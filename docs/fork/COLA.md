@@ -70,12 +70,15 @@ ni calidad.
 ## Cola (por orden)
 
 - [x] **C19** hecha (batería 2× HUMO + 2× CARGA, todo PASA) · [x] **C22** hecha (techo v2: precarga ≤1 ms, manda CPU).
-- [ ] **C23** (en curso, mis medidas: T_e=1,4,8,16,32,64 por tipo, 6 hilos; P02/P06/P08/P09) · **E1** · **C24**
-  (simplificado: bench-prefill 32K+86K con `STRATA_PREFILL_TIMING=1`, sin perfil nuevo; +burbuja del sync del
-  histograma por capa: fin-copias-L → primera-copia-L+1; +confirmar ~72 ms/capa PCIe) · **E3** · **E4**
-  (recalculada con corte real: CPU compensa solo si T_e≤3; E4-PREP suponía 60 µs, medido ~70+26·T_e) ·
-  **C16** (obrero1, wt-C16) · **E2** · **C14a** (código obrero2 verificado idéntico; medir a su turno) ·
-  **C20** · **C17** · **C15** (degradada) · **C8** (+P05 c) · **C18** · **C21**.
+- [ ] **C23** (en curso, mis medidas) · **C26** (obrero, wt-P08: kernel CPU IQ2 en iq_avx2.cpp+repack; pasos
+  a) VNNI b) R2/R4 c) P09, cada uno con te_sweep T_e=1,4,12 + parity bit-exacta; luego A/B B1 6+6) · **E1** ·
+  **C24** (simplificado + burbuja sync) · **E3** · **C16** (obrero1, wt-C16) · **E2** · **C14a** (código
+  verificado; medir a su turno) · **C20** · **C17** · **C15** (degradada) · **C8** (+P05 c) · **C18** ·
+  **E4** (+3,7 % prefill recalculado, al final) · **C21**.
+- Verificado con file:line (no basar nada en lo contrario): `iq2s_grid` es `uint64_t[1024]` = 8 KB
+  (`third_party/llama.cpp/ggml/src/ggml-common.h:758`, macro `:472`) → residente en L1, accesos escalares
+  (`iq_avx2.cpp:155-158,404-405`); `vpshufb` solo indexa 16 entradas por lane (signos/escalas,
+  `iq_avx2.cpp:314,325,394,406`) → no puede indexar tabla de 1024.
 
 - **N10.** Agente `explorer` (agy con Gemini 3.8 Flash, panel w1:pM). Solo investiga y propone a Claude.
   Preguntas de investigación cerradas (máx. 1 por contrato):
