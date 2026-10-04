@@ -64,6 +64,7 @@ como tales.
 | **[INTEGRACION_V0139.md](INTEGRACION_V0139.md)** | Strata v0.1.39 integrada en el fork (merge, nada perdido): qué trae para la 3060 (top-k 11x más rápido a 512K, kernels de GPU del decode), cómo desplegarla con vuelta atrás, el parche de System One regenerado, y qué medir |
 | **[RESPUESTA_FETCH_ADMIT.md](RESPUESTA_FETCH_ADMIT.md)** | `STRATA_FETCH_ADMIT` en el motor (lo copiado por PCIe se queda en la caché, sin copia extra; opcional, con todas sus condiciones de seguridad), cómo probarlo, y el plan para el tope de pensamiento (3072/4096 según el `max_tokens` real) |
 | **[PLAN_ARQUITECTURA.md](PLAN_ARQUITECTURA.md)** | Cambiar la arquitectura antes de exprimirla: precarga por predicción (bit a bit), rutas que saben qué hay en la caché, y un borrador adaptado a nuestro uso. Órdenes 15-17 |
+| **[TRASPASO_SESION.md](TRASPASO_SESION.md)** | Traspaso para retomar en otra sesión: contexto, decisiones, problemas resueltos y tareas pendientes exactas |
 | **[SYSTEMONE.md](SYSTEMONE.md)** | System One completo: el cambio del motor, la API, operación, actualización y rollback |
 | **[ops/](ops/)** | Los ficheros de despliegue (`ada-decide.py`, `fit-calibration.py`, `logpos-compare.py`, `apply-tuning.sh`, `free-vram.sh`, `strata-switch.sh`, `serve-strata.sh`) y sus tests |
 
