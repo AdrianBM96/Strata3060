@@ -17,7 +17,6 @@
 | 8081 | **Strata** `ada-next` | `swift-iq2_xs`, 512K ctx, KV `int8`, `--spec 4 --mtp`, `--ple-gguf`, **`STRATA_PF_FUSED=1`**, `--prefill auto` (elige 6144), caché de expertos auto (~3.700 slots) |
 | 8080 | ~~**BeeLlama.cpp**~~ **RETIRADO** | Los modelos pequeños locales (tiel, qwopus, ornith, neohorse…) ya no se usan: servicio `ada-router.service` **deshabilitado y parado**, entradas de litellm retiradas. **Ficheros intactos** (`beellama/`, `models.ini`, GGUF) por si se quieren recuperar. |
 | 4000 | **litellm** (`beellama/litellm/config.yaml`) | `ada-next`→strata:8081; **`ada-praxis`→strata:8081** (antes nex-mini:8080); + fallbacks cloud (MiniMax, Gemini, GLM…) |
-| 7317 | **herdr web UI** | `herdr-server.service` (usuario). Chat + terminal de los agentes desde navegador/móvil. Por tailnet: **https://bazzite.tailfe8578.ts.net** (`tailscale serve`, solo tailnet). Emparejar otro login/dispositivo: Settings → Devices |
 | 8087 | **ada-decide** (System One) | `~/Strata/ada-decide.py` |
 
 Servicios de usuario: `strata.service`, `ada-decide.service`, `litellm-proxy.service`.
