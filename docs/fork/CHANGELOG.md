@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C19 validacion (run.sh tiempos reales) corriendo | C16 codigo hecho | ninguno | 2026-10-04 21:58 UTC
+ESTADO: C19 entregada | siguiente C23 | ninguno | 2026-10-04 21:59 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -24,3 +24,4 @@ ESTADO: C19 validacion (run.sh tiempos reales) corriendo | C16 codigo hecho | ni
 | 2026-10-04 | C11 | CERRADA sin adoptar (+38 huecos; reserva intacta); A/B parado, auto restaurado | - | Cerrada |
 | 2026-10-04 | C22 | Techo teórico (sin STREAM) | decode real 44ms vs 30 suma / 15-18 max; +5pts~-2ms | - | STREAM pendiente |
 | 2026-10-04 | E3 | KV persistente (estudio) | 12MB/1K int8; NVMe 3,7GB/s; motor no restaura de fichero; techo ~20s/sesion | - | Estudio hecho |
+| 2026-10-04 | C19 | Batería validada (timing real) | HUMO 2x (11s); CARGA 2x T1-T7 todo PASA (T1 10s, T2 45s, T3 26-36s, T4 20-26s, T5 20s, T6 26-35s, T7 6-12s) | - | Entregada |
