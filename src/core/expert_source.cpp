@@ -2078,8 +2078,54 @@ void expert_pool_dispatch_multi(ExpertDispatch& d, const float* x_f, const int32
         }
         P.start[groups] = entries;
         const uint64_t bb = lay.blob_bytes(d.layers);
+        // STRATA_FETCH_ADMIT (docs/fork/ops/cache-sim.py, `fetch-admit`): the blobs of the PCIe share cross the link
+        // anyway, so each one is kept in the cache - copied straight into the slot of the least-used resident of this
+        // layer that this window did not route - while it has been used more than that resident.  Same bytes over PCIe,
+        // and this window's result is unchanged (the GPU reads the same blob at another address); from the next window
+        // the expert is a VRAM hit.  Victims: the `fetches` least-used, ascending; candidates in routing order, the
+        // first that does not beat its victim ends the admissions (as the simulator).
+        const bool admit_on = d.fetch_admit && P.admit2 != nullptr && P.pcie_mode == 2 && fetches > 0 &&
+                              d.host_res_w != nullptr && !d.usage.empty();
+        int32_t vict[64];
+        int nv = 0;
+        const size_t rbase = (size_t) d.layers * (size_t) d.n_expert;
+        if (admit_on) {
+            thread_local std::vector<uint8_t> routed;
+            if ((int64_t) routed.size() < d.n_expert) routed.assign((size_t) d.n_expert, 0);
+            for (int64_t i = 0; i < n; ++i)
+                if (ids[i] >= 0 && ids[i] < d.n_expert) routed[(size_t) ids[i]] = 1;
+            const float* u = d.usage.data() + rbase;
+            for (int32_t x = 0; x < (int32_t) d.n_expert; ++x) {
+                if (d.host_res_w[rbase + (size_t) x] < 0 || routed[(size_t) x]) continue;
+                if (nv < fetches) vict[nv++] = x;
+                else if (u[x] < u[vict[nv - 1]]) vict[nv - 1] = x;
+                else continue;
+                for (int j = nv - 1; j > 0 && u[vict[j]] < u[vict[j - 1]]; --j) std::swap(vict[j], vict[j - 1]);
+            }
+            for (int64_t i = 0; i < n; ++i)
+                if (ids[i] >= 0 && ids[i] < d.n_expert) routed[(size_t) ids[i]] = 0;
+        }
+        int vi = 0;
+        bool admitting = admit_on;
         for (int q = 0; q < fetches; ++q) {       // the PCIe groups: staging slot q, entries after the VRAM ones
             const int64_t i0 = pcie_i0[q];
+            if (P.admit2 != nullptr && d.fetch_admit) {
+                unsigned long long to = 0;
+                const int32_t e = ids[i0];
+                const float* u = d.usage.data() + rbase;
+                if (admitting && vi < nv && u[e] > u[vict[vi]]) {
+                    const int32_t slot = d.host_res_w[rbase + (size_t) vict[vi]];
+                    to = (unsigned long long) (d.cache_base + (d.cache_slot_off ? (size_t) d.cache_slot_off[slot]
+                                                                                : (size_t) slot * (size_t) d.cache_blob));
+                    d.host_res_w[rbase + (size_t) vict[vi]] = kNotResident;   // not routed in this window: nobody reads it
+                    d.host_res_w[rbase + (size_t) e] = slot;                   // resident from the next window
+                    ++vi;
+                    ++d.fetch_admitted;
+                } else {
+                    admitting = false;
+                }
+                P.admit2[q] = to;
+            }
             P.ptr2[q] = P.pcie_mode != 0 ? (unsigned long long) d.src->device_alias(d.layers, ids[i0])
                                  : P.staging + (unsigned long long) q * (unsigned long long) bb;
             P.start2[q] = entries;

@@ -62,6 +62,7 @@ como tales.
 | **[MEDICION_FETCH_ADMIT.md](MEDICION_FETCH_ADMIT.md)** | `fetch-admit` probado con nuestra traza: **GANA y no cuesta PCIe**. eng.hit 64,58% -> **71,65%** (+7,1 pts) con MENOS swaps (22,94 vs 23,79) y menos MB copiados. Cierra ~3 de los ~23 puntos al techo |
 | **[RESPUESTA_CACHE_EXPERTOS.md](RESPUESTA_CACHE_EXPERTOS.md)** | Caché de expertos: el desajuste explicado (el motor deja fuera los fallos PCIe; simulador validado a 0,3 puntos) y `fetch-admit`, una política que guarda lo que ya cruzó el PCIe sin copiar nada extra |
 | **[INTEGRACION_V0139.md](INTEGRACION_V0139.md)** | Strata v0.1.39 integrada en el fork (merge, nada perdido): qué trae para la 3060 (top-k 11x más rápido a 512K, kernels de GPU del decode), cómo desplegarla con vuelta atrás, el parche de System One regenerado, y qué medir |
+| **[RESPUESTA_FETCH_ADMIT.md](RESPUESTA_FETCH_ADMIT.md)** | `STRATA_FETCH_ADMIT` en el motor (lo copiado por PCIe se queda en la caché, sin copia extra; opcional, con todas sus condiciones de seguridad), cómo probarlo, y el plan para el tope de pensamiento (3072/4096 según el `max_tokens` real) |
 | **[SYSTEMONE.md](SYSTEMONE.md)** | System One completo: el cambio del motor, la API, operación, actualización y rollback |
 | **[ops/](ops/)** | Los ficheros de despliegue (`ada-decide.py`, `fit-calibration.py`, `logpos-compare.py`, `apply-tuning.sh`, `free-vram.sh`, `strata-switch.sh`, `serve-strata.sh`) y sus tests |
 

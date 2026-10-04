@@ -283,6 +283,26 @@ __global__ void rebase_ptrs_kernel(unsigned long long* ptr, const int32_t* n, un
     if (k < *n) ptr[k] = base + (unsigned long long) k * (unsigned long long) bytes;
 }
 
+// STRATA_FETCH_ADMIT: as fetch_blobs_kernel, but blob k lands in `admit[k]` (a cache slot on the device) when that is
+// non-zero, else in staging slot k.  The same bytes cross PCIe either way.
+__global__ void fetch_blobs_admit_kernel(const unsigned long long* __restrict__ src, const int32_t* __restrict__ n,
+                                         uint4* __restrict__ stage, const unsigned long long* __restrict__ admit,
+                                         long long per) {
+    const long long total = (long long) *n * per;
+    for (long long i = (long long) blockIdx.x * blockDim.x + threadIdx.x; i < total;
+         i += (long long) gridDim.x * blockDim.x) {
+        const long long k = i / per, off = i - k * per;
+        uint4* dst = admit[k] != 0ull ? (uint4*) admit[k] : stage + k * per;
+        dst[off] = ((const uint4*) src[k])[off];
+    }
+}
+
+__global__ void rebase_ptrs_admit_kernel(unsigned long long* ptr, const int32_t* n, unsigned long long base, long long bytes,
+                                         const unsigned long long* admit) {
+    const int k = threadIdx.x;
+    if (k < *n) ptr[k] = admit[k] != 0ull ? admit[k] : base + (unsigned long long) k * (unsigned long long) bytes;
+}
+
 __global__ void add_streams_broadcast_kernel(const float* __restrict__ h, const float* __restrict__ e,
                                              float* __restrict__ R, int64_t n, int hc) {
     const int t = blockIdx.y;
@@ -370,6 +390,22 @@ void fetch_blobs(const unsigned long long* src, const int32_t* n, uint8_t* dst, 
 void rebase_ptrs(unsigned long long* ptr, const int32_t* n, uint8_t* base, int64_t blob_bytes, void* stream) {
     rebase_ptrs_kernel<<<1, 128, 0, (cudaStream_t) stream>>>(ptr, n, (unsigned long long) base, (long long) blob_bytes);
     check("rebase_ptrs");
+}
+
+void fetch_blobs_admit(const unsigned long long* src, const int32_t* n, uint8_t* stage, const unsigned long long* admit,
+                       int64_t blob_bytes, int cap, void* stream) {
+    if (cap <= 0) return;
+    if (blob_bytes % 16 != 0) { std::fprintf(stderr, "fetch_blobs_admit: blob size must be a multiple of 16\n"); std::exit(1); }
+    fetch_blobs_admit_kernel<<<48 * 8, 256, 0, (cudaStream_t) stream>>>(src, n, (uint4*) stage, admit,
+                                                                        (long long) (blob_bytes / 16));
+    check("fetch_blobs_admit");
+}
+
+void rebase_ptrs_admit(unsigned long long* ptr, const int32_t* n, uint8_t* base, int64_t blob_bytes,
+                       const unsigned long long* admit, void* stream) {
+    rebase_ptrs_admit_kernel<<<1, 128, 0, (cudaStream_t) stream>>>(ptr, n, (unsigned long long) base, (long long) blob_bytes,
+                                                                   admit);
+    check("rebase_ptrs_admit");
 }
 
 void add_streams_broadcast(const float* h, const float* e, float* R, int64_t n_embd, int hc, int n_tok, void* stream) {

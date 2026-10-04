@@ -72,6 +72,12 @@ void copy_indexed(float* dst, const float* src, int64_t stride, const int32_t* i
 void fetch_blobs(const unsigned long long* src, const int32_t* n, uint8_t* dst, int64_t blob_bytes, int cap, void* stream);
 /// ptr[k] = base + k * blob_bytes for k < *n (the staged copies `fetch_blobs` made).
 void rebase_ptrs(unsigned long long* ptr, const int32_t* n, uint8_t* base, int64_t blob_bytes, void* stream);
+/// STRATA_FETCH_ADMIT: fetch_blobs / rebase_ptrs where blob k goes to `admit[k]` (a device cache slot) when non-zero,
+/// else to staging slot k - the PCIe share of the misses kept in the VRAM cache without a second copy.
+void fetch_blobs_admit(const unsigned long long* src, const int32_t* n, uint8_t* stage, const unsigned long long* admit,
+                       int64_t blob_bytes, int cap, void* stream);
+void rebase_ptrs_admit(unsigned long long* ptr, const int32_t* n, uint8_t* base, int64_t blob_bytes,
+                       const unsigned long long* admit, void* stream);
 
 // ---- the MTP draft layer (src/core/mtp.cpp)
 /// R[t][c][:] = h[t][c][:] + e[t][:]  (the embedding branch added to every stream).

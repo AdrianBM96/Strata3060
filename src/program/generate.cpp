@@ -5437,6 +5437,29 @@ int main(int argc, char** argv) {
             std::all_of(host_res.begin(), host_res.end(), [](int32_t r) { return r >= 0; });
         if (o.adapt_every > 0 && o.adapt_swaps > 0 && !all_experts_resident)
             drive.d.usage.assign((size_t) (g.n_layers * g.n_expert), 0.0f);
+        // STRATA_FETCH_ADMIT=1 (opt-in, for an A/B; docs/fork/RESPUESTA_CACHE_EXPERTOS.md): the PCIe share of each
+        // window's misses is copied straight into cache slots instead of staging, so it stays resident.  Off wherever
+        // the residency table is not the only truth: a layer split, a peer, the resident RAM mode (an eviction must go
+        // back to RAM), the device plan, the zero-doorbell graph, DMA/direct PCIe, or non-blocking adaptive swaps.
+        if (const char* fa = std::getenv("STRATA_FETCH_ADMIT"); fa != nullptr && fa[0] == '1') {
+            const char* why = multi_gpu ? "a layer split"
+                            : peer.valid() ? "a peer GPU"
+                            : drive.d.usage.empty() ? "no adaptive tier (--adapt-every / --adapt-swaps)"
+                            : host_res.empty() ? "no residency table"
+                            : src.complement_ready() ? "the resident RAM mode"
+                            : adapt_nowait() ? "STRATA_ADAPT_NOWAIT"
+                            : nullptr;
+            if (why == nullptr && !ver.set_fetch_admit(true))
+                why = "the device plan, the zero-doorbell graph, or a --pcie-mode other than the copy kernel";
+            if (why != nullptr) {
+                std::fprintf(stderr, "strata serve: STRATA_FETCH_ADMIT is off here: %s\n", why);
+            } else {
+                drive.d.fetch_admit = true;
+                drive.d.host_res_w = host_res.data();
+                std::fprintf(stderr, "strata serve: STRATA_FETCH_ADMIT: the PCIe share of the misses stays in the VRAM "
+                                     "cache\n");
+            }
+        }
         // #477 --expert-profile-save: what the adaptive tier learned, kept across restarts (opt-in; off: `heat` stays
         // empty and nothing below runs).  It needs the adaptive tier's counts and the residency table.
         std::vector<double> heat;
@@ -7091,7 +7114,7 @@ int main(int argc, char** argv) {
             double dt_run = 0, dt_commit = 0, dt_draft = 0;
             int64_t dec_windows = 0, dec_T = 0;
             const int64_t decode_hits0 = drive.d.cache_hits;
-            const int64_t swapped0 = adapt_swapped;
+            const int64_t swapped0 = adapt_swapped, admitted0 = drive.d.fetch_admitted;
             // CS-T: the RAM and file tiers of this request (the mmap source; 0 with the arena)
             const int64_t ram0 = src.ram_reads(), files0 = src.file_reads();
             const uint64_t file_bytes0 = src.file_read_bytes();
@@ -7422,10 +7445,10 @@ int main(int argc, char** argv) {
                                   100.0 * (double) req_offload / (double) (req_look + req_offload),
                                   (long long) (req_look + req_offload));
                 std::fprintf(stderr, "strata serve: decode expert cache hit rate: %.1f%% (%lld hits / %lld lookups)%s, "
-                                     "%lld experts swapped in over %lld windows\n",
+                                     "%lld experts swapped in over %lld windows, %lld kept from the PCIe share\n",
                              100.0 * (double) req_hits / (double) req_look,
                              (long long) req_hits, (long long) req_look, off, (long long) (adapt_swapped - swapped0),
-                             (long long) dec_windows);
+                             (long long) dec_windows, (long long) (drive.d.fetch_admitted - admitted0));
             }
             // the resident RAM mode, cumulative: experts read from experts.bin since the copy was made (what the plain
             // mmap mode reads through the OS file cache, from the SSD when the RAM could not keep it)

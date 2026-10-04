@@ -219,6 +219,9 @@ struct GpuPlanSink {
     unsigned long long* ptr2 = nullptr;
     int32_t* start2 = nullptr;
     unsigned long long staging = 0;
+    /// STRATA_FETCH_ADMIT: per PCIe group, the device address of the cache slot its blob is copied into (0: staging);
+    /// written by the pool only when ExpertDispatch::fetch_admit is on
+    unsigned long long* admit2 = nullptr;
     int64_t staging_cap = 0;
     int64_t cap = 0;
     void (*publish)(void* ctx) = nullptr;
@@ -352,6 +355,11 @@ struct ExpertDispatch {
     GpuPlanSink* plan = nullptr;
     int pcie_num = 0;
     int64_t pcie_experts = 0;      ///< distinct experts the GPU read over PCIe in verify windows
+    /// STRATA_FETCH_ADMIT: keep the PCIe share in the VRAM cache, in place of the least-used resident of the layer that
+    /// the window did not route.  `host_res_w` is the same residency table as `host_res`, writable.
+    bool fetch_admit = false;
+    int32_t* host_res_w = nullptr;
+    int64_t fetch_admitted = 0;   ///< experts kept so (the request's log line)
     /// #588: routed (token, expert) entries the GPU computed from outside its cache in verify windows: read over PCIe
     /// (--pcie-frac, kind 1) or on another GPU (kind 2).  In neither cache_hits nor cache_refused.
     int64_t offload_entries = 0;

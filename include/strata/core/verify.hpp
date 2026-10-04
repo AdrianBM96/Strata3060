@@ -82,6 +82,13 @@ public:
     /// One window: `tokens[0..T)` at positions pos0.., the pool served per layer; `out[t]` = argmax after token t.
     /// The PLE rows are gathered here from `ss.ple_prev` and the tokens.  Captures the T-token graph on first use.
     bool run(int T, const int32_t* tokens, int64_t pos0, PoolMultiFn pool, void* user, int32_t* out, std::string& err);
+    /// STRATA_FETCH_ADMIT: the PCIe share of a window's misses is copied straight into the cache slots the pool chose
+    /// (admit2 in the plan) instead of staging.  Only with the copy kernel (pcie mode 2) and the host plan: refused
+    /// (false) with the device plan or the zero-doorbell graph, which read residency the pool does not update.
+    bool set_fetch_admit(bool on) {
+        fetch_admit_ = on && sink_.pcie_mode == 2 && !device_plan_ && !all_resident_;
+        return fetch_admit_ || !on;
+    }
     /// Diagnostics: row `t` of the last window's head logits (n_vocab floats) to the host. Valid after run().
     bool copy_logits(int t, float* host) const;
     int64_t vocab() const { return next_ ? next_->vocab() : n_vocab_; }
@@ -257,6 +264,7 @@ private:
     std::atomic<bool> released_{false};  ///< #267: release_gpu_waits ran (maybe on the watchdog thread): no more windows
     bool all_resident_ = false;           ///< 100% of experts in [lb_, le_) resident in VRAM: zero-doorbell graph
     bool device_plan_ = false;            ///< E-6: resident-only layers planned on the device (STRATA_VERIFY_DEVICE_PLAN)
+    bool fetch_admit_ = false;            ///< STRATA_FETCH_ADMIT: PCIe-copied blobs land in cache slots (set_fetch_admit)
     uint32_t* skip_ = nullptr;            ///< E-6: per group, the ring whose plan the device built (0: the host's)
     unsigned long long* slot_off_d_ = nullptr;   ///< E-6: the slot offsets on the device
     int64_t lb_ = 0, le_ = -1;           ///< set_stage: the layers this verifier runs (-1: to the last)
