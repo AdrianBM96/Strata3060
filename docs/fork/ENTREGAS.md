@@ -110,3 +110,19 @@ Estado: medida. **El tope se queda en 3072.**
 - **2/3, no 3/3** → según el criterio de la orden, **no sube a 4096**. Además la rep fallida quemó 619 s.
   La primera repetición confirma que con tarea larga el 4096 sigue siendo frágil aunque haya sitio.
 - **Veredicto propuesto: se queda en 3072.**
+
+## Orden 7. Línea base nueva
+
+Estado: medida (6 pasadas por prueba, config adoptada: 0.1.39 + `FETCH_ADMIT` + tope 3072).
+
+| Prueba | Métrica | Mediana (n=6) |
+| --- | --- | ---: |
+| B1 | decode_tps | **50,70** |
+| B2 | decode_tps | **42,35** |
+| B4 | decode_tps | **56,15** (borradores 98 %) |
+| P3 | ttft_s | **20,17** |
+| P4 | ttft_s | **26,09** |
+| S2 | wall_s | **2,29** |
+
+Incidencia: B4 se saltó las 6 primeras (mi `bench.py` vive en `~/Strata/bench/`, pero `REPO` espera
+`docs/fork/ops/bench.py` para el corpus). Relanzado desde el sitio correcto: 6/6 bien.
