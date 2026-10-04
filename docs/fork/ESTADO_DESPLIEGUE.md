@@ -60,6 +60,20 @@ modelos que retiramos). Strata **sirve `/v1/messages` nativamente** (streaming, 
 **Revertir a tu cuenta Anthropic**: `cp ~/.claude/settings.json.bak-20261004-pre-ada-next ~/.claude/settings.json`
 (y borrar el alias y `~/.config/ponytail/config.json` si se quiere).
 
+## Otros agentes (pi, omp, ada-cli) — también con ada-next
+
+| Herramienta | Config | Cómo queda |
+| --- | --- | --- |
+| **pi** | `~/.pi/agent/models.json` (+ `settings.json`) | modelo `ada-next` añadido al proveedor `litellm-gateway`; `defaultProvider=litellm-gateway`, `defaultModel=ada-next` |
+| **omp** | `~/.omp/agent/models.yml` (+ `config.yml`) | `ada-next` añadido al proveedor `adaserver`; `modelRoles.default: adaserver/ada-next:high` |
+| **ada-cli** | `~/.ada/agent/models.json` (+ `settings.json`) | `ada-next` añadido al proveedor `litellm-local`; `defaultProvider=litellm-local`, `defaultModel=ada-next` |
+
+Los tres hablan con **litellm (:4000)**, que enruta `ada-next` a Strata. Verificado: `pi` → "PI OK" (`ada-next`),
+`omp` → "OMP OK" (`adaserver/ada-next`), `ada-cli` → "ADA-CLI OK" (`model: ada-next` en el log).
+
+**`ada-cli` estaba roto**: su wrapper ejecutaba un Node 22 que vivía en `/tmp` (borrado al reiniciar). Se apuntó
+al Node de nvm. Copias `.bak-20261004-ada-next` de cada config.
+
 ## Reconstrucción rápida tras un reinicio
 
 ```bash
