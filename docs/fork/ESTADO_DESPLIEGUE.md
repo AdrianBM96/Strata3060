@@ -37,6 +37,29 @@ Servicios de sistema: `gpu-fan-100.service` + `.timer` (ventilador al 100%).
 - Remotos: `origin` = Niko1221/Strata (shallow, ahora completo), `architectds` (fork), `adesign` (clon local).
 - **Antes de tocar el motor**, ver `PORT_FORK.md` (método y ramas de port).
 
+## Claude Code (CLI) — apuntado a ada-next
+
+Configurado para funcionar **solo con Strata** (ada-next), **sin pedir permisos** y con **ponytail** (código
+mínimo → más rápido). Todo reversible.
+
+| Qué | Dónde | Valor |
+| --- | --- | --- |
+| Modelo / endpoint | `~/.claude/settings.json` → `env` | `ANTHROPIC_BASE_URL=http://127.0.0.1:8081`, `ANTHROPIC_API_KEY=dummy`, `ANTHROPIC_MODEL=claude-sonnet-4-5`, `ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4-5` |
+| Saltar permisos | `~/.claude/settings.json` → `permissions.defaultMode` | `"bypassPermissions"` (equivale a `--dangerously-skip-permissions`; solo vale desde settings de **usuario**) |
+| Flag literal | alias en `~/.bashrc` | `alias claude='claude --dangerously-skip-permissions'` |
+| Ponytail (más rápido) | `~/.config/ponytail/config.json` | `{"defaultMode": "full"}` (niveles: `off`/`lite`/**`full`**/`ultra`) |
+| Ponytail habilitado | `~/.claude/settings.json` → `enabledPlugins` | `ponytail@ponytail: true` |
+
+**Por qué Strata directo y no litellm**: litellm (`:4000`) falla en `/v1/messages` (sus fallbacks apuntan a
+modelos que retiramos). Strata **sirve `/v1/messages` nativamente** (streaming, tools, system) → va directo a
+`:8081`.
+
+**Verificado**: Claude Code escribió y ejecutó código con ada-next, sin pedir permisos, y con ponytail activo
+(el hook se dispara y escribe una sola línea donde antes iría un bucle).
+
+**Revertir a tu cuenta Anthropic**: `cp ~/.claude/settings.json.bak-20261004-pre-ada-next ~/.claude/settings.json`
+(y borrar el alias y `~/.config/ponytail/config.json` si se quiere).
+
 ## Reconstrucción rápida tras un reinicio
 
 ```bash
