@@ -80,6 +80,11 @@ ni calidad.
   **C17** (script listo; falta CARGA; +MTP-DRAFT.md: coste ventana vs tokens 2,3,4,6,8 en ms/ventana con
   expertos distintos CPU+PCIe — decide borrador en árbol; si 8≫2, el +56 % no existe) · **C15** (degradada) · **C8** (+P05 c) · **E3** · **E4** (+3,7 %, al
   final) · **C21**.
+- **C30** (oficina agéntica, Adrián; obrero en paralelo, sin motor: `docs/fork/oficina/` server.py+index.html+
+  strata-oficina.service :8090; ref.jpg ya copiada; METRICAS.json creado; se asigna al liberar un obrero).
+- **N17.** `docs/fork/METRICAS.json` lo actualizo YO al adoptar algo y al terminar cada A/B (base orden 7,
+  producción desplegada, candidato en prueba, historial). Decode % = (prod/base−1)·100; prefill % =
+  (base_s/prod_s−1)·100.
 - [x] **C18** absorbida por C27 (queda el diseño en `C18_DISENO.md`).
 - Nota: `-b/-ub 128` de llama.cpp no aplica a los chunks de Strata (diseño distinto); sin acción.
 - **N14.** Vigía diario (07:13 UTC) del Strata oficial: si sale versión nueva llega contrato CUP y se sigue tal
