@@ -110,3 +110,128 @@ Con todo lo adoptado (0.1.39 + `FETCH_ADMIT` + el tope), una respuesta de B1 y o
 
 Con esto elijo el siguiente cambio de motor que no altere ningún bit. Los candidatos: MMVQ con 2 filas por bloque, la
 copia PCIe en paralelo con los aciertos, el *pipelining* del GR y la rejilla de aciertos.
+
+## Validación de la orden 4
+
+**VALIDADA.** El tope 3072 se queda. La verificación por efecto (~12K caracteres de pensamiento, frente a 31K+) y las
+dos tareas largas a 25/25 bastan.
+
+**Nota aparte, sin orden:** opencode sin `--model` va a un modelo en la nube bloqueado por país. Si Adrián quiere,
+poned `ada-next` como modelo por defecto de opencode, para que no falle al arrancar sin argumentos.
+
+---
+
+## Órdenes 10-14: lo que queda sin medir (2026-10-04)
+
+Repaso de todo `docs/fork/`. Quedan palancas sin medir. Ninguna cambia el texto que sale.
+
+**Orden de ejecución:**
+
+- La 10 se puede hacer ya: solo lee.
+- La 11, después de la 7, contra la línea base nueva.
+
+## 10. Reutilización de prefijos en agentes (R5 de `PLAN_MAESTRO.md`, nunca medida)
+
+Un agente reenvía casi todo el contexto en cada turno. El prefill que no se hace ahorra más que cualquier kernel.
+
+- **Qué:** de los logs de una semana real (puede ir junto a la 6), por petición:
+  - cliente;
+  - tokens del prompt;
+  - `RESUME n` (`generate.cpp:6701`);
+  - tokens leídos de nuevo;
+  - TTFT.
+- **Para cada turno con < 90 % reutilizado,** la causa:
+  - compactación;
+  - un cambio pronto en el prompt (fecha, `git status`, lista de herramientas, orden de los mensajes);
+  - expulsión de la caché porque otro cliente (System One, un subagente) ocupó el hueco;
+  - u otra.
+- **Entrega:**
+  - % de tokens de prompt reutilizados por cliente;
+  - segundos de prefill que se gastaron en releer;
+  - el reparto de causas;
+  - los `--prompt-cache`, `--prompt-cache-every` y `--prompt-cache-root` actuales.
+- **Después decido:** más huecos, `--prompt-cache-every` menor, o un arreglo en el servidor si la causa es un prefijo
+  que cambia.
+
+## 11. VRAM: quién la usa y si caben más expertos (después de la 7)
+
+Hoy quedan 627 MiB libres, y 450 MiB más dieron +318 huecos y +2,8 % de decode (`MEDICION_VRAM_CONTEXTO.md`).
+
+1. `nvidia-smi --query-compute-apps=pid,name,used_memory --format=csv` y `nvidia-smi`: ¿hay algún proceso de escritorio
+   (Xorg, gnome-shell, kwin, Steam) que use la 3060? Si lo hay, decidme cuánto ocupa antes de quitar nada.
+2. **El pico real:** muestreo de `nvidia-smi --query-gpu=memory.used -lms 100` durante:
+   - el prefill más largo que tengáis (86K, o `bench-prefill.py` a 128K);
+   - una imagen;
+   - B1.
+
+   **Entrega:** el mínimo de VRAM libre.
+3. **Si el mínimo libre es > 400 MiB:** `--expert-cache <huecos de hoy + (mínimo libre − 256 MiB) / tamaño de hueco>`.
+   A/B contra la 7 con B1, B2 y B4, y la prueba de pico otra vez: ningún OOM.
+4. **`--kv-resident 16384`** (R4, pendiente desde la ronda 5):
+   - la VRAM que libera;
+   - los huecos que gana;
+   - B1/B2;
+   - el acierto de bloques KV y el decode con 32K y 86K de contexto (por si el streaming del KV pierde).
+- **Criterio:** se queda lo que gane sin OOM en el pico y sin bajar el decode a 86K.
+
+## 12 y 13: RETIRADAS
+
+Adrián tiene razón, ya estaban vistas:
+
+- **12 (PCIe):** `RESPUESTA_RONDA8.md` §2 ya comprobó que la sonda usa memoria fijada y DMA. Los 11 GB/s son de la
+  máquina, y lo que falte está en la BIOS, que no se puede tocar en remoto. El trabajo sigue siendo **esconder la
+  copia**, no acelerarla (orden 9).
+- **13 (reloj de la VRAM):** se podría poner por software, pero `RESPUESTA_RONDA7.md` §6 ya concluyó que importa poco:
+  las GEMV usan el 44-61 % del ancho de banda y las limita el kernel, no la memoria. El reinicio remoto no es problema
+  (ya comprobado), así que **solo se reabre si el perfil de la orden 9 muestra kernels pegados al ancho de banda**. Lo
+  que hay ahí se busca con la orden 9.
+
+## 14. Caché de expertos: lo que queda por medir
+
+La caché **no está cerrada**:
+
+- el motor acierta 73-78 %;
+- el techo teórico del simulador (Belady) está en ~85 %.
+
+La orden 8 prueba dos políticas. Esta mira las otras dos vías. Solo hay que medir, sin cambiar nada en producción.
+
+**a) La capa del borrador (MTP): 836 MiB con sus 512 expertos siempre en VRAM.**
+
+1. Mirad en el código si el motor ya cuenta el uso de cada experto de esa capa (solo leer; `generate.cpp:3011` es
+   donde se monta).
+2. Si no lo cuenta, añadid un contador opcional:
+   - `STRATA_MTP_HIST=1`;
+   - un `uint32` por experto, sumado en el host donde se enruta el borrador;
+   - al salir, se vuelca a un fichero.
+
+   Con la variable apagada no debe haber ningún coste.
+3. Una sesión real de agente de ≥ 30 minutos.
+
+**Entrega:** qué fracción de los usos cubren los 128, 256 y 384 expertos más usados, y la aceptación del borrador de
+esa sesión.
+
+**Criterio:**
+
+- **Si 256 cubren ≥ 95 %,** escribo el cambio: dejar residentes solo los más usados del borrador. Liberaría ~400 MiB,
+  unos 300 huecos para el modelo principal. Con +318 huecos medimos +2,8 % de decode.
+- **Si no, se descarta.**
+
+**b) ¿Se puede adivinar qué expertos pedirá la capa siguiente?** (solo simulador, con vuestra traza larga)
+
+- En `cache-sim.py`, un modo `--predict`:
+  - con la primera mitad de la traza, una tabla de coincidencias "experto e en la capa L → experto f en la capa L+1";
+  - con la segunda mitad, predecir los k más probables de L+1 a partir de los 10 de L, con k = 10 y 20;
+  - medir la precisión y la cobertura **solo sobre los fallos** de la caché.
+
+  La referencia: "los mismos que el token anterior en esa capa".
+- Con su test en `test_cache_sim.py`.
+
+**Entrega:** la tabla de precisión y cobertura de los dos predictores, con k 10 y 20.
+
+**Criterio:** si la tabla acierta ≥ 60 % de los fallos con k = 10 **y** la orden 9 muestra que la espera de la copia
+PCIe (`waitB`) está a la vista, diseño la precarga:
+
+- los bytes son los mismos;
+- la copia empieza antes, mientras la GPU calcula la parte densa de la capa anterior.
+
+Si no se cumplen las dos condiciones, se descarta.
