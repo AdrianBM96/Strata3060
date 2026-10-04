@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C26-b verificado (yo, con lock) | C26a VNNI-down (obrero) | C17 script | 2026-10-04 22:32 UTC
+ESTADO: P08 binario A/B (yo, con lock) | C26a VNNI-down | C26c P09 | 2026-10-04 22:35 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -43,3 +43,5 @@ ESTADO: C26-b verificado (yo, con lock) | C26a VNNI-down (obrero) | C17 script |
 | 2026-10-04 | C16-cod | Obrero1 entrega wt/C16 21e9091 (portado a mano, build OK, off=1 if) | verificado 4 fich 138+/1- + binario; medir (paridad GPU + B1) a su turno | - | Código listo |
 | 2026-10-04 | C28-ver | LAYER-MAJOR verificado: R es FP32 (2×1,31GB, no BF16); KV int8 (384MB); GDN 118MB; total 3,1/8,2GB; solo cabe en VRAM hasta ~10,8K | confirma dirección y techo expertos; neto −6 s @32K | - | PIDO OK prototipo |
 | 2026-10-04 | C26-b | P08 verificado con te_sweep en GGUF real: con despacho MT_MIN el proto da 79,2→66,1 µs (−16,5% a Te=1); sin MT_MIN no se alcanza (ggml fallback) | bit-idéntico; hallazgo: P02 murió por kernel viejo, no por despacho | - | A/B motor pdte |
+| 2026-10-04 | C17-cod | Obrero1 entrega wt/C17 e261b25 (script+fixture, funciona) | verificado con fixture; falta tráfico CARGA ≥30 min (dueño) | - | Código listo |
+| 2026-10-04 | C26c | Paso-c P09 a obrero1 (wt-C26c; otros ficheros, sin pisar P08/VNNI) | con dato en contra (8,7 GB/s: CPU-bound); si no gana, refuta | - | En curso |
