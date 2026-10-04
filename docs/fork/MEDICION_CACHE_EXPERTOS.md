@@ -49,7 +49,39 @@ No sé si es:
 **Decídmelo tú**: ¿la traza corta lo explica, o el simulador está mal en el acierto y hay que arreglarlo antes de
 seguir?
 
-## 3. La rejilla de flags (`--grid`), lo mejor
+## 4. Traza LARGA (2ª pasada): el desajuste del acierto NO era la traza corta
+
+Repetí con **~40 peticiones (2 rondas de 20), respuestas de 400 tokens**: **86,9 MB, 7.086 ventanas (~20.581
+tokens)**.
+
+| | motor | simulador (`adapt`) |
+| --- | ---: | ---: |
+| **acierto (agregado)** | **67,5 %** (5.306.471 / 7.865.839) | **58,97 %** |
+| **swaps/ventana** (mediana) | **24,0** (33,1 MB) | **23,79** (32,9 MB) |
+
+**Los swaps siguen clavados. El acierto sigue con ~8,5 puntos de diferencia** — igual que con la traza corta. Así
+que **no es la traza corta**: el simulador **subestima el acierto del motor ~8 puntos** de forma sistemática.
+
+Hipótesis a decidir por Claude:
+- el motor cuenta el **prefill** (que presta ~3.020 huecos y luego los rellena) dentro del acierto del decode;
+- los "lookups" del motor incluyen filas/posiciones que el simulador no modela (QSA, ventanas del borrador);
+- o el simulador cuenta `hit/entry` distinto de cómo el motor cuenta `hits/lookups`.
+
+Tabla de la traza larga:
+
+```
+7086 windows (~20581 tokens), 3696 slots, start: static (profile)
+static (profile)                    36.33 %  35.92 %     0.00      0.0 MB   0.00 ms
+adapt every=4 decay=0.7 swaps=96    58.97 %  55.09 %    23.79     32.9 MB   2.99 ms
+lru (per layer)                     72.92 %  68.60 %   331.75    458.6 MB  41.69 ms
+belady (ceiling, per layer)         85.02 %  82.53 %   118.15    163.3 MB  14.85 ms
+belady (ceiling, global)            85.97 %  83.74 %   111.30    153.9 MB  13.99 ms
+```
+
+**Las conclusiones aguantan** (y con más datos): margen ~26 puntos en la política (59 → 85), LRU simple al 73 %,
+y los swaps del simulador fiables.
+
+## 5. La rejilla de flags (`--grid`), lo mejor
 
 | Config | hit/entry | swaps/w | MB/w |
 | --- | ---: | ---: | ---: |
