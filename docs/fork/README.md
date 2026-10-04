@@ -79,3 +79,4 @@ como tales.
   Coder en RAM. Además, un fallo en la prueba de RAM deja la KV en VRAM en un Linux con 64 GB a 128K.
 - **Total estimado del plan: +15-30 % de decode** y x4 de contexto por defecto, con la misma calidad. A medir en la
   Fase 0.
+| **[CHANGELOG.md](CHANGELOG.md)** | Una entrada por orden: fecha, nº, qué, resultado, commit y estado |
