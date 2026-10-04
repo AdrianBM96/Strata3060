@@ -20,6 +20,13 @@ Policies:
                 cand >= victim + 1.5, at most `swaps` per round by gain; usage *= decay.  A swapped-in expert
                 serves from the next window; the evicted one is a miss at once
   adapt-x       the same with victims from ANY layer (the per-layer split moves with the use)
+  adapt-dw      the engine's adapt (or fetch-admit + adapt) with TWO memories: besides today's short counter
+                (x `decay` every `every` windows), a long counter with slow decay (x `long-decay` per review).
+                Victim/candidate score: short + w x long (`--long-w`). Keeps steady specialists that a short
+                window happens not to route. With w = 0 the rule is exactly today's
+  adapt-cost    the same with each expert's usage multiplied by its layer's CPU cost (IQ2_S = 1.0, from
+                native_experts.txt; `--costs`): a miss on an expensive layer hurts more, so its residents are
+                evicted last. Within one layer the order is unchanged; the swap threshold scales with the cost
   lru           per layer, every miss admitted, least recently used out (a reference: churn costs copies)
   belady        the offline optimum with bypass, global budget: at every miss, keep the experts whose next use comes
                 soonest.  It knows the future, so no real policy reaches it: it is the ceiling
@@ -35,6 +42,9 @@ Metrics:
   eng.hit       hits / (hits + CPU misses), entries: the ENGINE's "decode expert cache hit rate", which leaves the PCIe
                 share of the misses out of both counts (generate.cpp: "the ones read over PCIe are in neither count").
                 Compare THIS column with the engine's log line
+  cpu ms/w      distinct experts the CPU computes per window (misses minus the PCIe share), weighted by layer cost
+                (--costs) and scaled by --cpu-us microseconds per cost-1.0 expert: the CPU side of a miss. The scale
+                is rough (see CPU_US_PER_EXPERT); ratios between policies do not depend on it
   hit/distinct  hits / distinct experts per layer per window: what the CPU really computes (a missed expert runs once
                 per window for all its tokens)
   swaps/win     experts copied into VRAM per window by the policy (each ~1.38 MB over PCIe, which the decode's own
@@ -54,6 +64,37 @@ from collections import Counter, OrderedDict, defaultdict
 from pathlib import Path
 
 N_LAYER, N_EXPERT, BLOB_MB, PCIE_GBS = 48, 512, 1.3824, 11.0
+
+CPU_US_PER_EXPERT = 400.0  # us of CPU compute per cost-1.0 expert miss (one distinct expert, one window).
+                           # Basis: native_expert_parity on the i5 (AVX2, 1 thread, loaded box): gate+up one token
+                           # IQ2_S 256-351 us, IQ2_XXS 197-329 us; the q2_0 down (+~40% by blob bytes) is unmeasured
+                           # and IQ1_M has no timing path in that tool, so 400 is a ROUGH scale, rounded up.
+                           # Only the `cpu ms/w` column's absolute value depends on it; policy ratios do not.
+DEFAULT_COSTS_PATH = "/home/bazzite/Strata-data/packs/swift-iq2_xs/native_experts.txt"
+
+
+def read_layer_costs(path: str) -> list[float]:
+    """Per-layer CPU cost of a miss, from native_experts.txt (`layer gu_type d_type offset blob_bytes ...`).
+
+    cost = blob_bytes / biggest blob (IQ2_S = 1.0). Measured gate+up (see CPU_US_PER_EXPERT): IQ2_S/IQ2_XXS
+    ~= 1.2-1.35x, vs blob ratio 1510400/1305600 = 1.16x. Assumption: GEMV time ~ bytes (memory-bound).
+    Costs: IQ2_S (gu 22) 1.0, IQ2_XXS (gu 16) ~0.865, IQ1_M (gu 29) ~0.780."""
+    blobs: dict[int, int] = {}
+    for line in Path(path).read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        f = line.split()
+        blobs[int(f[0])] = int(f[4])
+    if len(blobs) != N_LAYER:
+        raise SystemExit(f"{path}: {len(blobs)} layers, not {N_LAYER}")
+    mx = max(blobs.values())
+    return [blobs[l] / mx for l in range(N_LAYER)]
+
+
+def blended(short: float, long: float, w: float) -> float:
+    """Victim/candidate score with two memories: short + w x long. w = 0 is exactly today's rule."""
+    return short + w * long
 
 
 # ------------------------------------------------------------------ input
@@ -116,9 +157,11 @@ def pcie_share(c, resident, base) -> list[int]:
 
 
 class Result:
-    def __init__(self, name: str):
+    def __init__(self, name: str, cost: list[float] | None = None):
         self.name, self.hit_e, self.n_e, self.hit_d, self.n_d, self.swaps, self.windows = name, 0, 0, 0, 0, 0, 0
         self.cpu_e = 0                                            # entries of misses the CPU computes
+        self.cpu_w = 0.0                                          # DISTINCT misses the CPU computes, x layer cost
+        self.cost = cost or [1.0] * N_LAYER
         self.free = 0                                             # experts kept from the PCIe share
         self.layer_hit = [0] * N_LAYER                            # distinct hits / lookups per layer
         self.layer_n = [0] * N_LAYER
@@ -135,6 +178,9 @@ class Result:
             for e, n in c.items():
                 if (base + e) not in resident and (base + e) not in pcs:
                     self.cpu_e += n
+            for e in c:
+                if (base + e) not in resident and (base + e) not in pcs:
+                    self.cpu_w += self.cost[l]
             for e, n in c.items():
                 hit = (base + e) in resident
                 self.n_e += n
@@ -152,21 +198,34 @@ class Result:
         eng = self.hit_e / (self.hit_e + self.cpu_e) if (self.hit_e + self.cpu_e) else 0.0
         sw = self.swaps / self.windows if self.windows else 0.0
         fr = self.free / self.windows if self.windows else 0.0
+        cw = self.cpu_w / self.windows * CPU_US_PER_EXPERT / 1000.0 if self.windows else 0.0
         return (f"{self.name:40s} {100 * he:6.2f} % {100 * hd:6.2f} % {100 * eng:6.2f} %  {sw:7.2f} {fr:6.2f}  "
-                f"{sw * BLOB_MB:7.1f} MB  {sw * BLOB_MB / PCIE_GBS:5.2f} ms")
+                f"{sw * BLOB_MB:7.1f} MB  {sw * BLOB_MB / PCIE_GBS:5.2f} ms  {cw:7.2f} ms")
 
 
-def run_static(windows, start: set[int], name="static") -> Result:
-    r = Result(name)
+def run_static(windows, start: set[int], name="static", cost: list[float] | None = None) -> Result:
+    r = Result(name, cost or [1.0] * N_LAYER)
     for w in windows:
         r.add(w, start)
     return r
 
 
-def run_adapt(windows, start: set[int], every=4, decay=0.7, swaps=96, cross=False, name=None) -> Result:
-    r = Result(name or f"adapt every={every} decay={decay} swaps={swaps}{' cross' if cross else ''}")
+def run_adapt(windows, start: set[int], every=4, decay=0.7, swaps=96, cross=False, name=None,
+              w_long=0.0, long_decay=0.98, cost: list[float] | None = None) -> Result:
+    cc = cost or [1.0] * N_LAYER
+    tag = ""
+    if w_long:
+        tag += f" dw={w_long} ld={long_decay}"
+    if cost is not None:
+        tag += " cost"
+    r = Result(name or f"adapt every={every} decay={decay} swaps={swaps}{' cross' if cross else ''}{tag}", cc)
     resident = set(start)
     usage: dict[int, float] = defaultdict(float)
+    luse: dict[int, float] = defaultdict(float)                   # the LONG memory: slow decay per review
+
+    def val(k: int) -> float:
+        return blended(usage.get(k, 0.0), luse.get(k, 0.0), w_long) * cc[k // N_EXPERT]
+
     pending: list[int] = []
     for wi, w in enumerate(windows):
         resident.update(pending)                                  # the previous round's copies have landed
@@ -176,12 +235,13 @@ def run_adapt(windows, start: set[int], every=4, decay=0.7, swaps=96, cross=Fals
             base = l * N_EXPERT
             for e, n in c.items():
                 usage[base + e] += n
+                luse[base + e] += n
         if (wi + 1) % every:
             continue
         out = []
         if cross:
-            cand = sorted(((u, k) for k, u in usage.items() if k not in resident and u >= 2.0), reverse=True)
-            vict = sorted((usage.get(k, 0.0), k) for k in resident)
+            cand = sorted(((val(k), k) for k, u in usage.items() if k not in resident and u >= 2.0), reverse=True)
+            vict = sorted((val(k), k) for k in resident)
             for (cu, ck), (vu, vk) in zip(cand, vict):
                 if cu < vu + 1.5:
                     break
@@ -189,11 +249,11 @@ def run_adapt(windows, start: set[int], every=4, decay=0.7, swaps=96, cross=Fals
         else:
             by_layer_res: dict[int, list] = defaultdict(list)
             for k in resident:
-                by_layer_res[k // N_EXPERT].append((usage.get(k, 0.0), k))
+                by_layer_res[k // N_EXPERT].append((val(k), k))
             by_layer_cand: dict[int, list] = defaultdict(list)
             for k, u in usage.items():
                 if k not in resident and u >= 2.0:
-                    by_layer_cand[k // N_EXPERT].append((u, k))
+                    by_layer_cand[k // N_EXPERT].append((val(k), k))
             for l, cand in by_layer_cand.items():
                 vict = by_layer_res.get(l)
                 if not vict:
@@ -214,18 +274,35 @@ def run_adapt(windows, start: set[int], every=4, decay=0.7, swaps=96, cross=Fals
             usage[k] *= decay
             if usage[k] < 1e-3:
                 del usage[k]
+        for k in list(luse):
+            luse[k] *= long_decay
+            if luse[k] < 1e-3:
+                del luse[k]
     return r
 
 
-def run_fetch_admit(windows, start: set[int], adapt=True, every=4, decay=0.7, swaps=96, name=None) -> Result:
+def run_fetch_admit(windows, start: set[int], adapt=True, every=4, decay=0.7, swaps=96, name=None,
+                    w_long=0.0, long_decay=0.98, cost: list[float] | None = None) -> Result:
     """Keep the PCIe share of each window's misses in the cache (no extra copy), evicting the least-used resident of
-    the same layer that this window did not route.  With `adapt`, the deployed rule runs on top."""
-    r = Result(name or ("fetch-admit + adapt" if adapt else "fetch-admit alone"))
+    the same layer that this window did not route.  With `adapt`, the deployed rule runs on top.  With `w_long` > 0,
+    victim/candidate score is short + w x long (two memories); with `cost`, usage is x the layer's CPU cost."""
+    cc = cost or [1.0] * N_LAYER
+    tag = ""
+    if w_long:
+        tag += f" dw={w_long} ld={long_decay}"
+    if cost is not None:
+        tag += " cost"
+    r = Result(name or (f"fetch-admit + adapt{tag}" if adapt else f"fetch-admit alone{tag}"), cc)
     resident = set(start)
     by_layer: dict[int, set[int]] = defaultdict(set)
     for k in resident:
         by_layer[k // N_EXPERT].add(k)
     usage: dict[int, float] = defaultdict(float)
+    luse: dict[int, float] = defaultdict(float)                   # the LONG memory: slow decay per review
+
+    def val(k: int) -> float:
+        return blended(usage.get(k, 0.0), luse.get(k, 0.0), w_long) * cc[k // N_EXPERT]
+
     pending: list[int] = []
 
     def evict(k):
@@ -245,14 +322,15 @@ def run_fetch_admit(windows, start: set[int], adapt=True, every=4, decay=0.7, sw
             base = l * N_EXPERT
             for e, n in c.items():
                 usage[base + e] += n
+                luse[base + e] += n
         # the PCIe share stays: it replaces the least-used resident this window did not route
         for l, keys in enumerate(fetched):
             if not keys:
                 continue
             routed = {l * N_EXPERT + e for e in w[l]}
-            pool = sorted((usage.get(k, 0.0), k) for k in by_layer[l] if k not in routed)
+            pool = sorted((val(k), k) for k in by_layer[l] if k not in routed)
             for k, (vu, vk) in zip(keys, pool):
-                if usage.get(k, 0.0) <= vu:
+                if val(k) <= vu:
                     break
                 evict(vk)
                 pending.append(k)
@@ -262,9 +340,9 @@ def run_fetch_admit(windows, start: set[int], adapt=True, every=4, decay=0.7, sw
             cands: dict[int, list] = defaultdict(list)
             for k, u in usage.items():
                 if k not in resident and k not in pending and u >= 2.0:
-                    cands[k // N_EXPERT].append((u, k))
+                    cands[k // N_EXPERT].append((val(k), k))
             for l, cand in cands.items():
-                vict = sorted((usage.get(k, 0.0), k) for k in by_layer[l])
+                vict = sorted((val(k), k) for k in by_layer[l])
                 cand.sort(reverse=True)
                 for (cu, ck), (vu, vk) in zip(cand, vict):
                     if cu < vu + 1.5:
@@ -284,12 +362,16 @@ def run_fetch_admit(windows, start: set[int], adapt=True, every=4, decay=0.7, sw
                 usage[k] *= decay
                 if usage[k] < 1e-3:
                     del usage[k]
+            for k in list(luse):
+                luse[k] *= long_decay
+                if luse[k] < 1e-3:
+                    del luse[k]
         assert len(resident) + len(pending) <= len(start), "the cache grew past its slots"
     return r
 
 
-def run_lru(windows, start: set[int]) -> Result:
-    r = Result("lru (per layer)")
+def run_lru(windows, start: set[int], cost: list[float] | None = None) -> Result:
+    r = Result("lru (per layer)", cost or [1.0] * N_LAYER)
     caches = [OrderedDict() for _ in range(N_LAYER)]
     for k in sorted(start):
         caches[k // N_EXPERT][k] = True
@@ -311,10 +393,11 @@ def run_lru(windows, start: set[int]) -> Result:
     return r
 
 
-def run_belady(windows, start: set[int], per_layer=False) -> Result:
+def run_belady(windows, start: set[int], per_layer=False, cost: list[float] | None = None) -> Result:
     """Offline optimum with bypass: after each window, keep the experts (resident, or just routed) whose next use is
     soonest.  Global budget, or today's per-layer budgets."""
-    r = Result("belady (ceiling, per layer)" if per_layer else "belady (ceiling, global)")
+    r = Result("belady (ceiling, per layer)" if per_layer else "belady (ceiling, global)",
+               cost or [1.0] * N_LAYER)
     INF = len(windows) + 1
     uses: dict[int, list[int]] = defaultdict(list)
     for wi, w in enumerate(windows):
@@ -371,6 +454,21 @@ def run_belady(windows, start: set[int], per_layer=False) -> Result:
 
 
 # ------------------------------------------------------------------ main
+_SW_WINDOWS = None       # fork-inherited inputs for the --dualsweep pool
+_SW_START = None
+_SW_COSTS = None
+_SW_FLAGS = (4, 0.7, 96)
+
+
+def _sw_task(spec):
+    """One dual-memory/cost point: (label, w_long, long_decay, use_cost)."""
+    label, w, ld, use_cost = spec
+    every, decay, swaps = _SW_FLAGS
+    r = run_fetch_admit(_SW_WINDOWS, _SW_START, adapt=True, every=every, decay=decay, swaps=swaps,
+                        name=label, w_long=w, long_decay=ld, cost=_SW_COSTS if use_cost else None)
+    return r
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("trace")
@@ -383,10 +481,19 @@ def main(argv=None) -> int:
     ap.add_argument("--grid", action="store_true", help="also sweep --adapt-every/--adapt-decay/--adapt-swaps")
     ap.add_argument("--per-layer", action="store_true", help="the deployed adapt's hit rate per layer")
     ap.add_argument("--pcie-frac", type=float, default=0.30, help="the engine's PCIe share of misses (log: PCIe probe)")
+    ap.add_argument("--long-w", type=float, default=0.0, help="two-memory victim/candidate weight w (0 = today's rule)")
+    ap.add_argument("--long-decay", type=float, default=0.98, help="the long counter's decay per review")
+    ap.add_argument("--costs", default=None, help="native_experts.txt: per-layer CPU cost of a miss "
+                    f"(default: {DEFAULT_COSTS_PATH} if readable, else uniform)")
+    ap.add_argument("--cpu-us", type=float, default=400.0, help="us of CPU per cost-1.0 expert miss")
+    ap.add_argument("--dualsweep", action="store_true", help="order-8 grid: w x long-decay x cost on fetch-admit "
+                    "+ adapt, parallel; the reference first")
+    ap.add_argument("--jobs", type=int, default=8)
     a = ap.parse_args(argv)
 
-    global PCIE_NUM
+    global PCIE_NUM, CPU_US_PER_EXPERT
     PCIE_NUM = max(0, min(256, int(a.pcie_frac * 256.0 + 0.5)))
+    CPU_US_PER_EXPERT = a.cpu_us
     windows = read_windows(a.trace, a.max_windows)
     if not windows:
         raise SystemExit("the trace has no windows")
@@ -396,29 +503,55 @@ def main(argv=None) -> int:
     else:
         start = oracle_static(windows, a.slots)
         sname = "static (oracle: the trace's top pairs)"
+    costs: list[float] | None = None
+    if a.costs is not None:
+        costs = read_layer_costs(a.costs)
+    elif Path(DEFAULT_COSTS_PATH).exists():
+        costs = read_layer_costs(DEFAULT_COSTS_PATH)
     body = windows
     tokens = sum(max((sum(c.values()) for c in w), default=0) for w in windows) // 10   # k = 10 entries per token
     print(f"{len(windows)} windows (~{tokens} tokens), {a.slots} slots, start: {sname}; "
           "counted from the first window")
     print(f"{'policy':40s} {'hit/entry':>8s} {'hit/dist':>9s} {'eng.hit':>8s}  {'swaps/w':>7s} {'free/w':>6s}  "
-          f"{'copied/w':>10s}  {'PCIe/w':>8s}")
+          f"{'copied/w':>10s}  {'PCIe/w':>8s}  {'cpu ms/w':>9s}")
 
     def report(res: Result):
         print(res.row(), flush=True)
 
-    report(run_static(body, start, sname))
-    deployed = run_adapt(body, start, a.every, a.decay, a.swaps)
+    if a.dualsweep:
+        global _SW_WINDOWS, _SW_START, _SW_COSTS, _SW_FLAGS
+        _SW_WINDOWS, _SW_START, _SW_COSTS = body, start, costs
+        _SW_FLAGS = (a.every, a.decay, a.swaps)
+        import multiprocessing as mp
+        specs = [(f"fetch-admit + adapt (deployed ref)", 0.0, 0.98, False)]
+        for w in (0.5, 1.0, 2.0, 4.0):
+            for ld in (0.95, 0.98, 0.995):
+                specs.append((f"fa+adapt dw={w} ld={ld}", w, ld, False))
+                if costs is not None:
+                    specs.append((f"fa+adapt dw={w} ld={ld} cost", w, ld, True))
+        if costs is not None:
+            specs.append(("fetch-admit + adapt cost", 0.0, 0.98, True))
+        print(f"# dualsweep: {len(specs)} points, {a.jobs} workers, costs="
+              f"{'yes ' + str([round(c, 3) for c in sorted(set(costs))]) if costs else 'no (uniform)'}", flush=True)
+        with mp.Pool(a.jobs) as pool:
+            for r in pool.imap_unordered(_sw_task, specs):
+                report(r)
+        return 0
+
+    report(run_static(body, start, sname, costs))
+    deployed = run_adapt(body, start, a.every, a.decay, a.swaps, cost=costs)
     report(deployed)
-    report(run_adapt(body, start, a.every, a.decay, a.swaps, cross=True))
-    report(run_fetch_admit(body, start, adapt=False))
-    report(run_fetch_admit(body, start, adapt=True, every=a.every, decay=a.decay, swaps=a.swaps))
-    report(run_lru(body, start))
+    report(run_adapt(body, start, a.every, a.decay, a.swaps, cross=True, cost=costs))
+    report(run_fetch_admit(body, start, adapt=False, cost=costs))
+    report(run_fetch_admit(body, start, adapt=True, every=a.every, decay=a.decay, swaps=a.swaps,
+                           w_long=a.long_w, long_decay=a.long_decay, cost=costs))
+    report(run_lru(body, start, costs))
     if a.grid:
         for every, decay, swaps in itertools.product((2, 4, 8), (0.5, 0.7, 0.85, 0.95), (32, 96, 256)):
             if (every, decay, swaps) != (a.every, a.decay, a.swaps):
-                report(run_adapt(body, start, every, decay, swaps))
-    report(run_belady(body, start, per_layer=True))
-    report(run_belady(body, start, per_layer=False))
+                report(run_adapt(body, start, every, decay, swaps, cost=costs))
+    report(run_belady(body, start, per_layer=True, cost=costs))
+    report(run_belady(body, start, per_layer=False, cost=costs))
     if a.per_layer:
         print("\nper layer (deployed adapt, distinct hits; every 4th layer from 3 is QSA):")
         print("  " + "  ".join(f"{l:2d}:{100 * h / n:4.0f}%" if n else f"{l:2d}:  -" for l, (h, n)

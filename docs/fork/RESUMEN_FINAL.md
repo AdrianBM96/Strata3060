@@ -32,7 +32,7 @@ todo lo que hemos cambiado y medido desde el Strata original.
 ### 2.2 El flujo de una petición
 
 ```
-cliente/agente → litellm :4000 (ada-next) → Strata :8081 → motor C++/CUDA (engine/strata)
+cliente/agente → litellm :4000 (ada-next) → Strata :8081 → motor C++/CUDA (engine/strata, v0.1.39)
                                                   ├─ texto: 48 capas MoE, caché de expertos en VRAM,
                                                   │         resto por PCIe/RAM, KV int8 streamed
                                                   └─ imagen: engine/strata-vision (mmproj) en CPU,
@@ -44,6 +44,7 @@ System One: una decisión → :8087 → motor (--logprobs) → elige entre opcio
 
 | Ajuste | Valor | Por qué |
 | --- | --- | --- |
+| Motor | **v0.1.39** (+ parches System One) | +7,1 % decode / +9,0 % prefill medidos contra la 0.1.38 |
 | `--max-context` | **524288 (512K)** | Trabajar en repos grandes (el prompt más largo real: ~87K) |
 | `--kv` / `--kv-resident` | `int8` / 32768 | KV en 8 bits; solo 32K celdas en VRAM, el resto en RAM (**99,85% de lecturas aciertan en VRAM**) |
 | `--rope-scaling` | `yarn` ×2 | Para llegar a 512K sin degradar (verificado) |
@@ -52,6 +53,8 @@ System One: una decisión → :8087 → motor (--logprobs) → elige entre opcio
 | `--logprobs 32` | on | System One |
 | `--vision` | on (`gpu:false`) | Lee imágenes, codificador en **CPU** |
 | `STRATA_PF_FUSED=1` | on | Expertos int8 fusionados en el prompt (**+5,2% prefill**) |
+| `STRATA_FETCH_ADMIT=1` | on | Los expertos que cruzan por PCIe se quedan en caché (**+2-7% decode**) |
+| `reasoning_budget_tokens` | 3072 | El pensamiento se cierra y el modelo actúa (sin tope se atasca) |
 
 ---
 
@@ -65,6 +68,9 @@ Partimos de **Niko1221/Strata 0.1.38**. Esto es lo que añadimos o activamos, **
 | 2 | **Bucle de autoaprendizaje** (`systemone.db`, `s1_learn.py`) | Registra cada decisión, audita el 5%, **System Two** etiqueta solo (sin etiquetas humanas), calibración aprendida | Funcionando; **cazó una decisión errónea** en pruebas |
 | 3 | **Kernel IQ2_S por bloques** (`row_dot_iq2s`) | Kernel AVX2 nuevo para el tipo IQ2_S (34 de las 48 capas) | **Bit-idéntico** (test `iq2s_avx2_test`); **+1,4%** end-to-end |
 | 4 | **`STRATA_PF_FUSED=1`** | Expertos int8 fusionados en el camino de prompt (opt-in en nuestro pack nativo) | **+5,2% de prefill**; puerta de calidad PASADA |
+| 4b | **`STRATA_FETCH_ADMIT=1`** | Los expertos que cruzan por PCIe se quedan en la caché (cambio de motor de Claude) | **+2-7% de decode**; calidad PASADA |
+| 4c | **Tope de pensamiento 3072** | `reasoning_budget_tokens` por defecto: cierra el pensamiento y el modelo actúa | Las tareas con tools pasan de atascarse a actuar siempre |
+| 4d | **Motor v0.1.39** | Upstream + parches System One | **+7,1% decode / +9,0% prefill** contra la 0.1.38 |
 | 5 | **Contexto 512K** (KV `int8` + YaRN) | 16× el contexto por defecto, con KV en 8 bits y streaming | **512K**, sin degradación medible de calidad |
 | 6 | **Visión en Strata** (fase A) | El propio Strata lee imágenes (codificador en CPU, carga perezosa) | **5 s/imagen** nueva, 1,6 s cacheada; **texto intacto** |
 | 7 | **Ventilador GPU al 100%** | Servicio + timer que lo fija y re-aplica | Quita el *thermal slowdown* (26-33 s → 0-1 s), −4-6 °C; mismos tok/s |
@@ -88,9 +94,9 @@ Partimos de **Niko1221/Strata 0.1.38**. Esto es lo que añadimos o activamos, **
 
 | Métrica | Valor |
 | --- | --- |
-| **Decode** (texto general) | **~40-43 tok/s** |
-| **Decode** (agente copiando código, B4) | **~53 tok/s** (99% de aceptación del borrador) |
-| **Prefill** (lectura de prompt) | **~845-910 tok/s** (con `PF_FUSED`; antes ~865) |
+| **Decode** (texto general) | **~47-51 tok/s** |
+| **Decode** (agente copiando código, B4) | **~56 tok/s** (98% de aceptación del borrador) |
+| **Prefill** (lectura de prompt) | **~990 tok/s** en 128K (con `PF_FUSED` + 0.1.39) |
 | **Contexto** | **524.288 tokens (512K)** |
 | **Decisión (System One)** | **~0,9 s** por pregunta distinta |
 | **Imagen** | **~5 s** nueva / **1,6 s** cacheada |
