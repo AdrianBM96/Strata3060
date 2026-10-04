@@ -1,0 +1,12 @@
+[Unit]
+Description=GPU fan 100%% (RTX 3060) - salud de la tarjeta
+Documentation=file:///home/bazzite/Strata/bench/set-fan-100.py
+# El script reintenta NVML hasta 60 s, asi que no hace falta orden estricto con el driver.
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/bazzite/Strata/.venv/bin/python /home/bazzite/Strata/bench/set-fan-100.py 100
+
+[Install]
+WantedBy=multi-user.target

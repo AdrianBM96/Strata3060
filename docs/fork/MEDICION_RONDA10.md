@@ -19,8 +19,16 @@ automático / 100% / automático / 100% / automático. La métrica que importa s
 
 **Mediana de tok/s: auto 41,35 · 100% 41,40 → idénticas.** El ventilador al 100% **sí** elimina el estado de
 *slowdown* térmico (26-33 s → 0-1 s) y baja 4-6 °C, pero **no cambia los tok/s** en 3 pasadas. Es una ganancia de
-**salud/consistencia** (y de ruido: el 100% fijo suena), no de velocidad. **No se deja fijo**: el ventilador vuelve
-a automático.
+**salud/consistencia**, no de velocidad.
+
+**Decisión (a petición de Adrián): se deja FIJO AL 100 %** por salud de la tarjeta. Como el control del ventilador
+necesita **root** y el driver lo devuelve a automático al recargarse, se instala un **servicio de sistema**
+`gpu-fan-100.service` (oneshot, `enabled`) + `gpu-fan-100.timer` (`OnCalendar=*:0/5`) que lo re-aplica **al arrancar
+y cada 5 minutos** (guarda contra reseteos del driver). Ficheros en `ops/` (`set-fan-100.py`,
+`gpu-fan-100.service`, `gpu-fan-100.timer`). Revertir a automático:
+`sudo systemctl disable --now gpu-fan-100.timer gpu-fan-100.service` y
+`sudo .venv/bin/python -c "import pynvml; pynvml.nvmlInit(); h=pynvml.nvmlDeviceGetHandleByIndex(0); pynvml.nvmlDeviceSetDefaultFanSpeed_v2(h,0)"`.
+Coste: ruido y desgaste del ventilador; **ningún coste en tok/s**.
 
 > Nota: 3 pasadas son demasiado cortas para ver si el *slowdown* acumulado cuesta tok/s en una sesión larga de
 > horas. Si algún día se quiere cerrar, medir una tanda larga (30-60 min) con y sin ventilador fijo.

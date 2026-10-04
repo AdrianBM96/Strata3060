@@ -1,0 +1,11 @@
+[Unit]
+Description=Re-aplica el ventilador de la GPU al 100%% periodicamente
+
+[Timer]
+OnBootSec=30s
+OnCalendar=*:0/5
+AccuracySec=1min
+Persistent=false
+
+[Install]
+WantedBy=timers.target
