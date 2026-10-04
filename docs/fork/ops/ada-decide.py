@@ -60,6 +60,7 @@ STORE: "s1_learn.Store | None" = None
 LEARNER: "s1_learn.Learner | None" = None
 SYSTEM2: "s1_learn.SystemTwo | None" = None
 AUDIT_RATE = 0.05
+AUDIT_WARMUP = 200       # las primeras decisiones de cada plantilla se auditan todas (arranque en frio)
 
 LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 CONTENT_FREE = "N/A"
@@ -338,24 +339,35 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/systemone/stats":
             if STORE is None:
                 return self._send(404, {"error": "learning is off (start with --db)"})
-            s2 = {"queued": SYSTEM2.q.qsize(), "done": SYSTEM2.done, "failed": SYSTEM2.failed} if SYSTEM2 else None
-            return self._send(200, {"templates": STORE.stats(), "system2": s2, "audit_rate": AUDIT_RATE})
+            s2 = {"queued": SYSTEM2.q.qsize(), "done": SYSTEM2.done, "failed": SYSTEM2.failed,
+                  "yielded": SYSTEM2.yielded} if SYSTEM2 else None
+            return self._send(200, {"templates": STORE.stats(), "system2": s2, "audit_rate": AUDIT_RATE,
+                                    "audit_warmup": AUDIT_WARMUP})
         self._send(404, {"error": "not found"})
 
     def _remember(self, state, qtype, instr, ans) -> None:
-        """Registra la decision (si el aprendizaje esta activo), le pone id y encola su etiqueta de System Two: toda
-        decision que escala, y una muestra aleatoria (--audit-rate) de las que no."""
+        """Registra la decision (si el aprendizaje esta activo), le pone id y encola su etiqueta de System Two.
+
+        La auditoria se sortea en TODAS las decisiones, escalen o no, con la misma probabilidad: es la muestra
+        uniforme con la que se mide el error y se fija el umbral conformal.  La probabilidad es 1 para las primeras
+        --audit-warmup decisiones de cada plantilla y --audit-rate despues; depende solo de cuantas van, no de la
+        decision, asi que la muestra sigue siendo uniforme.  Las que escalan y no salen en el sorteo tambien se
+        resuelven (sirven para ajustar la calibracion), pero no cuentan para la garantia."""
         if STORE is None:
             return
-        did = STORE.record(qtype, ans["template"], instr, ans["_keys"], ans["_criteria"], state, ans["_z"],
+        tid = ans["template"]
+        rate = 1.0 if STORE.audited(tid) < AUDIT_WARMUP else AUDIT_RATE
+        audit = SYSTEM2 is not None and random.random() < rate
+        did = STORE.record(qtype, tid, instr, ans["_keys"], ans["_criteria"], state, ans["_z"],
                            ans["_passes"], ans["probabilities"], ans["_best"], ans["confidence"], ans["escalate"],
-                           ans.get("auto"), ans["_model_version"])
+                           ans.get("auto"), ans["_model_version"], audit=audit,
+                           reasons=ans.get("escalate_reasons", []))
         ans["id"] = did
         if SYSTEM2 is not None:
-            if ans["escalate"]:
-                SYSTEM2.enqueue(did, "system2")
-            elif random.random() < AUDIT_RATE:
+            if audit:
                 SYSTEM2.enqueue(did, "audit")
+            elif ans["escalate"]:
+                SYSTEM2.enqueue(did, "system2")
 
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -489,8 +501,12 @@ def main():
                     help="masa absoluta minima en las etiquetas; ajustadla mirando el log")
     ap.add_argument("--log", default=None, help="JSONL con cada decision (para etiquetar y ajustar T)")
     ap.add_argument("--db", default=None, help="SQLite del bucle de aprendizaje (sin esto, no aprende)")
-    ap.add_argument("--audit-rate", type=float, default=0.05, help="parte de las decisiones automaticas que audita "
-                    "System Two en segundo plano")
+    ap.add_argument("--audit-rate", type=float, default=0.05, help="parte de las decisiones (escalen o no) que audita "
+                    "System Two en segundo plano: la muestra uniforme de la garantia")
+    ap.add_argument("--audit-warmup", type=int, default=200, help="decisiones auditadas por plantilla antes de bajar "
+                    "a --audit-rate (arranque en frio: hasta entonces se auditan todas)")
+    ap.add_argument("--system2-idle", type=float, default=30.0, help="segundos con Strata libre antes de que System "
+                    "Two empiece; si llega otra peticion mientras razona, la deja pasar")
     ap.add_argument("--no-system2", action="store_true", help="no resolver con System Two (solo feedback humano)")
     ap.add_argument("--system2-effort", default="high")
     ap.add_argument("--system2-max-tokens", type=int, default=2048)
@@ -505,13 +521,14 @@ def main():
     Handler.log_path = a.log
     Handler.defaults = {"permutations": a.permutations, "calibrate": a.calibrate, "temperature": a.temperature,
                         "escalate_margin": a.escalate_margin, "min_mass": a.min_mass}
-    global STORE, LEARNER, SYSTEM2, AUDIT_RATE
+    global STORE, LEARNER, SYSTEM2, AUDIT_RATE, AUDIT_WARMUP
     if a.db:
         STORE = s1_learn.Store(a.db, a.keep_state_days)
         LEARNER = s1_learn.Learner(STORE, alpha=a.alpha, delta=a.delta, retrain_every=a.retrain_every)
-        AUDIT_RATE = a.audit_rate
+        AUDIT_RATE, AUDIT_WARMUP = a.audit_rate, a.audit_warmup
         if not a.no_system2:
-            SYSTEM2 = s1_learn.SystemTwo(STORE, LEARNER, a.strata, a.system2_effort, a.system2_max_tokens)
+            SYSTEM2 = s1_learn.SystemTwo(STORE, LEARNER, a.strata, a.system2_effort, a.system2_max_tokens,
+                                         idle_s=a.system2_idle)
 
         def purge():
             while True:

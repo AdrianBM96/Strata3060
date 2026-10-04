@@ -3,8 +3,9 @@
 Piezas:
   * Store: SQLite con cada decisión (plantilla, estado, puntuaciones por permutación, salida) y sus etiquetas, de tres
     fuentes: "human" (feedback explícito: ORO), "system2" (decisiones escaladas que resolvió System Two: PLATA) y
-    "audit" (una muestra aleatoria de las automáticas resuelta por System Two: PLATA, sin el sesgo de mirar solo los
-    casos difíciles).
+    "audit" (una muestra aleatoria de TODAS las decisiones, escalen o no, resuelta por System Two: PLATA).  Solo la
+    muestra de auditoría es uniforme: las escaladas son casi todas las de confianza baja, así que medir el error con
+    ellas lo sesga.  Por eso la garantía conformal y la comparación campeón/aspirante usan solo decisiones auditadas.
   * Calibración por plantilla ("vector scaling"): p ∝ exp((z_k + b_k) / T), con z_k la logprob de la opción ya sin el
     sesgo de letra.  Se ajusta con las etiquetas de esa plantilla (log-loss + L2) y solo entra si GANA en datos
     retenidos por tiempo (campeón/aspirante); cada versión se guarda y se puede volver atrás.
@@ -13,19 +14,24 @@ Piezas:
     la decisión escala.  La garantía es respecto a la fuente de las etiquetas: con ORO, respecto a la verdad; con
     PLATA, respecto a lo que decidiría System Two.  Y supone que lo que viene se parece a lo reciente.
   * SystemTwo: un hilo que resuelve en segundo plano las decisiones encoladas pidiendo a Strata una respuesta con
-    razonamiento, y SOLO cuando Strata está libre (GET /status -> busy), para no bloquear a otros clientes.
+    razonamiento.  Empieza solo con Strata libre un rato (GET /status: ni busy ni queued durante idle_s), y si
+    mientras razona llega otra petición (queued > 0) corta la conexión: Strata cancela la suya en 0,5 s y la otra
+    entra.  La decisión vuelve a la cola.  La cola vive en la base: lo pendiente se retoma al reiniciar.
 """
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import math
 import queue
 import random
 import re
+import socket
 import sqlite3
 import threading
 import time
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -78,30 +84,55 @@ class Store:
                     template TEXT, version INTEGER, kind TEXT, params TEXT, metrics TEXT, ts REAL, active INTEGER,
                     PRIMARY KEY (template, version));
             """)
+            # columnas nuevas (bases de antes): audit = la decisión cayó en la muestra uniforme de auditoría; reasons =
+            # por qué escaló.  En las filas viejas quedan NULL: no cuentan como auditadas (no se sabe cómo se eligieron)
+            have = {r[1] for r in self.db.execute("PRAGMA table_info(decisions)")}
+            for col, typ in (("audit", "INTEGER"), ("reasons", "TEXT")):
+                if col not in have:
+                    self.db.execute(f"ALTER TABLE decisions ADD COLUMN {col} {typ}")
 
     def _q(self, sql, args=()):
         with self.lock:
             return self.db.execute(sql, args).fetchall()
 
     def record(self, qtype, tid, instructions, keys, criteria, state, features, passes, probs, choice, conf,
-               escalated, auto, model_version) -> str:
+               escalated, auto, model_version, audit: bool = False, reasons: list | None = None) -> str:
         did = uuid.uuid4().hex
         st = state if isinstance(state, str) else json.dumps(state, ensure_ascii=False)
-        self._q("INSERT INTO decisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        self._q("INSERT INTO decisions (id, ts, template, qtype, instructions, keys, criteria, state, state_hash, "
+                "features, passes, probs, choice, conf, escalated, auto, model_version, audit, reasons) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (did, time.time(), tid, qtype, instructions, json.dumps(keys), json.dumps(criteria, ensure_ascii=False),
                  st, hashlib.sha1(st.encode()).hexdigest(), json.dumps(features), json.dumps(passes),
-                 json.dumps(probs), choice, conf, int(bool(escalated)), int(bool(auto)), model_version))
+                 json.dumps(probs), choice, conf, int(bool(escalated)), int(bool(auto)), model_version,
+                 int(bool(audit)), json.dumps(list(reasons or []))))
         return did
 
     def decision(self, did: str) -> dict | None:
         rows = self._q("SELECT id, ts, template, qtype, instructions, keys, criteria, state, features, choice, conf, "
-                       "escalated, auto FROM decisions WHERE id = ?", (did,))
+                       "escalated, auto, audit, reasons FROM decisions WHERE id = ?", (did,))
         if not rows:
             return None
         r = rows[0]
         return {"id": r[0], "ts": r[1], "template": r[2], "qtype": r[3], "instructions": r[4], "keys": json.loads(r[5]),
                 "criteria": json.loads(r[6]), "state": r[7], "features": json.loads(r[8]), "choice": r[9],
-                "conf": r[10], "escalated": bool(r[11]), "auto": bool(r[12])}
+                "conf": r[10], "escalated": bool(r[11]), "auto": bool(r[12]), "audit": bool(r[13]),
+                "reasons": json.loads(r[14]) if r[14] else []}
+
+    def has_label(self, did: str) -> bool:
+        return bool(self._q("SELECT 1 FROM labels WHERE decision_id = ? LIMIT 1", (did,)))
+
+    def audited(self, tid: str) -> int:
+        """Cuántas decisiones de esta plantilla cayeron en la muestra de auditoría (para el arranque en frío)."""
+        return self._q("SELECT COUNT(*) FROM decisions WHERE template = ? AND audit = 1", (tid,))[0][0]
+
+    def pending(self) -> list[tuple[str, str]]:
+        """Lo que System Two tiene por hacer (auditadas o escaladas, con estado, sin ninguna etiqueta ni fallo), de más
+        antigua a más nueva: la cola sobrevive a un reinicio."""
+        rows = self._q("SELECT d.id, d.audit FROM decisions d WHERE (d.audit = 1 OR d.escalated = 1) "
+                       "AND d.state IS NOT NULL AND NOT EXISTS (SELECT 1 FROM labels l WHERE l.decision_id = d.id) "
+                       "ORDER BY d.ts")
+        return [(did, "audit" if audit else "system2") for did, audit in rows]
 
     def add_label(self, did: str, source: str, label: str, detail: dict | None = None) -> None:
         self._q("INSERT OR REPLACE INTO labels VALUES (?,?,?,?,?)",
@@ -110,16 +141,20 @@ class Store:
     def labeled(self, tid: str | None = None, sources=(GOLD,) + SILVER) -> list[dict]:
         """Las decisiones con etiqueta, por orden de tiempo; con varias fuentes gana ORO."""
         where = "WHERE d.template = ?" if tid else ""
-        rows = self._q(f"SELECT d.id, d.ts, d.template, d.keys, d.features, l.source, l.label FROM decisions d "
-                       f"JOIN labels l ON l.decision_id = d.id {where} ORDER BY d.ts", (tid,) if tid else ())
+        rows = self._q(f"SELECT d.id, d.ts, d.template, d.keys, d.features, l.source, l.label, d.audit, d.reasons "
+                       f"FROM decisions d JOIN labels l ON l.decision_id = d.id {where} ORDER BY d.ts",
+                       (tid,) if tid else ())
         best: dict[str, dict] = {}
-        for did, ts, t, keys, feats, src, lab in rows:
+        for did, ts, t, keys, feats, src, lab, audit, reasons in rows:
             if src not in sources:
                 continue
             cur = best.get(did)
             if cur is None or (src == GOLD and cur["source"] != GOLD):
+                # eligible: podría haberse decidido solo (no escaló por otra cosa que el umbral conformal)
+                rs = json.loads(reasons) if reasons else []
                 best[did] = {"id": did, "ts": ts, "template": t, "keys": json.loads(keys),
-                             "features": json.loads(feats), "source": src, "label": lab}
+                             "features": json.loads(feats), "source": src, "label": lab, "audit": bool(audit),
+                             "eligible": all(x == "conformal" for x in rs)}
         return sorted((r for r in best.values() if r["label"] in r["keys"]), key=lambda r: r["ts"])
 
     def active_model(self, tid: str) -> dict | None:
@@ -169,7 +204,8 @@ class Store:
             agree = self._q("SELECT SUM(l.label = d.choice), COUNT(*) FROM labels l JOIN decisions d "
                             "ON d.id = l.decision_id WHERE d.template = ? AND l.source = 'audit'", (tid,))[0]
             m = self.active_model(tid)
-            out[tid] = {"decisions": n, "escalated": esc or 0, "auto": auto or 0, "labels": labs,
+            out[tid] = {"decisions": n, "escalated": esc or 0, "auto": auto or 0, "audited": self.audited(tid),
+                        "labels": labs,
                         "audit_agreement": (agree[0] / agree[1]) if agree[1] else None,
                         "model_version": m["version"] if m else None, "model_metrics": m["metrics"] if m else None}
         return out
@@ -279,7 +315,7 @@ def select_threshold(conf: list[float], correct: list[bool], alpha: float, delta
 # ------------------------------------------------------------------ la fachada que usa ada-decide
 class Learner:
     def __init__(self, store: Store, alpha: float = 0.05, delta: float = 0.1, min_labels: int = 30,
-                 holdout: float = 0.3, retrain_every: int = 20, gold_min: int = 50, min_gain: float = 0.01):
+                 holdout: float = 0.5, retrain_every: int = 20, gold_min: int = 50, min_gain: float = 0.01):
         self.store, self.alpha, self.delta = store, alpha, delta
         self.min_labels, self.holdout, self.retrain_every = min_labels, holdout, retrain_every
         self.gold_min, self.min_gain = gold_min, min_gain
@@ -328,10 +364,15 @@ class Learner:
             return {"template": tid, "status": "few_labels", "labels": len(rows)}
         keys = rows[-1]["keys"]
         rows = [r for r in rows if r["keys"] == keys]
-        cut = int(len(rows) * (1 - self.holdout))
-        train, test = rows[:cut], rows[cut:]
-        if len(test) < 10 or len({r["label"] for r in train}) < 2:
-            return {"template": tid, "status": "few_labels", "labels": len(rows)}
+        # Retenidos: la parte más reciente (holdout) de las AUDITADAS, que son una muestra uniforme de las decisiones.
+        # Las escaladas sin auditar tienen casi todas confianza baja: con ellas el error medido no es el de lo que se
+        # decide solo.  Sirven para ajustar la calibración (que modela p(etiqueta | z), no la mezcla de casos).
+        uni = [r for r in rows if r["audit"]]
+        test = uni[len(uni) - int(len(uni) * self.holdout):] if uni else []
+        held = {r["id"] for r in test}
+        train = [r for r in rows if r["id"] not in held]
+        if len(test) < 10 or len(train) < 2 or len({r["label"] for r in train}) < 2:
+            return {"template": tid, "status": "few_labels", "labels": len(rows), "audited": len(uni)}
         X = [r["features"] for r in train]
         y = [keys.index(r["label"]) for r in train]
         w = [SOURCE_WEIGHT.get(r["source"], 0.5) for r in train]
@@ -347,8 +388,10 @@ class Learner:
         # el umbral conformal, sobre los datos retenidos con el modelo que vaya a quedar (ORO si hay bastante)
         use_b, use_lt = (b, lt) if better else ((cur_m["params"]["b"], cur_m["params"]["log_t"])
                                                   if cur_m and cur_m["kind"] == "vector_scaling" else (None, None))
-        gold = [r for r in test if r["source"] == GOLD]
-        calib, source = (gold, "human") if len(gold) >= self.gold_min else (test, "system2")
+        # el umbral vale para lo que se decide solo: las que no escalaron por otra razón que el propio umbral
+        elig = [r for r in test if r["eligible"]]
+        gold = [r for r in elig if r["source"] == GOLD]
+        calib, source = (gold, "human") if len(gold) >= self.gold_min else (elig, "system2")
         confs, oks = [], []
         for r in calib:
             p = predict_vs(r["features"], use_b, use_lt) if use_b is not None else softmax(r["features"])
@@ -401,59 +444,124 @@ def parse_answer(text: str, keys: list[str]) -> str | None:
     return None
 
 
+class Yielded(Exception):
+    """System Two soltó Strata porque otra petición esperaba; la decisión vuelve a la cola."""
+
+
 class SystemTwo:
-    """Resuelve decisiones encoladas con razonamiento, de una en una, solo con Strata libre."""
+    """Resuelve decisiones encoladas con razonamiento, de una en una, sin hacer esperar a nadie:
+
+    * empieza solo con Strata libre (ni ocupado ni con peticiones en cola) durante idle_s seguidos;
+    * mientras razona, mira GET /status cada yield_poll s, y si hay una petición en cola cierra la conexión.  Strata
+      ve el cierre y cancela la suya en 0,5 s (server.py, _watch_client), así que la otra petición entra enseguida.
+      La decisión vuelve a la cola;
+    * con resume, al arrancar retoma lo que quedó pendiente en la base (Store.pending)."""
 
     def __init__(self, store: Store, learner: Learner | None, strata: str, effort: str = "high",
-                 max_tokens: int = 2048, timeout: float = 600.0, idle_poll: float = 2.0, ask=None, busy=None):
+                 max_tokens: int = 2048, timeout: float = 600.0, idle_poll: float = 2.0, idle_s: float = 30.0,
+                 yield_poll: float = 1.0, resume: bool = True, ask=None, busy=None, waiting=None):
         self.store, self.learner, self.strata = store, learner, strata.rstrip("/")
         self.effort, self.max_tokens, self.timeout, self.idle_poll = effort, max_tokens, timeout, idle_poll
+        self.idle_s, self.yield_poll = idle_s, yield_poll
         self.q: queue.Queue = queue.Queue()
-        self.ask = ask or self._ask
         self.busy = busy or self._busy
+        self.waiting = waiting or self._waiting
+        self.ask = ask or self._ask
         self.done = 0
         self.failed = 0
+        self.yielded = 0
+        if resume:
+            for item in store.pending():
+                self.q.put(item)
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
 
     def enqueue(self, did: str, source: str) -> None:
         self.q.put((did, source))
 
-    def _busy(self) -> bool:
+    def _status(self) -> dict | None:
         try:
             with urllib.request.urlopen(self.strata + "/status", timeout=5) as r:
-                return bool(json.load(r).get("busy"))
+                return json.load(r)
         except (OSError, ValueError):
-            return True
+            return None
+
+    def _busy(self) -> bool:
+        s = self._status()
+        return s is None or bool(s.get("busy")) or int(s.get("queued") or 0) > 0
+
+    def _waiting(self) -> bool:
+        s = self._status()
+        return s is not None and int(s.get("queued") or 0) > 0
+
+    def _wait_idle(self) -> None:
+        since = None
+        while True:
+            if self.busy():
+                since = None
+            else:
+                since = since if since is not None else time.monotonic()
+                if time.monotonic() - since >= self.idle_s:
+                    return
+            time.sleep(self.idle_poll)
 
     def _ask(self, system: str, user: str) -> str:
         body = {"model": "strata", "max_tokens": self.max_tokens, "temperature": 0, "reasoning_effort": self.effort,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-        req = urllib.request.Request(self.strata + "/v1/chat/completions", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:
-            m = json.load(r)["choices"][0]["message"]
+        u = urllib.parse.urlsplit(self.strata)
+        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=self.timeout)
+        stop, cut = threading.Event(), threading.Event()
+
+        def watch():
+            while not stop.wait(self.yield_poll):
+                if self.waiting():
+                    cut.set()
+                    try:
+                        conn.sock.shutdown(socket.SHUT_RDWR)   # Strata lo ve como cliente que se fue: cancela
+                    except (OSError, AttributeError):
+                        pass
+                    return
+        try:
+            conn.connect()
+            threading.Thread(target=watch, daemon=True).start()
+            conn.request("POST", u.path + "/v1/chat/completions", json.dumps(body),
+                         {"Content-Type": "application/json"})
+            r = conn.getresponse()
+            raw = r.read()
+            if r.status != 200:
+                raise OSError(f"Strata HTTP {r.status}: {raw[:200]!r}")
+            m = json.loads(raw)["choices"][0]["message"]
+        except (OSError, http.client.HTTPException, ValueError):
+            if cut.is_set():
+                raise Yielded() from None
+            raise
+        finally:
+            stop.set()
+            conn.close()
         return (m.get("content") or "") + "\n" + (m.get("reasoning_content") or "")
 
     def _loop(self):
         while True:
             did, source = self.q.get()
             try:
-                while self.busy():
-                    time.sleep(self.idle_poll)
+                self._wait_idle()
                 d = self.store.decision(did)
-                if d is None:
+                if d is None or d["state"] is None or self.store.has_label(did):   # sin estado, o ya hecha
                     continue
                 text = self.ask(*system2_prompt(d))
                 label = parse_answer(text, d["keys"])
                 if label is None:
                     self.failed += 1
+                    self.store.add_label(did, "failed", "", {"tail": (text or "")[-300:]})   # no se reintenta
                     continue
                 self.store.add_label(did, source, label, {"agrees": label == d["choice"]})
                 self.done += 1
                 if self.learner:
                     self.learner.on_label(d["template"])
-            except Exception:   # un fallo de una no para la cola
+            except Yielded:
+                self.yielded += 1
+                self.q.put((did, source))                # otra vez a la cola; se retoma con Strata libre
+            except Exception:   # un fallo de una no para la cola (se reintenta al reiniciar)
                 self.failed += 1
             finally:
                 self.q.task_done()

@@ -32,6 +32,7 @@ como tales.
 | **[RESPUESTA_RONDA4.md](RESPUESTA_RONDA4.md)** | Ronda 4: el +1,4 % del kernel no es significativo (y qué medir antes de otro kernel), la calibración corregida para restar solo el sesgo de letra, y `escalate` por acuerdo entre permutaciones en vez de por margen |
 | **[NOTA_DECODE_RONDA5.md](NOTA_DECODE_RONDA5.md)** | Qué más probar para subir el decode: lectura correcta del desglose (ping-pong GPU densa / CPU expertos, acierto de VRAM 74,6 %), A/B de sistema de minutos (relojes, gobernador, SMT, recalibrar, modo PCIe, páginas de 2 MB) y los cambios de motor candidatos (GR en 8 bits, kernels de P) |
 | **[RESPUESTA_RONDA5.md](RESPUESTA_RONDA5.md)** | Ronda 5: V2 en el parche (la decisión se lee en la primera ventana), el banco fijo `ops/bench.py`, el bucle de autoaprendizaje `ops/s1_learn.py` (registro, System Two, calibración aprendida, garantía conformal) y qué medir |
+| **[RESPUESTA_RONDA6.md](RESPUESTA_RONDA6.md)** | Ronda 6: tres fallos del bucle de aprendizaje corregidos (System Two **cede Strata** si otra petición espera, la garantía se mide **solo sobre la muestra auditada**, la cola sobrevive a un reinicio) y el perfil `perf` que hace falta para elegir el siguiente kernel de CPU |
 | **[SYSTEMONE.md](SYSTEMONE.md)** | System One completo: el cambio del motor, la API, operación, actualización y rollback |
 | **[ops/](ops/)** | Los ficheros de despliegue (`ada-decide.py`, `fit-calibration.py`, `logpos-compare.py`, `apply-tuning.sh`, `free-vram.sh`, `strata-switch.sh`, `serve-strata.sh`) y sus tests |
 
