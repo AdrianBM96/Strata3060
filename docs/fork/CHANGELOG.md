@@ -20,3 +20,4 @@ Commit + push en cada entrada.
 | 2026-10-04 | C11-bis | Qué limita los huecos a 3732 | auto=3283, tope=free-700 en 3356-3374; 848 del pico menos reserva+LOW | - | C11 en pausa |
 | 2026-10-04 | — | Norma tester (verificado: responde TESTER OK) | - | - | Vigente |
 | 2026-10-04 | C10b | cachelog por peticion + prompt-cache 12 (verificado) | api/model/UA, reused, resume, evictions, first_diff, phash | - | 48 h de datos pendientes |
+| 2026-10-04 | C11 | CERRADA sin adoptar (+38 huecos; reserva intacta); A/B parado, auto restaurado | - | Cerrada |

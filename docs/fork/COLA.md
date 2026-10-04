@@ -22,7 +22,7 @@ y se anotan en el CHANGELOG.
 - [x] **C11-bis.** Encontrar qué limita los huecos (solo lectura). Hecho: `generate.cpp:3283` (auto:
   slots=(free-reserva)/blob, reserva=(700+prefill_mib)MiB+58MiB draft) y `generate.cpp:3356-3374` (sized-slots:
   tope=free-700MiB; 4124 pedidos→3732). Los 848 MiB del pico no sirven: 700 van reservados + 256 de LOW.
-- [ ] **C11.** `--expert-cache 4124`. EN PAUSA (con +38 huecos no hay nada medible). Reabrir solo si baja la reserva.
+- [x] **C11.** CERRADA sin adoptar (solo +38 huecos: 3732 vs 3694; la reserva de 700 MiB es del prefill largo y no se toca). Producción como estaba (auto).
 - [x] **C10b.** Registro + `--prompt-cache 12` desplegados (verificado con 2 peticiones: reused 0→68,
   first_diff=68). Quedan 48 h de uso real para el reparto de causas.
 - [ ] **C14a.** `STRATA_MTP_HIST=1`. Alcance: mtp.cpp junto a router_top10 y la salida del proceso. Histograma
