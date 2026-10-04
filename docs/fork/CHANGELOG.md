@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C27 binario listo 2ffae239 (yo) | C30 v4 | ccache OK | 2026-10-04 23:24 UTC
+ESTADO: C27 A/B r3/6 (yo, con lock) | C28 obrero | BLOQUEO: C30 puerto 8090 (echo_hub) | 2026-10-04 23:40 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
