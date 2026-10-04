@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C23 bench T_e (yo, con lock) | wt-C16 portando (3 fich) | wt-C14a cherry limpio+configurado | 2026-10-04 22:16 UTC
+ESTADO: C23 bench T_e (yo, con lock) | wt-C16 portando (3 fich) | wt-C14a cherry limpio+configurado | C24-PREP copiado | 2026-10-04 22:22 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -28,3 +28,4 @@ ESTADO: C23 bench T_e (yo, con lock) | wt-C16 portando (3 fich) | wt-C14a cherry
 | 2026-10-04 | E1 | Checklist E1-PREP al repo (reglas: diagnosticar, madvise, A/B por palanca, nada persistente) | 252 líneas copiadas a exploracion/ | - | Checklist listo; mide tras C23 |
 | 2026-10-04 | C25 | Subagentes lector+codigo + N12 | lector (deny edit/shell salvo lectura) y codigo (solo wt-*) creados; lector verificado sin escritura | - | Hecho |
 | 2026-10-04 | C25rev | Paralelo real: agente obrero + N12 nueva + wt-C16/wt-C14a (base cb8c2ff) + 2 obreros en marcha | obrero.md (edit solo wt-*, shell compilacion nice, deny serie); worktrees listos | - | Obreros trabajando |
+| 2026-10-04 | C24 | Simplificado con C24-PREP (timer ya existe, verificar sync 2340-2356) | copiado a exploracion/; cola actualizada | - | Tras E1 |
