@@ -118,3 +118,116 @@ dos tareas largas a 25/25 bastan.
 
 **Nota aparte, sin orden:** opencode sin `--model` va a un modelo en la nube bloqueado por país. Si Adrián quiere,
 poned `ada-next` como modelo por defecto de opencode, para que no falle al arrancar sin argumentos.
+
+---
+
+## Órdenes 10-13: lo que queda sin medir (2026-10-04)
+
+Repaso de todo `docs/fork/`. Quedan cuatro palancas sin medir. Ninguna cambia el texto que sale, salvo la 13 si
+falla, y para eso lleva su detector.
+
+**Orden de ejecución:**
+
+- La 10 y la 12 se pueden hacer ya: solo leen.
+- La 11 y la 13, después de la 7, contra la línea base nueva.
+
+## 10. Reutilización de prefijos en agentes (R5 de `PLAN_MAESTRO.md`, nunca medida)
+
+Un agente reenvía casi todo el contexto en cada turno. El prefill que no se hace ahorra más que cualquier kernel.
+
+- **Qué:** de los logs de una semana real (puede ir junto a la 6), por petición:
+  - cliente;
+  - tokens del prompt;
+  - `RESUME n` (`generate.cpp:6701`);
+  - tokens leídos de nuevo;
+  - TTFT.
+- **Para cada turno con < 90 % reutilizado,** la causa:
+  - compactación;
+  - un cambio pronto en el prompt (fecha, `git status`, lista de herramientas, orden de los mensajes);
+  - expulsión de la caché porque otro cliente (System One, un subagente) ocupó el hueco;
+  - u otra.
+- **Entrega:**
+  - % de tokens de prompt reutilizados por cliente;
+  - segundos de prefill que se gastaron en releer;
+  - el reparto de causas;
+  - los `--prompt-cache`, `--prompt-cache-every` y `--prompt-cache-root` actuales.
+- **Después decido:** más huecos, `--prompt-cache-every` menor, o un arreglo en el servidor si la causa es un prefijo
+  que cambia.
+
+## 11. VRAM: quién la usa y si caben más expertos (después de la 7)
+
+Hoy quedan 627 MiB libres, y 450 MiB más dieron +318 huecos y +2,8 % de decode (`MEDICION_VRAM_CONTEXTO.md`).
+
+1. `nvidia-smi --query-compute-apps=pid,name,used_memory --format=csv` y `nvidia-smi`: ¿hay algún proceso de escritorio
+   (Xorg, gnome-shell, kwin, Steam) que use la 3060? Si lo hay, decidme cuánto ocupa antes de quitar nada.
+2. **El pico real:** muestreo de `nvidia-smi --query-gpu=memory.used -lms 100` durante:
+   - el prefill más largo que tengáis (86K, o `bench-prefill.py` a 128K);
+   - una imagen;
+   - B1.
+
+   **Entrega:** el mínimo de VRAM libre.
+3. **Si el mínimo libre es > 400 MiB:** `--expert-cache <huecos de hoy + (mínimo libre − 256 MiB) / tamaño de hueco>`.
+   A/B contra la 7 con B1, B2 y B4, y la prueba de pico otra vez: ningún OOM.
+4. **`--kv-resident 16384`** (R4, pendiente desde la ronda 5):
+   - la VRAM que libera;
+   - los huecos que gana;
+   - B1/B2;
+   - el acierto de bloques KV y el decode con 32K y 86K de contexto (por si el streaming del KV pierde).
+- **Criterio:** se queda lo que gane sin OOM en el pico y sin bajar el decode a 86K.
+
+## 12. PCIe: ¿por qué 11 GB/s en un Gen4 x16? (diagnóstico, 15 minutos)
+
+El enlace está bien (`MEDICION_RONDA8.md`), pero nadie midió lo que da el hardware con una copia normal.
+
+- **Qué:** un programa de ~30 líneas con `cudaMemcpyAsync` H2D desde memoria `cudaHostAlloc`, 256 MiB, 20 veces, en
+  GB/s. Tres casos:
+  - solo;
+  - con `membw` leyendo RAM a la vez en 6 hilos (el reparto real con los expertos en CPU);
+  - desde memoria normal (sin fijar).
+- **Entrega:** las tres cifras.
+- **Lectura:**
+  - **≈ 22-25 GB/s solo:** el hardware da el doble que nuestra copia. Entonces escribo el cambio de la ruta de copia
+    (el *staging* fijado con DMA en lotes grandes) y subir `pcie_frac`.
+  - **≈ 11 GB/s:** el límite es la plataforma (la RAM a 2133), y el tema se cierra.
+
+## 13. Reloj de la memoria de la GPU (solo con el visto bueno de Adrián; después de la 7)
+
+El decode está limitado por el lado GPU, y ese lado está limitado por el ancho de banda de la VRAM. Subir el reloj de
+la GDDR6 es la única palanca de hardware sin tocar la BIOS. Las pruebas de potencia de antes eran de otra cosa.
+
+**El riesgo:** sin acceso físico, un cuelgue duro dejaría el PC parado hasta finales de mes. Por eso:
+
+1. **Antes de nada, el perro guardián:**
+   - `lsmod | grep -i -E "iTCO|wdt"` y `wdctl`;
+   - si hay watchdog hardware, `RuntimeWatchdogSec=30s` en `/etc/systemd/system.conf`;
+   - y comprobad que un `echo c > /proc/sysrq-trigger` en una ventana de mantenimiento **reinicia solo**.
+   - **Si no se reinicia solo, la orden se cancela.**
+2. **Que no persista:**
+   - el offset se pone con NVML (`nvmlDeviceSetMemClkVfOffset` o `nvmlDeviceSetClockOffsets`; LACT o `nvidia_oc`
+     sirven);
+   - **nunca** en un servicio que arranque solo;
+   - un reinicio lo quita.
+3. **Pasos de +250 MHz.** En cada paso:
+   - B1 con los ajustes bit a bit (`STRATA_IQ_MT_MIN=1 --prompt-cache 0 --adapt-swaps 0 --pcie-frac 0`, temperatura
+     0): **el texto debe ser idéntico al de reloj de serie.** Si cambia un solo token, la VRAM corrompe: bajad dos pasos
+     y parad;
+   - B1 con la config normal;
+   - y `nvidia-smi -q -d ECC,PERFORMANCE`.
+4. **Parad cuando:**
+   - el tok/s deje de subir (la GDDR6 reintenta errores y se nota antes como caída de velocidad);
+   - o al llegar a +1500.
+
+   Quedaos dos pasos por debajo del mejor.
+- **Entrega:**
+  - la tabla paso / tok/s / bit a bit;
+  - el watchdog comprobado;
+  - el paso propuesto.
+
+  Lo aplico yo tras validar, con una prueba larga de 1 hora (B1 en bucle) antes de dejarlo puesto.
+
+## Ideas en estudio (sin orden todavía)
+
+- **La capa del borrador (MTP) ocupa 836 MiB con sus 512 expertos siempre en VRAM.** Si su uso está tan concentrado
+  como el de las capas normales, dejar residentes solo los más usados liberaría cientos de MiB para la caché
+  principal. Antes necesito saber si el motor puede volcar el enrutado de esa capa. Si podéis, decidme qué hay en el
+  código para ello (solo leer).
