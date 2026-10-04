@@ -23,6 +23,7 @@ jobs:
           python3 docs/fork/ops/test_ada_decide.py
           python3 docs/fork/ops/test_s1_learn.py
           python3 docs/fork/ops/test_bench.py
+          python3 docs/fork/ops/test_cache_sim.py
       - name: setup's tests
         run: |
           for t in tools/test_setup_choices.py tools/test_setup_lowram.py tools/test_setup_draft_vocab.py; do python3 "$t"; done
