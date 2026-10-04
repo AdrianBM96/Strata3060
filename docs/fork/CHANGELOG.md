@@ -22,3 +22,4 @@ ESTADO: C19 (batería tester) | HUMO 1/2, CARGA pendiente | ninguno | 2026-10-04
 | 2026-10-04 | — | Norma tester (verificado: responde TESTER OK) | - | - | Vigente |
 | 2026-10-04 | C10b | cachelog por peticion + prompt-cache 12 (verificado) | api/model/UA, reused, resume, evictions, first_diff, phash | - | 48 h de datos pendientes |
 | 2026-10-04 | C11 | CERRADA sin adoptar (+38 huecos; reserva intacta); A/B parado, auto restaurado | - | Cerrada |
+| 2026-10-04 | C22 | Techo teórico (sin STREAM) | decode real 44ms vs 30 suma / 15-18 max; +5pts~-2ms | - | STREAM pendiente |
