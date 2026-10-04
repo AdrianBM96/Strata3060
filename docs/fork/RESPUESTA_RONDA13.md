@@ -27,9 +27,12 @@ Hasta ahora `server.py` rechazaba `--lazy` con cualquier visión ("lazy loading 
 
 Pasos en vuestro motor (`~/Strata`):
 
-1. **Traer el cambio:** `git fetch fork3060 claude/strata-rtx3060-optimization-zfgxq8`, y
-   `git cherry-pick 883937e -- serve/server.py serve/test_server.py docs/DETAILS.md`. Mejor por fichero, con
-   `git checkout fork3060/... -- <fichero>` si choca con lo vuestro.
+1. **Traer el cambio** como parche, para no pisar vuestro `server.py`, que lleva el parche de System One:
+   ```bash
+   git fetch fork3060 claude/strata-rtx3060-optimization-zfgxq8
+   git show 883937e -- serve/server.py serve/test_server.py docs/DETAILS.md | git apply --3way
+   python3 serve/test_server.py
+   ```
 2. **En `strata-swift-iq2_xs.json`**, copiad la sección `"vision"` de `strata-iq2_xs.json` con:
    - `"gpu": false`;
    - `"max_tokens": 300`, que es lo que `setup.py` pone para la CPU (`VISION["cpu"]`).
