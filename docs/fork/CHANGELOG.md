@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C26 A/B-bis ronda1 (yo, con lock) | C27 obrero | C28 obrero | C30 obrero | 2026-10-04 22:58 UTC
+ESTADO: C26 A/B-bis (yo, con lock) | C27/C28 obreros | C30 v4 relay | 2026-10-04 23:15 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -50,6 +50,7 @@ ESTADO: C26 A/B-bis ronda1 (yo, con lock) | C27 obrero | C28 obrero | C30 obrero
 | 2026-10-04 | C17-tree | MTP-DRAFT.md al repo; medida árbol: ms/ventana vs 2,3,4,6,8 + expertos CPU/PCIe | con resto de C17, sin cola nueva | - | Motor tras P08 |
 | 2026-10-04 | C28-rie | C28-RIESGOS al repo (para briefing prototipo): R T×10240 FP32 ✓, checkpoint bifásico root 2048, zig-zag >32K | coherente con mi estudio; va al briefing wt-C28 | - | Archivado |
 | 2026-10-04 | C26-AB | A/B B1 6+6 P08+MTMIN vs prod (binarios con md5, producción restaurada 056819f9) | def 45,05±1,36 vs p08 45,00 (−0,1 % sin 1ª fría): kernel −16,5 % NO mueve B1 → CPU fuera del crítico (C22); NO se despliega | - | A producción no |
+| 2026-10-04 | C30-v4 | Dirección visual definitiva (ref-v4 abierta: SaaS claro, clay, 3 col); relay; TAREAS con pasos | - | - | En curso |
 | 2026-10-04 | C30+N17 | Oficina agéntica (ref.jpg copiada, METRICAS.json creado, N17); a obrero al liberar slot (2 ocupados) | herdr OK (5 agentes), caches vigía/upstream existen | - | En cola |
 | 2026-10-04 | C26-c | P09 refutada en RAM (x0,985-1,029, 2,6-5,1 GB/s: CPU-bound); C30 a obrero (wt-C30 staging) | bit-idéntico; archivar P09 salvo integración loader | - | C26a en curso |
 | 2026-10-04 | C30-amp | Ampliación Adrián (letterbox, panel+envío con token, kanban, N18/N19); TAREAS.json (21) creado; relay al obrero | - | - | En curso |
