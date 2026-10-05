@@ -31,3 +31,7 @@
 
 ## Abiertos
 - `Aprobar` probado solo hasta el confirm (no disparado en vivo, correcto); prueba `Estado`→explorer pendiente de presenciar; sesiones persistentes 30 d sin logout visible.
+
+## Cobertura de puertas (verificado 2026-10-05)
+- Sin sesión: `/api/kinds`, `/api/offices`, `/api/log`, `/api/events`, `/api/office/job` → 401 todos;
+  `/login` 200 con tema claro/oscuro; `/` 302 a login.
