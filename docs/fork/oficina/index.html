@@ -29,6 +29,7 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 #stage{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
   width:min(100vw,calc(100vh*16/9));height:min(100vh,calc(100vw*9/16));
   display:grid;grid-template-columns:64px 250px 1fr 330px;gap:12px;padding:12px;overflow:hidden}
+#stage.other .strataOnly,#stage.other #contract{display:none!important}
 #stage.compact{grid-template-columns:56px 1fr;gap:8px;padding:8px}
 #stage.compact #side,#stage.compact #subtitle,#stage.compact .legend,#stage.compact .float{display:none}
 #stage.compact #head h1{font-size:18px}
@@ -237,11 +238,11 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
     <div class="h">Oficinas</div>
     <div id="offices" style="display:flex;flex-direction:column;gap:8px"></div>
     <button class="new" id="newOff">+ Nueva oficina</button>
-    <div class="h" style="margin-top:14px">Producción</div>
-    <div class="mini" id="sideKpi"></div>
+    <div class="h strataOnly" style="margin-top:14px">Producción</div>
+    <div class="mini strataOnly" id="sideKpi"></div>
     <div class="grow"></div>
-    <div class="h">Cola</div>
-    <div class="kpi"><small id="qtxt">—</small><div class="bar"><i id="qbar" style="width:0"></i></div></div>
+    <div class="h strataOnly">Cola</div>
+    <div class="kpi strataOnly"><small id="qtxt">—</small><div class="bar"><i id="qbar" style="width:0"></i></div></div>
   </aside>
 
   <main id="center">
@@ -551,6 +552,11 @@ const scene3d=(()=>{
   function drawScreen(){
     const c=screenCanvas.getContext('2d'),w=1024,h=560,m=(S&&S.metrics)||{},b=m.base||{},p=m.produccion||{};
     const g=c.createLinearGradient(0,0,0,h);g.addColorStop(0,'#111827');g.addColorStop(1,'#0b1220');c.fillStyle=g;c.fillRect(0,0,w,h);
+    if(OTHER()){const o=OFFICES.find(x=>x.id===WS)||{nombre:'Oficina'};c.fillStyle='#94a3b8';c.font='600 30px Inter,system-ui,sans-serif';c.fillText('OFICINA',48,70);
+      c.fillStyle='#e5e7eb';c.font='750 96px Inter,system-ui,sans-serif';c.fillText(String(o.nombre).slice(0,16),48,190);
+      const ag=(S&&S.agents)||[],wk=ag.filter(a=>a.status==='working').length;c.font='600 36px Inter,system-ui,sans-serif';c.fillStyle='#34d399';c.fillText(`${wk} trabajando`,48,270);c.fillStyle='#94a3b8';c.fillText(`${ag.length-wk} en pausa`,330,270);
+      c.font='500 26px Inter,system-ui,sans-serif';ag.slice(0,6).forEach((a,i)=>{c.fillStyle=a.status==='working'?'#34d399':'#64748b';c.fillText('● '+a.name+' · '+(a.role||''),48+(i%2)*480,350+Math.floor(i/2)*44)});
+      screenTex.needsUpdate=true;return}
     c.fillStyle='#94a3b8';c.font='600 30px Inter,system-ui,sans-serif';c.fillText('PRODUCCIÓN · STRATA3060',48,70);
     const dB=p.B1&&b.B1?(p.B1/b.B1-1)*100:null, dP=p.P3_s&&b.P3_s?(b.P3_s/p.P3_s-1)*100:null;
     const big=(lab,val,unit,d,x)=>{c.fillStyle='#e5e7eb';c.font='600 26px Inter,system-ui,sans-serif';c.fillText(lab,x,140);
@@ -817,11 +823,12 @@ new ResizeObserver(()=>$('#stage').classList.toggle('compact',$('#stage').client
 
 /* datos: SSE con reconexión y respaldo por sondeo */
 let wsTimer=null;
-function setOffice(id){if(!id)return;WS=id;clearInterval(wsTimer);sel=null;
+function setOffice(id){if(!id)return;WS=id;clearInterval(wsTimer);sel=null;$('#stage').classList.toggle('other',!!OTHER());to=OTHER()?'':'claude';
   if(OTHER()){const go=()=>api('/api/state?ws='+encodeURIComponent(id)).then(st=>{if(WS===id)apply(st,true)}).catch(()=>{});go();wsTimer=setInterval(go,5000)}
   else api('/api/state').then(st=>apply(st,true)).catch(()=>{});renderSide()}
 function apply(st,force){if(!force&&OTHER())return;const prevW=JSON.stringify(S?.agents?.map(a=>[a.name,a.status,a.activity]));S=st;
   let wi=0;for(const a of S.agents)if(OTHER()||!LOOK[a.name])workerIdx[a.name]=wi++;
+  if(OTHER()&&!S.agents.find(a=>a.name===to))to=(S.agents.find(a=>/arquit/i.test(a.role||''))||S.agents[0]||{name:''}).name;
   if(!sel||!S.agents.find(a=>a.name===sel))sel=S.agents[0]?.name||null;
   scene3d.sync(S.agents);renderAll();if(prevW!==JSON.stringify(S.agents.map(a=>[a.name,a.status,a.activity])))scene3d.request()}
 async function loadOffices(){try{const r=await api('/api/offices');OFFICES=r.offices||[];STRATA_WS=r.strata;if(!WS)WS=STRATA_WS;if(S)renderSide()}catch(_){}}

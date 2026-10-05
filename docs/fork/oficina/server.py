@@ -334,7 +334,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, THREE, "text/javascript; charset=utf-8")
         elif u.path == "/api/state":
             ws = parse_qs(u.query).get("ws", [""])[0]
-            self._json(200, state_ws(ws) if ws and re.match(r"^w\d+$", ws) else get_state())
+            self._json(200, state_ws(ws) if ws and re.match(r"^w[0-9A-Za-z]+$", ws) else get_state())
         elif u.path == "/api/kinds":
             self._json(200, kinds())
         elif u.path == "/api/office/job":
