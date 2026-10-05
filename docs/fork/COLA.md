@@ -111,6 +111,7 @@ ni calidad.
 - **N23.** Verificación obligatoria en cada brazo del A/B: md5 de `/proc/<pid del motor>/exe` = binario del
   brazo (se apunta en la tabla; si no coincide, el brazo no cuenta) + la variable del brazo en
   `/proc/<pid>/environ`.
+- **N24.** Nada de `git add -A`: añadir solo los ficheros tocados (vía `git status` antes del commit).
 - **C30** (oficina, AMPLIACIÓN UI/UX de Adrián: 16:9 letterbox + 'gira el dispositivo'; panel lateral con
   terminal 30 líneas + envío DIRECTO / VÍA CLAUDE (token POST, límite 3 s, ≤4000 chars, log envíos);
   tablero kanban desde TAREAS.json; pixel font embebida, ≤30 fps, atajos 1-5/T/Esc; capturas 1920×1080 y
