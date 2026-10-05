@@ -133,8 +133,12 @@ def intasks(ags, foco, alln):
     return [t for t in tasks_list() if t.get("responsable") in ags or (foco and t.get("responsable") not in alln)]
 def api_offices():
     st = get_state()
-    try: ws = json.loads(herdr_out(["workspace", "list"]))["result"]["workspaces"]; raw = json.loads(herdr_out(["agent", "list"]))["result"]["agents"]
-    except Exception: ws, raw = [], []
+    try: ws = json.loads(herdr_out(["workspace", "list"]))["result"]["workspaces"]
+    except Exception: ws = []
+    try: raw = json.loads(herdr_out(["agent", "list"]))["result"]["agents"]
+    except Exception: raw = []
+    if not ws and st.get("agents"):
+        ws = [{"workspace_id": "w1", "label": "Strata3060", "focused": True}]
     alln = set(a.get("name") for a in raw)
     offs = []
     for w in ws:
