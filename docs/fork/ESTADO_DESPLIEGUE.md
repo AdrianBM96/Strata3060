@@ -120,3 +120,10 @@ Verificado de extremo a extremo (responde por ada-next → Strata). En la web sa
 | macbook-air (100.99.86.60) | SSH `31017423Z@` con clave (instalada) + herdr 0.9.3 remoto | añadida y enabled |
 
 Desde herdr se controlan sus panes/agentes igual que en local.
+
+## C32 (2026-10-05): precarga post-arranque
+- `strata.service.d/precarga.conf`: `ExecStartPost=/home/bazzite/Strata/precarga.sh` (espera :8081 + POST
+  `/v1/load`). `--lazy` intacto. Verificado: GPU 11.281 MiB a los ~25 s del restart (objetivo ≤20 s, no
+  llegado por 5 s: mandan los 21 s de expertos a RAM); primera petición 1,35 s (sin penalización perezosa).
+- Incidencia: el primer arranque tras el cambio falló (BrokenPipeError, exit 1) y systemd rearrancó solo;
+  vigilar si se repite. Los scripts de A/B deben llamar a `precarga.sh` en su paso 'restaurar producción'.

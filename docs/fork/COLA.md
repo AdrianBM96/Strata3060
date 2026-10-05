@@ -73,7 +73,9 @@ ni calidad.
 - [x] **C19** hecha (batería 2× HUMO + 2× CARGA, todo PASA) · [x] **C22** hecha (techo v2: precarga ≤1 ms, manda CPU).
 - [ ] **C23** (cierre) · **C27** (palanca 1 a obrero, PRIORIDAD) · **C26** (CERRADO: P08 archivado en
   `patches/p08-interleave.patch`, se reabre sin round-trip; C26a cancelado) · **C28** (prototipo a obrero)
-  · **C24** (simplificado + burbuja sync + palancas 2,4,5) · **E1** (+afinidad) · **C29** (a,b primero;
+  · **C32** (precarga post-arranque, OK prod) · **C33** (latencia System One; tras C28/C32/C30) · **C34**
+  (caché conversaciones, OK prod si criterio) · **C35** (suffix-draft sin frenos, tras C34) · **C24**
+  (simplificado + burbuja sync + palancas 2,4,5) · **E1** (+afinidad) · **C29** (a,b primero;
   d con gate) · **C14a** (código listo; medir a su turno) · **C16** (código listo; medir a su turno) ·
   **C20** · **C17** (script listo; falta CARGA + árbol) · **C15** (degradada) · **C8** (+P05 c) · **E3** ·
   **E4** (+3,7 %, al final) · **C21** · **C30** (oficina a obrero).

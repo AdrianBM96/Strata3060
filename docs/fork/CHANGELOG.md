@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C32 precarga (yo) | C28 préstamo listo | 2026-10-05 05:01 UTC
+ESTADO: C28 préstamo A/B (yo, locks) | C32 listo | 2026-10-05 05:03 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -67,6 +67,8 @@ ESTADO: C32 precarga (yo) | C28 préstamo listo | 2026-10-05 05:01 UTC
 | 2026-10-05 | C29b-rep | Réplica 6+6 en marcha (lock); C28 a cirugía (obrero); C30 v4-fix en :8095 para revisión | capturas v4-*.png en docs/fork/oficina/ | - | En curso |
 | 2026-10-05 | C28-ring | RING=512: log on real pero bytes sin reúso (fetch por chunk persiste); pgrep-N23 poco fiable en inline (usar scripts) | prod restaurada | - | Devolver con métrica B/leído |
 | 2026-10-05 | C30-fin | Oficina v5 terminada por Claude (799074e) en :8095; TAREAS→HECHO | - | 799074e | HECHO |
+| 2026-10-05 | C32 | Precarga ExecStartPost + POST /v1/load (OK prod, --lazy intacto) | GPU 11,3GB ~25s (obj ≤20s, +5s por RAM); 1ª petición 1,35s; un arranque falló y rearrancó solo | - | Desplegado |
+| 2026-10-05 | C33-C35 | X2/X3/X4 al repo; cola con C32-C35 | - | - | En cola |
 | 2026-10-05 | C28-mot | Motivo RING (512/wave vs 384, no hand_in_): obrero a PRÉSTAMO de huecos + repoblado | prod restaurada da9a7a9b | - | En curso |
 | 2026-10-05 | C30-r2 | Rev2 aplicada (6434bc8) y desplegada en :8095; TAREAS al día (N18); METRICAS B1 prod→51,40 | capturas nuevas + zoom en docs/fork/oficina/ | - | A revisar |
 | 2026-10-05 | C29b-fin | Réplica +0,5%; 12+12 +1,23%±2,09 INCLUYE 0 → archivado (sin despliegue) | prod intacta | - | Archivado |
