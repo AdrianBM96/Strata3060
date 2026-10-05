@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C29b réplica (motor) | C30 rev2 desplegada | 2026-10-05 03:09 UTC
+ESTADO: C29b archivado 12+12 (yo) | C28 obrero | 2026-10-05 03:13 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -64,6 +64,7 @@ ESTADO: C29b réplica (motor) | C30 rev2 desplegada | 2026-10-05 03:09 UTC
 | 2026-10-05 | C28-ab2 | N23 OK; P3/P4 +0%; log c28: superbloques [2,3] pero fetch intacto por chunk (65-85 GiB) | premio real, mecanismo ausente: falta cirugía del bucle | - | Devolver |
 | 2026-10-05 | C29b-rep | Réplica 6+6 en marcha (lock); C28 a cirugía (obrero); C30 v4-fix en :8095 para revisión | capturas v4-*.png en docs/fork/oficina/ | - | En curso |
 | 2026-10-05 | C30-r2 | Rev2 aplicada (6434bc8) y desplegada en :8095; TAREAS al día (N18); METRICAS B1 prod→51,40 | capturas nuevas + zoom en docs/fork/oficina/ | - | A revisar |
+| 2026-10-05 | C29b-fin | Réplica +0,5%; 12+12 +1,23%±2,09 INCLUYE 0 → archivado (sin despliegue) | prod intacta | - | Archivado |
 | 2026-10-05 | C29-b | ROWS2 6+6 N23: +1,91%±1,82 (IC95 +0,1/+3,7, justo; medianas +1,7%) | bit-exacto+parity; (a) roto; (c)(d) pdtes | - | Decide Claude |
 | 2026-10-05 | C29-cod | 4 palancas + parity (1153+/32-, binario listo); (b) NO descartada (bit-exacta lane-0) | GPU+A/B a su turno (tras C28/C27/P08) | - | Código listo |
 | 2026-10-05 | C30-dep | Oficina en :8095 (local+tailnet 200, v4-fix); N21; C31 creado (obrero) | BLOQUEO resuelto | - | Desplegada |
