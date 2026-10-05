@@ -95,3 +95,4 @@ ESTADO: C35 nulo (yo) | 2026-10-05 06:34 UTC
 | 2026-10-04 | C26-fin | C26 cerrado: P08 en patches/p08-interleave.patch; C26a cancelado; N12→3 obreros; C27+C28 asignados | - | - | Cola nueva |
 | 2026-10-05 | E1 | Diag (35W, 3,8GHz, gov/EPP/THP óptimos) + afinidad −1,22%±2,45 + dma −5,01%±3,00 (rechazado) | sistema ya óptimo; hugepages requiere código; -lgc sin throttling | - | HECHO |
 | 2026-10-05 | C35-ab | (b) B4 6+6 +1,05%±4,63 y B1 +0,65%±1,77 (ambos IC0); bit-bit OK (fence en suelo) | (a)(b) nulos; parche en patches/c35-suffix.patch | - | Archivado |
+| 2026-10-05 | C37 | Curva chunk efectivo 5120-8192 (fijos recortados a buffers): P3 5,86/5,82/5,00/4,36, B1 plano | 8192 −13% P3-short; proponer A/B fijo-8192 vs auto | - | Curva lista |
