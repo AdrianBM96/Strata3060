@@ -88,8 +88,9 @@ def build_state():
               mkagent("tester", "working" if lock_txt.strip() else "idle", tact, C["tester"], R["tester"]),
               mkagent("explorer", g("explorer"), last_line(ENVIADOS) or "investigando", C["explorer"], R["explorer"]),
               mkagent("suplente", "working" if supl else "idle", "SUPLENTE AL MANDO" if supl else "en reposo", C["suplente"], R["suplente"])]
+    wsS = statuses.get("opencode2", {}).get("workspace_id", "w1")   # solo los obreros de la oficina de Strata
     for name, a in statuses.items():
-        if name not in FIXED:
+        if name not in FIXED and a.get("workspace_id") == wsS:
             agents.append(mkagent(name, a.get("agent_status", "idle"),
                                   next((s for s in segs if name in s), obrs[0] if obrs else "trabajando"),
                                   "#fb7185", "Contrato " + name))
