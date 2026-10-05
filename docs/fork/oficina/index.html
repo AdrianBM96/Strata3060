@@ -198,7 +198,9 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
 #modal.on{display:grid}
 #modal .card{width:min(420px,92vw);padding:22px;max-height:92vh;overflow:auto}
 #modal .card.wide{width:min(820px,96vw)}
-.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.fgrid,.fgrid3{display:grid;grid-template-columns:1fr 1fr;gap:8px}.fgrid3{grid-template-columns:.8fr 1fr 1fr}
+.fgrid3 select{font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:12px;padding:11px 13px}
+.mtag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);background:var(--panel2);border-radius:6px;padding:1px 6px;margin-left:6px}
 .fhead,.frow{display:grid;grid-template-columns:1.1fr 1fr 1.6fr auto 32px;gap:8px;align-items:center}
 .fhead{margin:16px 2px 6px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
 .frow{padding:6px;border:1px solid var(--line);border-radius:12px;margin-bottom:6px;background:var(--panel)}
@@ -666,7 +668,7 @@ function renderSide(){
   $('#sideKpi').innerHTML=k('Escritura B1',p.B1,'t/s',p.B1&&b.B1?(p.B1/b.B1-1)*100:null)+k('Lectura P3',p.P3_s,'s',p.P3_s&&b.P3_s?(b.P3_s/p.P3_s-1)*100:null);
   const q=S.queue||{done:0,total:0};$('#qtxt').textContent=`${q.done} de ${q.total} contratos cerrados`;$('#qbar').style.width=(q.total?q.done/q.total*100:0)+'%';
   $('#offices').innerHTML=OFFICES.map(o=>
-    `<div class="offw"><button class="off${o.id===WS?' on':''}" data-off="${esc(o.id)}"><span class="ic">${o.strata?ICB:ICF}</span><span><b>${esc(o.nombre)}</b><small>${o.agentes.length} agentes${o.strata?' · '+o.tareas+' tareas':''}</small></span>${o.needs?'<i class="dot"></i>':''}</button>${o.strata?'':`<button class="del" data-del="${esc(o.id)}" aria-label="Borrar ${esc(o.nombre)}" title="Borrar oficina">${ICX}</button>`}</div>`).join('');
+    `<div class="offw"><button class="off${o.id===WS?' on':''}" data-off="${esc(o.id)}"><span class="ic">${o.strata?ICB:ICF}</span><span><b>${esc(o.nombre)}</b><small>${o.agentes.length} agentes${o.strata?' · '+o.tareas+' tareas':''}${o.maquina&&o.maquina!=='bazzite'?`<span class="mtag">${esc(o.maquina)}</span>`:''}</small></span>${o.needs?'<i class="dot"></i>':''}</button>${o.strata?'':`<button class="del" data-del="${esc(o.id)}" aria-label="Borrar ${esc(o.nombre)}" title="Borrar oficina">${ICX}</button>`}</div>`).join('');
   $$('#offices [data-off]').forEach(b=>b.onclick=()=>setOffice(b.dataset.off));$$('[data-del]').forEach(b=>b.onclick=e=>{e.stopPropagation();delOffice(b.dataset.del)});
 }
 function renderInspector(){
@@ -765,19 +767,21 @@ async function send(agent,mode,text){try{const r=await api('/api/send',{method:'
 /* modal */
 function confirmModal(t,p,ok,body='',okText='Aceptar'){$('#mo').textContent=okText;$('#mt').textContent=t;$('#mp').textContent=p;$('#mb').innerHTML=body;$('#modal').classList.add('on');
   $('#mo').onclick=()=>{$('#modal').classList.remove('on');ok()};$('#mc').onclick=()=>$('#modal').classList.remove('on');setTimeout(()=>($('#mb input')||$('#mo')).focus(),30)}
-let KINDS=null;
+let KINDS=null,KBY={},MACHS=['bazzite'];
 const DEF_ROWS=[{perfil:'Arquitecto',kind:'claude',model:'opus',n:1},{perfil:'Desarrollador',kind:'opencode',model:'litellm-gateway/ada-next',n:2}];
 function rowHTML(r,i){const K=KINDS||{};const ms=(K[r.kind]?.modelos)||[];
   return`<div class="frow" data-i="${i}">
     <input class="fp" value="${esc(r.perfil)}" placeholder="Perfil" maxlength="24" aria-label="Perfil">
     <select class="fk" aria-label="Tipo de agente">${Object.entries(K).map(([k,v])=>`<option value="${k}"${k===r.kind?' selected':''}>${esc(v.nombre)}</option>`).join('')}</select>
-    <select class="fm" aria-label="Modelo"><option value="">(por defecto)</option>${ms.map(m=>`<option${m===r.model?' selected':''}>${esc(m)}</option>`).join('')}</select>
+    <input class="fm" list="ml-${i}" value="${esc(r.model)}" placeholder="(por defecto) · escribe para buscar" aria-label="Modelo"><datalist id="ml-${i}">${ms.map(m=>`<option value="${esc(m)}">`).join('')}</datalist>
     <span class="fn"><button type="button" class="m">−</button><b>${r.n}</b><button type="button" class="p">+</button></span>
     <button type="button" class="fx" aria-label="Quitar perfil">✕</button></div>`}
+async function loadKinds(m){if(!KBY[m]){toast(m==='bazzite'?'Cargando tipos de agente y modelos…':`Consultando agentes y modelos en ${m}…`);KBY[m]=await api('/api/kinds?m='+encodeURIComponent(m))}KINDS=KBY[m];return KINDS}
 async function newOffice(){
-  if(!KINDS){toast('Cargando tipos de agente y modelos…');try{KINDS=await api('/api/kinds')}catch(_){toast('No se pudieron cargar los modelos',true);return}}
+  let mach='bazzite';
+  try{await loadKinds(mach)}catch(_){toast('No se pudieron cargar los modelos',true);return}
   let rows=DEF_ROWS.map(r=>({...r}));
-  const body=`<div class="fgrid"><input id="noName" placeholder="Nombre del proyecto (p. ej. Streamia)" maxlength="40"><input id="noDir" placeholder="Carpeta (por defecto ~/nombre)"></div>
+  const body=`<div class="fgrid3"><select id="noMach" aria-label="Máquina">${MACHS.map(m=>`<option value="${esc(m)}">${m==='bazzite'?'bazzite (este servidor)':esc(m)}</option>`).join('')}</select><input id="noName" placeholder="Nombre del proyecto (p. ej. Streamia)" maxlength="40"><input id="noDir" placeholder="Carpeta (por defecto ~/nombre)"></div>
     <div class="fhead"><span>Perfil</span><span>Tipo de agente</span><span>Modelo</span><span>Nº</span><span></span></div>
     <div id="frows"></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px"><button type="button" class="btn" id="addRow">+ Añadir perfil</button><small id="ftot" style="color:var(--muted)"></small></div>
@@ -787,7 +791,7 @@ async function newOffice(){
     $$('#frows .frow').forEach(el=>{const i=+el.dataset.i,r=rows[i];
       el.querySelector('.fp').oninput=e=>r.perfil=e.target.value;
       el.querySelector('.fk').onchange=e=>{r.kind=e.target.value;r.model='';draw()};
-      el.querySelector('.fm').onchange=e=>r.model=e.target.value;
+      el.querySelector('.fm').oninput=e=>r.model=e.target.value.trim();
       el.querySelector('.p').onclick=()=>{if(r.n<4&&rows.reduce((a,x)=>a+x.n,0)<8){r.n++;draw()}};
       el.querySelector('.m').onclick=()=>{if(r.n>1){r.n--;draw()}};
       el.querySelector('.fx').onclick=()=>{rows.splice(i,1);draw()}})};
@@ -795,10 +799,13 @@ async function newOffice(){
     $('#modal .card').classList.remove('wide');
     const name=$('#noName').value.trim();if(!name){toast('Ponle un nombre',true);return}
     if(rows.some(r=>!r.perfil.trim())){toast('Cada fila necesita un nombre de perfil',true);return}
-    try{const r=await api('/api/office',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,cwd:$('#noDir').value.trim()||undefined,equipo:rows,auto:$('#noAuto').checked})});
+    const bad=rows.find(r=>r.model&&!(KINDS[r.kind]?.modelos||[]).includes(r.model));if(bad){toast(`Modelo “${bad.model}” no disponible para ${bad.kind} en ${mach}`,true);return}
+    try{const r=await api('/api/office',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,maquina:mach,cwd:$('#noDir').value.trim()||undefined,equipo:rows,auto:$('#noAuto').checked})});
       if(!r.ok){toast(r.error||'No se pudo crear',true);return}toast(`Creando “${name}”…`);followJob(r.job,name)}catch(_){toast('No se pudo crear',true)}},body,'Crear oficina');
   draw();
-  $('#addRow').onclick=()=>{if(rows.reduce((a,x)=>a+x.n,0)>=8){toast('Máximo 8 agentes por oficina',true);return}rows.push({perfil:'',kind:'opencode',model:'',n:1});draw();$$('#frows .fp').at(-1).focus()};
+  $('#noMach').onchange=async e=>{mach=e.target.value;$('#noMach').disabled=true;try{await loadKinds(mach)}catch(_){toast('No se pudo consultar '+mach,true)}$('#noMach').disabled=false;
+    const ks=Object.keys(KINDS);rows.forEach(r=>{if(!KINDS[r.kind]){r.kind=ks.includes('opencode')?'opencode':ks[0];r.model=''}else if(r.model&&!KINDS[r.kind].modelos.includes(r.model))r.model=''});draw()};
+  $('#addRow').onclick=()=>{if(rows.reduce((a,x)=>a+x.n,0)>=8){toast('Máximo 8 agentes por oficina',true);return}rows.push({perfil:'',kind:KINDS.opencode?'opencode':Object.keys(KINDS)[0],model:'',n:1});draw();$$('#frows .fp').at(-1).focus()};
   $('#mc').addEventListener('click',()=>$('#modal .card').classList.remove('wide'),{once:true});
   $('#noName').oninput=()=>{$('#noDir').placeholder='~/'+($('#noName').value.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,12)||'nombre')}}
 async function followJob(id,name){let seen=0;
@@ -831,7 +838,7 @@ function apply(st,force){if(!force&&OTHER())return;const prevW=JSON.stringify(S?
   if(OTHER()&&!S.agents.find(a=>a.name===to))to=(S.agents.find(a=>/arquit/i.test(a.role||''))||S.agents[0]||{name:''}).name;
   if(!sel||!S.agents.find(a=>a.name===sel))sel=S.agents[0]?.name||null;
   scene3d.sync(S.agents);renderAll();if(prevW!==JSON.stringify(S.agents.map(a=>[a.name,a.status,a.activity])))scene3d.request()}
-async function loadOffices(){try{const r=await api('/api/offices');OFFICES=r.offices||[];STRATA_WS=r.strata;if(!WS)WS=STRATA_WS;if(S)renderSide()}catch(_){}}
+async function loadOffices(){try{const r=await api('/api/offices');OFFICES=r.offices||[];STRATA_WS=r.strata;MACHS=r.maquinas||MACHS;if(!WS)WS=STRATA_WS;if(S)renderSide()}catch(_){}}
 function connect(){const es=new EventSource('/api/events');es.onmessage=e=>{try{apply(JSON.parse(e.data))}catch(_){}};
   es.onerror=()=>{es.close();$('#live').className='live off';$('#live').textContent='reconectando…';setTimeout(connect,4000)}}
 api('/api/state').then(apply).catch(()=>{});loadOffices();setInterval(loadOffices,60000);connect();

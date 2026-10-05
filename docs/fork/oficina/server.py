@@ -59,8 +59,8 @@ def estado_segments():
     return segs
 def table_rows(n=8): return [l for l in read(CHANGELOG).splitlines() if re.match(r"\|\s*20", l)][-n:]
 def short_row(row): c = [x.strip() for x in row.strip().strip("|").split("|")]; return "%s %s: %s (%s)" % tuple(c[:2] + c[2:3] + c[4:5]) if len(c) >= 5 else row.strip()
-def herdr_out(args, timeout=8):
-    try: return subprocess.run(["herdr"] + args, capture_output=True, text=True, timeout=timeout).stdout
+def herdr_out(args, timeout=8, mach=None):
+    try: return subprocess.run(["herdr"] + (["--machine", mach] if mach else []) + args, capture_output=True, text=True, timeout=timeout).stdout
     except Exception: return ""
 def mkagent(name, status, activity, color, role):
     st = "working" if status == "working" else "idle"
@@ -110,10 +110,10 @@ def get_state():
     if CACHE["data"] is None or time.monotonic() - CACHE["at"] >= interval:
         CACHE["data"] = build_state(); CACHE["at"] = time.monotonic(); CACHE["data"]["interval"] = interval
     return CACHE["data"]
-def valid_agent(agent): get_state(); return bool(re.match(r"^[\w][\w.\-]{0,31}$", agent or "")) and (agent in LAST_AGENTS or agent in {a.get("name") for a in raw_agents()})
+def valid_agent(agent): get_state(); return bool(re.match(r"^[\w][\w.\-]{0,31}$", agent or "")) and (agent in LAST_AGENTS or agent in agmap())
 def api_log(agent):
     if not valid_agent(agent): return {"error": "agente desconocido"}
-    out = herdr_out(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "45", "--format", "text"], 10)
+    out = herdr_out(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "45", "--format", "text"], 15, agmap().get(agent))
     if not out:
         return {"agent": agent, "error": "herdr no responde"}
     return {"agent": agent, "lines": out.strip().splitlines()[-30:]}
@@ -137,11 +137,37 @@ def meta():
 def save_meta(m):
     os.makedirs(os.path.dirname(OFIMETA), exist_ok=True)
     with open(OFIMETA, "w") as f: json.dump(m, f, ensure_ascii=False)
-def hj(args, timeout=15):
-    try: return json.loads(herdr_out(args, timeout))["result"]
+def hj(args, timeout=15, mach=None):
+    try: return json.loads(herdr_out(args, timeout, mach))["result"]
     except Exception: return None
-def raw_agents():
-    r = hj(["agent", "list"]); return r["agents"] if r else []
+def raw_agents(mach=None):
+    r = hj(["agent", "list"], 15, mach); return r["agents"] if r else []
+MCACHE = {"at": 0, "data": []}; HOMES = {}; AGCACHE = {"at": 0, "data": {}}
+def machines():
+    """Máquinas remotas guardadas en herdr (las habilitadas). bazzite es la local."""
+    if time.time() - MCACHE["at"] < 300: return MCACHE["data"]
+    try: ms = [m for m in json.loads(herdr_out(["machine", "list", "--json"], 10)) if m.get("enabled")]
+    except Exception: ms = []
+    MCACHE.update(at=time.time(), data=[{"label": m["label"], "target": m["target"]} for m in ms]); return MCACHE["data"]
+def target(mach): return next((m["target"] for m in machines() if m["label"] == mach), None)
+def ssh_run(mach, cmd, t=30, inp=None):
+    tg = target(mach)
+    if not tg: return ""
+    full = 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; ' + cmd
+    try: return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", tg, full], capture_output=True, text=True, timeout=t, input=inp).stdout
+    except Exception: return ""
+def rhome(mach):
+    if mach not in HOMES: HOMES[mach] = ssh_run(mach, "echo $HOME", 15).strip()
+    return HOMES[mach]
+def split_id(oid): return tuple(oid.split(":", 1)) if ":" in oid else (None, oid)
+def agmap():
+    """nombre de agente -> máquina (None = bazzite)."""
+    if time.time() - AGCACHE["at"] < 20: return AGCACHE["data"]
+    d = {a.get("name"): None for a in raw_agents() if a.get("name")}
+    for m in machines():
+        for a in raw_agents(m["label"]):
+            if a.get("name") and a["name"] not in d: d[a["name"]] = m["label"]
+    AGCACHE.update(at=time.time(), data=d); return d
 def strata_ws(ws):
     for w in ws:
         if w.get("label") == "Strata3060": return w.get("workspace_id")
@@ -149,28 +175,34 @@ def strata_ws(ws):
     return names.get("opencode2", "w1")
 def api_offices():
     st = get_state(); r = hj(["workspace", "list"]); ws = r["workspaces"] if r else []
-    sid = strata_ws(ws); raw = raw_agents(); m = meta(); offs = []
-    for w in ws:
-        wid = w.get("workspace_id"); es = wid == sid
-        ags = [a.get("name") for a in raw if a.get("workspace_id") == wid and a.get("name")]
-        tl = tasks_list() if es else []
-        esp = [t for t in tl if t.get("columna") == "ESPERA OK" and t.get("aprobador") == "adrian"]
-        offs.append({"id": wid, "nombre": w.get("label") or wid, "agentes": [a["name"] for a in st["agents"]] if es else ags,
-                     "tareas": len([t for t in tl if t.get("columna") in ("EN CURSO", "ESPERA OK", "EN COLA")]),
-                     "needs": bool(esp), "strata": es, "foco": es, "cwd": m.get(wid, {}).get("cwd", ""),
-                     "perfiles": m.get(wid, {}).get("agentes", [])})
-    return {"offices": offs, "strata": sid}
-def state_ws(wid):
-    m = meta().get(wid, {}); roles = {a["name"]: a["rol"] for a in m.get("agentes", [])}
+    sid = strata_ws(ws); m = meta(); offs = []
+    for mach in [None] + [x["label"] for x in machines()]:
+        if mach:
+            r = hj(["workspace", "list"], 20, mach); ws = r["workspaces"] if r else []
+        raw = raw_agents(mach)
+        for w in ws:
+            wid = w.get("workspace_id"); oid = (mach + ":" + wid) if mach else wid; es = (mach is None and wid == sid)
+            ags = [a.get("name") for a in raw if a.get("workspace_id") == wid and a.get("name")]
+            tl = tasks_list() if es else []
+            esp = [t for t in tl if t.get("columna") == "ESPERA OK" and t.get("aprobador") == "adrian"]
+            offs.append({"id": oid, "nombre": w.get("label") or wid, "maquina": mach or "bazzite",
+                         "agentes": [a["name"] for a in st["agents"]] if es else ags,
+                         "tareas": len([t for t in tl if t.get("columna") in ("EN CURSO", "ESPERA OK", "EN COLA")]),
+                         "needs": bool(esp), "strata": es, "foco": es, "cwd": m.get(oid, {}).get("cwd", ""),
+                         "perfiles": m.get(oid, {}).get("agentes", [])})
+    return {"offices": offs, "strata": sid, "maquinas": ["bazzite"] + [x["label"] for x in machines()]}
+def state_ws(oid):
+    mach, wid = split_id(oid)
+    m = meta().get(oid, {}); roles = {a["name"]: a["rol"] for a in m.get("agentes", [])}
     ags = [mkagent(a["name"], a.get("agent_status", "idle"), "trabajando" if a.get("agent_status") == "working" else
                    ("esperando confirmación" if a.get("agent_status") == "blocked" else "en reposo"),
                    "#fb7185", roles.get(a["name"], a.get("agent", "agente")))
-           for a in raw_agents() if a.get("workspace_id") == wid and a.get("name")]
+           for a in raw_agents(mach) if a.get("workspace_id") == wid and a.get("name")]
     return {"agents": ags, "metrics": {}, "ticker": [], "queue": {"done": 0, "total": 0}, "lock": False, "bench": False,
-            "suplencia": False, "herdr": True, "tareas": [], "ws": wid, "updated": time.strftime("%H:%M:%S UTC", time.gmtime())}
+            "suplencia": False, "herdr": True, "tareas": [], "ws": oid, "maquina": mach or "bazzite", "updated": time.strftime("%H:%M:%S UTC", time.gmtime())}
 def slug(t): return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")[:12] or "ofi"
-KINDS = {"claude": "Claude Code", "opencode": "opencode", "pi": "pi", "ada-cli": "ada-cli", "agy": "Antigravity (agy)"}
-KCACHE = {"at": 0, "data": None}
+KINDS = {"claude": "Claude Code", "opencode": "opencode", "pi": "pi", "ada-cli": "ada-cli (beta)", "agy": "Antigravity (agy)"}
+KCACHE = {}
 ADA_DIR = H("~/.local/share/strata-oficina/ada")
 ADA_PATH = ADA_DIR + ":" + H("~/.nvm/versions/node/v22.23.2/bin") + ":" + H("~/.local/bin") + ":/usr/local/bin:/usr/bin:/bin"
 try:
@@ -190,14 +222,24 @@ def _table(out):
         c = ln.split()
         if len(c) >= 2 and c[0] not in ("provider",) and not ln.startswith("["): res.append(c[0] + "/" + c[1])
     return res
-def kinds():
-    if KCACHE["data"] and time.time() - KCACHE["at"] < 600: return KCACHE["data"]
-    d = {"claude": ["opus", "sonnet", "haiku", "fable"],
-         "opencode": [l.strip() for l in _cmd(["opencode", "models"]).splitlines() if "/" in l],
-         "pi": _table(_cmd(["pi", "--list-models"])), "ada-cli": _table(_cmd(["ada-cli", "--list-models"])),
-         "agy": [l.split()[0] for l in _cmd(["agy", "models"]).splitlines() if l and not l.startswith("Fetching")]}
-    KCACHE.update(at=time.time(), data={k: {"nombre": KINDS[k], "modelos": v} for k, v in d.items()}); return KCACHE["data"]
-def _start(nombre, kind, model, pid, cwd, auto):
+def kinds(mach=None):
+    c = KCACHE.get(mach)
+    if c and time.time() - c[0] < 600: return c[1]
+    if not mach:
+        d = {"claude": ["opus", "sonnet", "haiku", "fable"],
+             "opencode": [l.strip() for l in _cmd(["opencode", "models"]).splitlines() if "/" in l],
+             "pi": _table(_cmd(["pi", "--list-models"])), "ada-cli": _table(_cmd(["ada-cli", "--list-models"])),
+             "agy": [l.split()[0] for l in _cmd(["agy", "models"]).splitlines() if l and not l.startswith("Fetching")]}
+    else:   # remoto: solo los tipos instalados allí; ada-cli queda fuera (herdr no lo detecta fuera del home)
+        have = set(ssh_run(mach, "for c in claude opencode pi agy; do command -v $c >/dev/null && echo $c; done", 20).split())
+        d = {}
+        if "claude" in have: d["claude"] = ["opus", "sonnet", "haiku", "fable"]
+        if "opencode" in have: d["opencode"] = [l.strip() for l in ssh_run(mach, "cd ~ && opencode models", 40).splitlines() if "/" in l]
+        if "pi" in have: d["pi"] = _table(ssh_run(mach, "pi --list-models 2>&1", 40))
+        if "agy" in have: d["agy"] = [l.split()[0] for l in ssh_run(mach, "agy models 2>&1", 40).splitlines() if l and not l.startswith("Fetching")]
+    data = {k: {"nombre": KINDS[k], "modelos": v} for k, v in d.items()}
+    KCACHE[mach] = (time.time(), data); return data
+def _start(nombre, kind, model, pid, cwd, auto, mach=None):
     if kind == "ada-cli":   # en su panel, `pi` es un enlace a ada-cli (ADA_PATH), así herdr lo reconoce como pi
         extra = ["--model", model] if model else []
         out = herdr_out(["agent", "start", nombre, "--kind", "pi", "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 75)
@@ -205,39 +247,43 @@ def _start(nombre, kind, model, pid, cwd, auto):
         extra = (["--model", model] if model and kind != "opencode" else [])
         if auto and kind in ("claude", "agy"): extra.append("--dangerously-skip-permissions")
         if auto and kind == "opencode": extra.append("--auto")
-        out = herdr_out(["agent", "start", nombre, "--kind", kind, "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 75)
+        out = herdr_out(["agent", "start", nombre, "--kind", kind, "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 90, mach)
     if '"interactive_ready":true' in out or '"agent_started"' in out: return "listo"
     if "agent_not_ready" in out: return "espera confirmación en su panel"
     try: return "ERROR " + json.loads(out)["error"]["message"][:160]
     except Exception: return "ERROR " + (out[-160:] or "herdr no respondió")
-def oc_config(nombre, model):
+def oc_config(nombre, model, mach=None):
     """opencode no acepta --model en su interfaz: cada agente recibe su propio fichero de configuración."""
+    if mach:
+        f = rhome(mach) + "/.cache/strata-oficina/opencode/" + nombre + ".json"
+        ssh_run(mach, "mkdir -p ~/.cache/strata-oficina/opencode && cat > " + shlex.quote(f), 15, json.dumps({"$schema": "https://opencode.ai/config.json", "model": model}))
+        return f
     d = H("~/.cache/strata-oficina/opencode"); os.makedirs(d, exist_ok=True)
     f = os.path.join(d, nombre + ".json")
     with open(f, "w") as fh: json.dump({"$schema": "https://opencode.ai/config.json", "model": model}, fh)
     return f
-def _crear(jid, name, cwd, filas, auto):
+def _crear(jid, name, cwd, filas, auto, mach=None):
     J = JOBS[jid]; log = J["pasos"].append
     try:
-        env = "PATH=" + H("~/.local/bin") + ":/snap/bin:/usr/local/bin:/usr/bin:/bin"
-        r = hj(["workspace", "create", "--cwd", cwd, "--label", name, "--no-focus", "--env", env], 20)
-        if not r: raise RuntimeError("herdr no pudo crear el workspace")
-        wid = r["workspace"]["workspace_id"]; pane = r["root_pane"]["pane_id"]; J["ws"] = wid
-        log("Workspace %s creado en %s" % (wid, cwd))
-        m = meta(); m[wid] = {"nombre": name, "cwd": cwd, "agentes": []}; save_meta(m)
+        env = "PATH=" + ((rhome(mach) + "/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin") if mach else (H("~/.local/bin") + ":/snap/bin:/usr/local/bin:/usr/bin:/bin"))
+        r = hj(["workspace", "create", "--cwd", cwd, "--label", name, "--no-focus", "--env", env], 30, mach)
+        if not r: raise RuntimeError("herdr no pudo crear el workspace en " + (mach or "bazzite"))
+        wid = r["workspace"]["workspace_id"]; pane = r["root_pane"]["pane_id"]; oid = (mach + ":" + wid) if mach else wid; J["ws"] = oid
+        log("Workspace %s creado en %s:%s" % (wid, mach or "bazzite", cwd))
+        m = meta(); m[oid] = {"nombre": name, "cwd": cwd, "maquina": mach or "bazzite", "agentes": []}; save_meta(m); wid = oid
         lista = [(f, n + 1, ("%s-%s%d" % (slug(name)[:10], slug(f["perfil"])[:8], n + 1))[:32]) for f in filas for n in range(f["n"])]
         log("Panel %s: consola de la oficina" % pane)
         allp = [pane]; panes = []
         for idx, (f, n, nombre) in enumerate(lista):   # cada agente en su propio panel; el raíz queda como consola
             base = allp[idx // 2]
-            env = ["--env", "OPENCODE_CONFIG=" + oc_config(nombre, f["model"])] if f["kind"] == "opencode" and f["model"] else []
+            env = ["--env", "OPENCODE_CONFIG=" + oc_config(nombre, f["model"], mach)] if f["kind"] == "opencode" and f["model"] else []
             if f["kind"] == "ada-cli": env = ["--env", "PATH=" + ADA_PATH]
-            sp = hj(["pane", "split", base, "--direction", "right" if idx % 2 == 0 else "down", "--cwd", cwd, "--no-focus"] + env, 15)
+            sp = hj(["pane", "split", base, "--direction", "right" if idx % 2 == 0 else "down", "--cwd", cwd, "--no-focus"] + env, 25, mach)
             if not sp: raise RuntimeError("no se pudo crear el panel de " + nombre)
             allp.append(sp["pane"]["pane_id"]); panes.append(sp["pane"]["pane_id"])
         time.sleep(1.5)
         for (f, n, nombre), pid in zip(lista, panes):
-            res = _start(nombre, f["kind"], f["model"], pid, cwd, auto)
+            res = _start(nombre, f["kind"], f["model"], pid, cwd, auto, mach)
             log("%s · %s · %s%s: %s" % (nombre, f["perfil"], f["kind"], (" · " + f["model"]) if f["model"] else "", res))
             m = meta(); m[wid]["agentes"].append({"name": nombre, "rol": f["perfil"], "kind": f["kind"], "model": f["model"]}); save_meta(m)
         J["estado"] = "hecho"
@@ -248,11 +294,22 @@ def api_office(body):
     except Exception: return 400, {"ok": False, "error": "JSON invalido"}
     name = str(d.get("name") or "").strip()[:40]
     if not re.match(r"^[\w][\w .\-]{0,39}$", name): return 400, {"ok": False, "error": "nombre invalido"}
-    home = os.path.realpath(H("~"))
-    cwd = os.path.realpath(H(str(d.get("cwd") or ("~/" + slug(name)))))
-    if not (cwd == home or cwd.startswith(home + os.sep)): return 400, {"ok": False, "error": "la carpeta debe estar dentro de tu home"}
-    if any(part.startswith(".") for part in cwd[len(home):].split(os.sep) if part): return 400, {"ok": False, "error": "no se permiten carpetas ocultas (agy no las ve)"}
-    K = kinds(); filas = []
+    mach = str(d.get("maquina") or "bazzite"); mach = None if mach == "bazzite" else mach
+    if mach and not target(mach): return 400, {"ok": False, "error": "máquina desconocida"}
+    raw = str(d.get("cwd") or ("~/" + slug(name))).strip()
+    rel = raw[2:] if raw.startswith("~/") else raw
+    if mach:
+        home = rhome(mach)
+        if not home: return 502, {"ok": False, "error": mach + " no responde por SSH"}
+        rel = rel[len(home) + 1:] if rel.startswith(home + "/") else rel
+        if rel.startswith("/") or not rel or any(p in ("", ".", "..") or p.startswith(".") for p in rel.split("/")): return 400, {"ok": False, "error": "carpeta inválida: usa ~/nombre, sin ocultas"}
+        cwd = home + "/" + rel
+    else:
+        home = os.path.realpath(H("~"))
+        cwd = os.path.realpath(H(raw))
+        if not (cwd == home or cwd.startswith(home + os.sep)): return 400, {"ok": False, "error": "la carpeta debe estar dentro de tu home"}
+        if any(part.startswith(".") for part in cwd[len(home):].split(os.sep) if part): return 400, {"ok": False, "error": "no se permiten carpetas ocultas (agy no las ve)"}
+    K = kinds(mach); filas = []
     for f in (d.get("equipo") or [])[:8]:
         perfil = str(f.get("perfil") or "").strip()[:24]; kind = str(f.get("kind") or ""); model = str(f.get("model") or "")
         try: n = int(f.get("n", 1))
@@ -264,9 +321,10 @@ def api_office(body):
         filas.append({"perfil": perfil, "kind": kind, "model": model, "n": n})
     total = sum(f["n"] for f in filas)
     if total > 8: return 400, {"ok": False, "error": "maximo 8 agentes por oficina"}
-    os.makedirs(cwd, exist_ok=True)
+    if mach: ssh_run(mach, "mkdir -p " + shlex.quote(cwd), 15)
+    else: os.makedirs(cwd, exist_ok=True)
     jid = secrets.token_hex(6); JOBS[jid] = {"estado": "en curso", "pasos": [], "ws": None, "total": total}
-    threading.Thread(target=_crear, args=(jid, name, cwd, filas, bool(d.get("auto"))), daemon=True).start()
+    threading.Thread(target=_crear, args=(jid, name, cwd, filas, bool(d.get("auto")), mach), daemon=True).start()
     return 200, {"ok": True, "job": jid}
 def api_send(body):
     global LAST_SEND
@@ -281,7 +339,7 @@ def api_send(body):
             return 429, {"ok": False, "error": "limite 1 envio/3s"}
         LAST_SEND = time.monotonic()
     tgt, pre = (agent, "adrian: ") if mode == "direct" else ("claude", "adrian (oficina): ")
-    out = herdr_out(["agent", "prompt", tgt, pre + text], 30)
+    out = herdr_out(["agent", "prompt", tgt, pre + text], 30, agmap().get(tgt))
     if not out: return 502, {"ok": False, "error": "herdr no responde"}
     try:
         os.makedirs(os.path.dirname(ENVLOG), exist_ok=True)
@@ -294,14 +352,15 @@ def api_send(body):
 def api_office_delete(body):
     try: d = json.loads(body[:1024])
     except Exception: return 400, {"ok": False, "error": "JSON invalido"}
-    wid = str(d.get("id") or "")
-    r = hj(["workspace", "list"]); ws = r["workspaces"] if r else []
+    oid = str(d.get("id") or ""); mach, wid = split_id(oid)
+    if mach and not target(mach): return 404, {"ok": False, "error": "máquina desconocida"}
+    r = hj(["workspace", "list"], 20, mach); ws = r["workspaces"] if r else []
     w = next((x for x in ws if x.get("workspace_id") == wid), None)
     if not w: return 404, {"ok": False, "error": "oficina no encontrada"}
-    if wid == strata_ws(ws): return 403, {"ok": False, "error": "la oficina de Strata no se puede borrar"}
+    if not mach and wid == strata_ws(ws): return 403, {"ok": False, "error": "la oficina de Strata no se puede borrar"}
     if str(d.get("confirm") or "") != (w.get("label") or wid): return 400, {"ok": False, "error": "escribe el nombre exacto para confirmar"}
-    out = herdr_out(["workspace", "close", wid], 20)
-    m = meta(); m.pop(wid, None); save_meta(m)
+    out = herdr_out(["workspace", "close", wid], 20, mach)
+    m = meta(); m.pop(oid, None); save_meta(m); AGCACHE["at"] = 0
     return 200, {"ok": True, "output": out[-200:]}
 with open(os.path.join(HERE, "index.html"), "rb") as f:
     INDEX = f.read()
@@ -335,9 +394,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, THREE, "text/javascript; charset=utf-8")
         elif u.path == "/api/state":
             ws = parse_qs(u.query).get("ws", [""])[0]
-            self._json(200, state_ws(ws) if ws and re.match(r"^w[0-9A-Za-z]+$", ws) else get_state())
+            self._json(200, state_ws(ws) if ws and re.match(r"^([a-z0-9][a-z0-9-]{0,31}:)?w[0-9A-Za-z]+$", ws) else get_state())
         elif u.path == "/api/kinds":
-            self._json(200, kinds())
+            mq = parse_qs(u.query).get("m", ["bazzite"])[0]
+            self._json(200, kinds(None if mq == "bazzite" else mq) if mq == "bazzite" or target(mq) else {})
         elif u.path == "/api/office/job":
             j = JOBS.get(parse_qs(u.query).get("id", [""])[0]); self._json(200 if j else 404, j or {"error": "no existe"})
         elif u.path == "/api/log": self._json(200, api_log(q))
