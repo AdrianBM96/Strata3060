@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: BLOQUEO: C34 RAM (17GB libres < 20GB criterio) | 2026-10-05 05:15 UTC
+ESTADO: C34 parcial OK (yo) | C35 obrero | 2026-10-05 05:26 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -73,6 +73,7 @@ ESTADO: BLOQUEO: C34 RAM (17GB libres < 20GB criterio) | 2026-10-05 05:15 UTC
 | 2026-10-05 | C33-C35 | X2/X3/X4 al repo; cola con C32-C35 | - | - | En cola |
 | 2026-10-05 | C28-ab4 | Préstamo N23 OK; P3 +0,5%, P4 −0,2%; bytes iguales on/off (fetch persiste) | prod restaurada | - | Devolver |
 | 2026-10-05 | C28-mot | Motivo RING (512/wave vs 384, no hand_in_): obrero a PRÉSTAMO de huecos + repoblado | prod restaurada da9a7a9b | - | En curso |
+| 2026-10-05 | C34-par | Parcial 12/12288/4096 desplegado: B1 −0,85% (ruido), available 15,7GB (free-col 0,6: usar available) | 24h cachelog en marcha; C35 a obrero | - | Desplegado |
 | 2026-10-05 | C30-r2 | Rev2 aplicada (6434bc8) y desplegada en :8095; TAREAS al día (N18); METRICAS B1 prod→51,40 | capturas nuevas + zoom en docs/fork/oficina/ | - | A revisar |
 | 2026-10-05 | C29b-fin | Réplica +0,5%; 12+12 +1,23%±2,09 INCLUYE 0 → archivado (sin despliegue) | prod intacta | - | Archivado |
 | 2026-10-05 | C28-P4 | Cirugía = rewrite ~1400 lín (rompe diff mínimo, bit-exacto solo con GPU); mapa P4 en ENTREGA | requiere OK explícito + logpos-compare | - | ESPERA OK |

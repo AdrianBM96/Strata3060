@@ -170,6 +170,12 @@ def state_ws(wid):
 def slug(t): return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")[:12] or "ofi"
 KINDS = {"claude": "Claude Code", "opencode": "opencode", "pi": "pi", "ada-cli": "ada-cli", "agy": "Antigravity (agy)"}
 KCACHE = {"at": 0, "data": None}
+ADA_DIR = H("~/.local/share/strata-oficina/ada")
+ADA_PATH = ADA_DIR + ":" + H("~/.nvm/versions/node/v22.23.2/bin") + ":" + H("~/.local/bin") + ":/usr/local/bin:/usr/bin:/bin"
+try:
+    os.makedirs(ADA_DIR, exist_ok=True)
+    if not os.path.islink(os.path.join(ADA_DIR, "pi")): os.symlink(H("~/ada-cli/packages/coding-agent/dist/cli.js"), os.path.join(ADA_DIR, "pi"))
+except OSError: pass
 def _cmd(args, t=25):
     env = dict(os.environ, PATH=H("~/.local/bin") + ":/snap/bin:" + os.path.dirname(sys.executable) + ":" + os.environ.get("PATH", ""))
     for d in (H("~/.nvm/versions/node"),):
@@ -191,19 +197,24 @@ def kinds():
          "agy": [l.split()[0] for l in _cmd(["agy", "models"]).splitlines() if l and not l.startswith("Fetching")]}
     KCACHE.update(at=time.time(), data={k: {"nombre": KINDS[k], "modelos": v} for k, v in d.items()}); return KCACHE["data"]
 def _start(nombre, kind, model, pid, cwd, auto):
-    if kind == "ada-cli":
-        cmd = "ada-cli" + (" --model " + shlex.quote(model) if model else "")
-        herdr_out(["pane", "run", pid, cmd], 10)
-        for _ in range(30):
-            time.sleep(2)
-            a = next((x for x in raw_agents() if x.get("pane_id") == pid), None)
-            if a:
-                herdr_out(["agent", "rename", pid, nombre], 10); return "listo"
-        return "ERROR ada-cli no arrancó en su panel"
-    extra = (["--model", model] if model else []) + (["--dangerously-skip-permissions"] if auto and kind in ("claude", "agy") else [])
-    out = herdr_out(["agent", "start", nombre, "--kind", kind, "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 75)
+    if kind == "ada-cli":   # en su panel, `pi` es un enlace a ada-cli (ADA_PATH), así herdr lo reconoce como pi
+        extra = ["--model", model] if model else []
+        out = herdr_out(["agent", "start", nombre, "--kind", "pi", "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 75)
+    else:
+        extra = (["--model", model] if model and kind != "opencode" else [])
+        if auto and kind in ("claude", "agy"): extra.append("--dangerously-skip-permissions")
+        if auto and kind == "opencode": extra.append("--auto")
+        out = herdr_out(["agent", "start", nombre, "--kind", kind, "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 75)
     if '"interactive_ready":true' in out or '"agent_started"' in out: return "listo"
-    return "espera confirmación en su panel" if "agent_not_ready" in out else "ERROR " + out[-160:]
+    if "agent_not_ready" in out: return "espera confirmación en su panel"
+    try: return "ERROR " + json.loads(out)["error"]["message"][:160]
+    except Exception: return "ERROR " + (out[-160:] or "herdr no respondió")
+def oc_config(nombre, model):
+    """opencode no acepta --model en su interfaz: cada agente recibe su propio fichero de configuración."""
+    d = H("~/.cache/strata-oficina/opencode"); os.makedirs(d, exist_ok=True)
+    f = os.path.join(d, nombre + ".json")
+    with open(f, "w") as fh: json.dump({"$schema": "https://opencode.ai/config.json", "model": model}, fh)
+    return f
 def _crear(jid, name, cwd, filas, auto):
     J = JOBS[jid]; log = J["pasos"].append
     try:
@@ -213,16 +224,18 @@ def _crear(jid, name, cwd, filas, auto):
         wid = r["workspace"]["workspace_id"]; pane = r["root_pane"]["pane_id"]; J["ws"] = wid
         log("Workspace %s creado en %s" % (wid, cwd))
         m = meta(); m[wid] = {"nombre": name, "cwd": cwd, "agentes": []}; save_meta(m)
-        lista = [(f, n + 1) for f in filas for n in range(f["n"])]
-        panes = [pane]
-        for idx in range(1, len(lista)):
-            base = panes[(idx - 1) // 2] if idx > 1 else panes[0]
-            sp = hj(["pane", "split", base, "--direction", "right" if idx % 2 else "down", "--cwd", cwd, "--no-focus"], 15)
-            if not sp: raise RuntimeError("no se pudo dividir el panel %d" % idx)
-            panes.append(sp["pane"]["pane_id"])
+        lista = [(f, n + 1, ("%s-%s%d" % (slug(name)[:10], slug(f["perfil"])[:8], n + 1))[:32]) for f in filas for n in range(f["n"])]
+        log("Panel %s: consola de la oficina" % pane)
+        allp = [pane]; panes = []
+        for idx, (f, n, nombre) in enumerate(lista):   # cada agente en su propio panel; el raíz queda como consola
+            base = allp[idx // 2]
+            env = ["--env", "OPENCODE_CONFIG=" + oc_config(nombre, f["model"])] if f["kind"] == "opencode" and f["model"] else []
+            if f["kind"] == "ada-cli": env = ["--env", "PATH=" + ADA_PATH]
+            sp = hj(["pane", "split", base, "--direction", "right" if idx % 2 == 0 else "down", "--cwd", cwd, "--no-focus"] + env, 15)
+            if not sp: raise RuntimeError("no se pudo crear el panel de " + nombre)
+            allp.append(sp["pane"]["pane_id"]); panes.append(sp["pane"]["pane_id"])
         time.sleep(1.5)
-        for (f, n), pid in zip(lista, panes):
-            nombre = ("%s-%s%d" % (slug(name)[:10], slug(f["perfil"])[:8], n))[:32]
+        for (f, n, nombre), pid in zip(lista, panes):
             res = _start(nombre, f["kind"], f["model"], pid, cwd, auto)
             log("%s · %s · %s%s: %s" % (nombre, f["perfil"], f["kind"], (" · " + f["model"]) if f["model"] else "", res))
             m = meta(); m[wid]["agentes"].append({"name": nombre, "rol": f["perfil"], "kind": f["kind"], "model": f["model"]}); save_meta(m)
