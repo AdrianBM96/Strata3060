@@ -109,7 +109,7 @@ def get_state():
     if CACHE["data"] is None or time.monotonic() - CACHE["at"] >= interval:
         CACHE["data"] = build_state(); CACHE["at"] = time.monotonic(); CACHE["data"]["interval"] = interval
     return CACHE["data"]
-def valid_agent(agent): get_state(); return bool(re.match(r"^[\w][\w.\-]{0,31}$", agent or "")) and agent in LAST_AGENTS
+def valid_agent(agent): get_state(); return bool(re.match(r"^[\w][\w.\-]{0,31}$", agent or "")) and (agent in LAST_AGENTS or agent in {a.get("name") for a in raw_agents()})
 def api_log(agent):
     if not valid_agent(agent): return {"error": "agente desconocido"}
     out = herdr_out(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "45", "--format", "text"], 10)
@@ -126,25 +126,103 @@ def api_hilo(agent):
             env.append("%s [%s] %s" % (d.get("ts", ""), d.get("mode", ""), (d.get("text") or "")[:120]))
     men = [short_row(r) for r in table_rows(60) if agent.lower() in r.lower()][-8:]
     return {"agent": agent, "envios": env[-10:], "menciones": men}
-def intasks(ags, foco, alln): return [t for t in tasks_list() if t.get("responsable") in ags or (foco and t.get("responsable") not in alln)]
-def api_offices():
-    st = get_state()
-    try: ws = json.loads(herdr_out(["workspace", "list"]))["result"]["workspaces"]
-    except Exception: ws = []
-    try: raw = json.loads(herdr_out(["agent", "list"]))["result"]["agents"]
-    except Exception: raw = []
-    if not ws and st.get("agents"):
-        ws = [{"workspace_id": "w1", "label": "Strata3060", "focused": True}]
-    alln = set(a.get("name") for a in raw)
-    offs = []
+OFIMETA = H("~/.cache/strata-oficina/oficinas.json")
+PERFILES = {"arquitecto": ("claude", "Arquitecto"), "desarrollador": ("opencode", "Desarrollador"),
+            "investigador": ("agy", "Investigador"), "tester": ("pi", "Tester")}
+JOBS = {}
+def meta():
+    try: return json.loads(read(OFIMETA) or "{}")
+    except Exception: return {}
+def save_meta(m):
+    os.makedirs(os.path.dirname(OFIMETA), exist_ok=True)
+    with open(OFIMETA, "w") as f: json.dump(m, f, ensure_ascii=False)
+def hj(args, timeout=15):
+    try: return json.loads(herdr_out(args, timeout))["result"]
+    except Exception: return None
+def raw_agents():
+    r = hj(["agent", "list"]); return r["agents"] if r else []
+def strata_ws(ws):
     for w in ws:
-        wid = w.get("workspace_id")
-        ags = [a.get("name") for a in raw if a.get("workspace_id", "w1") == wid] or [a["name"] for a in st["agents"]]
-        tl = intasks(ags, bool(w.get("focused")), alln)
+        if w.get("label") == "Strata3060": return w.get("workspace_id")
+    names = {a.get("name"): a.get("workspace_id") for a in raw_agents()}
+    return names.get("opencode2", "w1")
+def api_offices():
+    st = get_state(); r = hj(["workspace", "list"]); ws = r["workspaces"] if r else []
+    sid = strata_ws(ws); raw = raw_agents(); m = meta(); offs = []
+    for w in ws:
+        wid = w.get("workspace_id"); es = wid == sid
+        ags = [a.get("name") for a in raw if a.get("workspace_id") == wid and a.get("name")]
+        tl = tasks_list() if es else []
         esp = [t for t in tl if t.get("columna") == "ESPERA OK" and t.get("aprobador") == "adrian"]
-        offs.append({"id": wid, "nombre": w.get("label") or wid, "agentes": ags, "tareas": len(tl), "tl": tl,
-                     "needs": bool(esp), "foco": bool(w.get("focused"))})
-    return {"offices": offs}
+        offs.append({"id": wid, "nombre": w.get("label") or wid, "agentes": [a["name"] for a in st["agents"]] if es else ags,
+                     "tareas": len([t for t in tl if t.get("columna") in ("EN CURSO", "ESPERA OK", "EN COLA")]),
+                     "needs": bool(esp), "strata": es, "foco": es, "cwd": m.get(wid, {}).get("cwd", ""),
+                     "perfiles": m.get(wid, {}).get("agentes", [])})
+    return {"offices": offs, "strata": sid}
+def state_ws(wid):
+    m = meta().get(wid, {}); roles = {a["name"]: a["rol"] for a in m.get("agentes", [])}
+    ags = [mkagent(a["name"], a.get("agent_status", "idle"), "trabajando" if a.get("agent_status") == "working" else
+                   ("esperando confirmación" if a.get("agent_status") == "blocked" else "en reposo"),
+                   "#fb7185", roles.get(a["name"], a.get("agent", "agente")))
+           for a in raw_agents() if a.get("workspace_id") == wid and a.get("name")]
+    return {"agents": ags, "metrics": {}, "ticker": [], "queue": {"done": 0, "total": 0}, "lock": False, "bench": False,
+            "suplencia": False, "herdr": True, "tareas": [], "ws": wid, "updated": time.strftime("%H:%M:%S UTC", time.gmtime())}
+def slug(t): return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")[:12] or "ofi"
+def _crear(jid, name, cwd, equipo, auto):
+    J = JOBS[jid]; log = J["pasos"].append
+    try:
+        env = "PATH=" + H("~/.local/bin") + ":/snap/bin:/usr/local/bin:/usr/bin:/bin"
+        r = hj(["workspace", "create", "--cwd", cwd, "--label", name, "--no-focus", "--env", env], 20)
+        if not r: raise RuntimeError("herdr no pudo crear el workspace")
+        wid = r["workspace"]["workspace_id"]; pane = r["root_pane"]["pane_id"]; J["ws"] = wid
+        log("Workspace %s creado en %s" % (wid, cwd))
+        m = meta(); m[wid] = {"nombre": name, "cwd": cwd, "agentes": []}; save_meta(m)
+        lista = [(rol, n + 1) for rol, k in equipo for n in range(k)]
+        panes = [pane]
+        for idx in range(1, len(lista)):
+            base = panes[(idx - 1) // 2] if idx > 1 else panes[0]
+            sp = hj(["pane", "split", base, "--direction", "right" if idx % 2 else "down", "--cwd", cwd, "--no-focus"], 15)
+            if not sp: raise RuntimeError("no se pudo dividir el panel %d" % idx)
+            panes.append(sp["pane"]["pane_id"])
+        time.sleep(1.5)
+        for (rol, n), pid in zip(lista, panes):
+            kind, etiqueta = PERFILES[rol]; nombre = ("%s-%s%d" % (slug(name), rol[:4], n))[:32]
+            args = ["agent", "start", nombre, "--kind", kind, "--pane", pid, "--timeout", "60000"]
+            extra = []
+            if kind == "agy": extra = ["--model", "gemini-3.8-flash-high"] + (["--dangerously-skip-permissions"] if auto else [])
+            if kind == "claude" and auto: extra = ["--dangerously-skip-permissions"]
+            out = herdr_out(args + (["--"] + extra if extra else []), 75)
+            ok = '"agent_started"' in out or '"interactive_ready":true' in out
+            bloq = "agent_not_ready" in out
+            log("%s (%s, %s): %s" % (nombre, etiqueta, kind, "listo" if ok else ("espera confirmación en su panel" if bloq else "ERROR " + out[-160:])))
+            m = meta(); m[wid]["agentes"].append({"name": nombre, "rol": etiqueta, "kind": kind}); save_meta(m)
+        J["estado"] = "hecho"
+    except Exception as e:
+        J["estado"] = "error"; J["error"] = str(e)[:300]
+def api_office(body):
+    try: d = json.loads(body[:4096])
+    except Exception: return 400, {"ok": False, "error": "JSON invalido"}
+    name = str(d.get("name") or "").strip()[:40]
+    if not re.match(r"^[\w][\w .\-]{0,39}$", name): return 400, {"ok": False, "error": "nombre invalido"}
+    home = os.path.realpath(H("~"))
+    cwd = os.path.realpath(H(str(d.get("cwd") or ("~/" + slug(name)))))
+    if not (cwd == home or cwd.startswith(home + os.sep)): return 400, {"ok": False, "error": "la carpeta debe estar dentro de tu home"}
+    if any(part.startswith(".") for part in cwd[len(home):].split(os.sep) if part): return 400, {"ok": False, "error": "no se permiten carpetas ocultas (agy no las ve)"}
+    equipo = []
+    for rol in PERFILES:
+        try: k = int((d.get("equipo") or {}).get(rol, 0))
+        except Exception: k = 0
+        if k < 0 or k > 4: return 400, {"ok": False, "error": "maximo 4 por perfil"}
+        if k: equipo.append((rol, k))
+    total = sum(k for _, k in equipo)
+    if total > 8: return 400, {"ok": False, "error": "maximo 8 agentes por oficina"}
+    os.makedirs(cwd, exist_ok=True)
+    jid = secrets.token_hex(6); JOBS[jid] = {"estado": "en curso", "pasos": [], "ws": None, "total": total}
+    if total == 0:
+        threading.Thread(target=_crear, args=(jid, name, cwd, [], False), daemon=True).start()
+    else:
+        threading.Thread(target=_crear, args=(jid, name, cwd, equipo, bool(d.get("auto"))), daemon=True).start()
+    return 200, {"ok": True, "job": jid}
 def api_send(body):
     global LAST_SEND
     try: d = json.loads(body[:8192])
@@ -168,14 +246,18 @@ def api_send(body):
     except OSError:
         pass
     return 200, {"ok": True, "confirmed": "agent_prompted" in out, "output": out[-500:]}
-def api_office(body):
+def api_office_delete(body):
     try: d = json.loads(body[:1024])
     except Exception: return 400, {"ok": False, "error": "JSON invalido"}
-    name = str(d.get("name") or "").strip()[:40]
-    if not re.match(r"^[\w][\w .\-]{0,39}$", name): return 400, {"ok": False, "error": "nombre invalido"}
-    out = herdr_out(["workspace", "create", "--label", name], 15)
-    if not out: return 502, {"ok": False, "error": "herdr no responde"}
-    return 200, {"ok": True, "output": out[-300:]}
+    wid = str(d.get("id") or "")
+    r = hj(["workspace", "list"]); ws = r["workspaces"] if r else []
+    w = next((x for x in ws if x.get("workspace_id") == wid), None)
+    if not w: return 404, {"ok": False, "error": "oficina no encontrada"}
+    if wid == strata_ws(ws): return 403, {"ok": False, "error": "la oficina de Strata no se puede borrar"}
+    if str(d.get("confirm") or "") != (w.get("label") or wid): return 400, {"ok": False, "error": "escribe el nombre exacto para confirmar"}
+    out = herdr_out(["workspace", "close", wid], 20)
+    m = meta(); m.pop(wid, None); save_meta(m)
+    return 200, {"ok": True, "output": out[-200:]}
 with open(os.path.join(HERE, "index.html"), "rb") as f:
     INDEX = f.read()
 with open(os.path.join(HERE, "login.html"), "rb") as f:
@@ -207,7 +289,10 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/vendor/three.module.min.js":
             self._send(200, THREE, "text/javascript; charset=utf-8")
         elif u.path == "/api/state":
-            self._json(200, get_state())
+            ws = parse_qs(u.query).get("ws", [""])[0]
+            self._json(200, state_ws(ws) if ws and re.match(r"^w\d+$", ws) else get_state())
+        elif u.path == "/api/office/job":
+            j = JOBS.get(parse_qs(u.query).get("id", [""])[0]); self._json(200 if j else 404, j or {"error": "no existe"})
         elif u.path == "/api/log": self._json(200, api_log(q))
         elif u.path == "/api/hilo": self._json(200, api_hilo(q))
         elif u.path == "/api/offices":
@@ -252,6 +337,7 @@ class Handler(BaseHTTPRequestHandler):
         elif p.startswith("/api/") and not sess_ok(self.headers): self._json(401, {"ok": False, "error": "login"})
         elif p == "/api/send": self._json(*api_send(body))
         elif p == "/api/office": self._json(*api_office(body))
+        elif p == "/api/office/delete": self._json(*api_office_delete(body))
         else: self.send_error(404)
     def log_message(self, *a): pass
 def serve(ip): ThreadingHTTPServer((ip, PORT), Handler).serve_forever()

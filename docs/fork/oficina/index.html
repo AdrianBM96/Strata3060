@@ -58,6 +58,11 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 .off .ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--panel2);font-size:17px;flex:none}
 .off b{display:block;font-weight:620;font-size:13.5px}
 .off small{color:var(--muted);font-size:12px}
+.offw{position:relative}.offw .del{position:absolute;right:8px;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:9px;display:grid;place-items:center;color:var(--muted);opacity:0;transition:opacity .15s,background .15s}
+.offw:hover .del,.del:focus-visible{opacity:1}.del:hover{background:var(--badSoft);color:var(--bad)}
+@media (hover:none){.offw .del{opacity:1}}
+.cnt{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border:1px solid var(--line);border-radius:12px;margin-top:8px}
+.cnt .k{display:flex;align-items:center;gap:8px}.cnt button{width:28px;height:28px;border-radius:8px;background:var(--panel2);font-weight:700}.cnt b{min-width:18px;text-align:center;display:inline-block}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--bad);position:absolute;right:10px;top:10px}
 .new{border:1.5px dashed var(--line);border-radius:14px;padding:10px;color:var(--muted);width:100%;transition:color .15s,border-color .15s}
 .new:hover{color:var(--accent);border-color:var(--accent)}
@@ -285,6 +290,7 @@ const store={get(k){try{return localStorage.getItem(k)}catch(_){return null}},se
 function toast(t,bad){const d=document.createElement('div');d.className='toast'+(bad?' bad':'');d.textContent=t;$('#toasts').append(d);setTimeout(()=>d.remove(),4200)}
 async function api(path,opt){const r=await fetch(path,opt);if(r.status===401){location.href='/login';throw new Error('login')}return r.json()}
 
+const ICX='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
 const ICB='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',ICF='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 /* ---------- tema ---------- */
 const themeNow=()=>document.documentElement.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
@@ -301,13 +307,14 @@ const LOOK={
   suplente:{shirt:'#9aa4b2',role:'Reserva'},
 };
 const WORKER_LOOKS=[{shirt:'#ef3b36'},{shirt:'#14b8c4'},{shirt:'#ec4899'}];
-const lookOf=(name,i=0)=>LOOK[name]||{...WORKER_LOOKS[i%3],role:'Obrero'};
+const lookOf=(name,i=0)=>(!OTHER()&&LOOK[name])||{...WORKER_LOOKS.concat([{shirt:'#21b35a'},{shirt:'#2f7bf6'},{shirt:'#f2b705'},{shirt:'#7c5cff'},{shirt:'#9aa4b2'}])[i%8],role:'Obrero'};
 const LED={working:'#22c55e',waiting:'#f59e0b',blocked:'#ef4444',idle:'#9ca3af'};
 function statusOf(a,S){if(a.name==='opencode2'&&/ESPERA|BLOQUEO/i.test(a.activity||''))return/BLOQUEO/i.test(a.activity)?'blocked':'waiting';return a.status==='working'?'working':'idle'}
 function avatarSVG(name,i){const L=lookOf(name,i);return`<svg class="av" viewBox="0 0 48 48" aria-hidden="true"><defs><radialGradient id="g${esc(name)}" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".55"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><circle cx="24" cy="24" r="24" fill="var(--panel)"/><path d="M11 47c0-9 5.5-14 13-14s13 5 13 14" fill="${L.shirt}"/><circle cx="24" cy="20" r="13" fill="${L.shirt}"/><circle cx="24" cy="20" r="13" fill="url(#g${esc(name)})"/><ellipse cx="19.5" cy="20" rx="3.2" ry="3.8" fill="#fff"/><ellipse cx="28.5" cy="20" rx="3.2" ry="3.8" fill="#fff"/><circle cx="20.2" cy="20.8" r="1.7" fill="#111827"/><circle cx="29.2" cy="20.8" r="1.7" fill="#111827"/>${L.glasses?'<g fill="none" stroke="#111827" stroke-width="1.3"><circle cx="19.5" cy="20" r="4.6"/><circle cx="28.5" cy="20" r="4.6"/></g>':''}</svg>`}
 
 /* ---------- estado global ---------- */
-let S=null, OFFICES=[], sel=store.get('sel')||'opencode2', tab='inspector', view='oficina', to='claude', workerIdx={};
+let WS=null, STRATA_WS=null, S=null, OFFICES=[], sel=store.get('sel')||'opencode2', tab='inspector', view='oficina', to='claude', workerIdx={};
+const OTHER=()=>WS&&STRATA_WS&&WS!==STRATA_WS;
 const workersOf=st=>st.agents.filter(a=>!LOOK[a.name]);
 function agentList(){return S?S.agents:[]}
 
@@ -502,10 +509,10 @@ const scene3d=(()=>{
 
   /* posiciones: escritorios girados 180° (pantalla hacia la cámara) */
   const POS={claude:[-3.55,.14,-2.6,Math.PI],opencode2:[.2,0,-1.3,Math.PI],explorer:[-3.3,0,1.8,Math.PI],tester:[.9,0,1.8,Math.PI],suplente:[-1.2,0,1.8,Math.PI]};
-  const WSLOT=[[-1.9,0,-.25,Math.PI],[2.1,0,-2.3,Math.PI],[4.3,0,-2.3,Math.PI]];
+  const WSLOT=[[-1.9,0,-.25,Math.PI],[2.1,0,-2.3,Math.PI],[4.3,0,-2.3,Math.PI],[.2,0,-1.3,Math.PI],[-3.3,0,1.8,Math.PI],[-1.2,0,1.8,Math.PI],[.9,0,1.8,Math.PI],[-3.55,.14,-2.6,Math.PI]];
   const desks={},people={},seatOf={};
 
-  function place(name,i){if(POS[name])return POS[name];return WSLOT[i%WSLOT.length]}
+  function place(name,i){if(POS[name]&&!OTHER())return POS[name];return WSLOT[i%WSLOT.length]}
   function deskSeat(d){const v2=d.localToWorld(new THREE.Vector3(0,0,-.72));return{x:v2.x,y:d.position.y,z:v2.z,ry:d.rotation.y}}
   function tableSeat(name){if(seatOf[name]==null){const used=new Set(Object.values(seatOf));let k=0;while(used.has(k)&&k<5)k++;seatOf[name]=k}return tableSeats[seatOf[name]]}
   function goTo(p,tg,mode,instant){const u=p.userData;
@@ -517,7 +524,7 @@ const scene3d=(()=>{
     for(const n of Object.keys(desks))if(!names.has(n)){world.remove(desks[n]);delete desks[n];world.remove(people[n]);delete people[n];delete seatOf[n]}
     let wi=0;
     for(const a of agents){
-      const isW=!LOOK[a.name];const idx=isW?wi++:0;const L=lookOf(a.name,idx);
+      const isW=OTHER()||!LOOK[a.name];const idx=isW?wi++:0;const L={...lookOf(a.name,idx),role:a.role||lookOf(a.name,idx).role};
       let fresh=false;
       if(!desks[a.name]){const d=desk(L,a.name.length*7+idx*13);const p=place(a.name,idx);d.position.set(p[0],p[1],p[2]);d.rotation.y=p[3];d.userData.name=a.name;world.add(d);desks[a.name]=d;d.updateMatrixWorld()}
       if(!people[a.name]){const pe=employee(a.name,L,idx);world.add(pe);people[a.name]=pe;fresh=true}
@@ -630,6 +637,7 @@ function tasksOf(name){const T=S?.tareas||[];if(name==='claude')return waitingCl
   return T.filter(t=>(t.columna==='EN CURSO'||t.columna==='ESPERA OK')&&(t.responsable===name||(name==='opencode2'&&/^obrero/.test(t.responsable||''))))}
 
 function renderHeader(){
+  const o=OFFICES.find(x=>x.id===WS);$('#title').textContent=o?o.nombre:'Strata3060';
   const n=S.agents.length,cur=(S.tareas||[]).filter(t=>t.columna==='EN CURSO').length;
   $('#subtitle').textContent=`${n} agentes · ${cur} tareas en curso`;
   const yo=(S.agents.find(a=>a.name==='opencode2')||{}).activity||'';
@@ -642,11 +650,12 @@ function renderSide(){
   const k=(lab,val,unit,d)=>`<div class="kpi"><small>${lab}</small><b>${fmt(val)}</b> <small style="display:inline">${unit}</small><br><i class="${d>0.05?'up':d<-0.05?'down':'flat'}">${d==null?'—':(d>=0?'+':'')+fmt(d)+' %'}</i></div>`;
   $('#sideKpi').innerHTML=k('Escritura B1',p.B1,'t/s',p.B1&&b.B1?(p.B1/b.B1-1)*100:null)+k('Lectura P3',p.P3_s,'s',p.P3_s&&b.P3_s?(b.P3_s/p.P3_s-1)*100:null);
   const q=S.queue||{done:0,total:0};$('#qtxt').textContent=`${q.done} de ${q.total} contratos cerrados`;$('#qbar').style.width=(q.total?q.done/q.total*100:0)+'%';
-  $('#offices').innerHTML=(OFFICES.length?OFFICES:[{id:'w1',nombre:'Strata3060',agentes:S.agents.map(a=>a.name),tareas:(S.tareas||[]).length,foco:true}]).map(o=>
-    `<button class="off${o.foco?' on':''}" data-off="${esc(o.id)}"><span class="ic">${o.foco?ICB:ICF}</span><span><b>${esc(o.nombre==='Servidor IA'?'Strata3060':o.nombre)}</b><small>${o.agentes.length} agentes · ${o.tareas} tareas</small></span>${o.needs?'<i class="dot"></i>':''}</button>`).join('');
+  $('#offices').innerHTML=OFFICES.map(o=>
+    `<div class="offw"><button class="off${o.id===WS?' on':''}" data-off="${esc(o.id)}"><span class="ic">${o.strata?ICB:ICF}</span><span><b>${esc(o.nombre)}</b><small>${o.agentes.length} agentes${o.strata?' · '+o.tareas+' tareas':''}</small></span>${o.needs?'<i class="dot"></i>':''}</button>${o.strata?'':`<button class="del" data-del="${esc(o.id)}" aria-label="Borrar ${esc(o.nombre)}" title="Borrar oficina">${ICX}</button>`}</div>`).join('');
+  $$('#offices [data-off]').forEach(b=>b.onclick=()=>setOffice(b.dataset.off));$$('[data-del]').forEach(b=>b.onclick=e=>{e.stopPropagation();delOffice(b.dataset.del)});
 }
 function renderInspector(){
-  const pane=$('#ipane');const a=S.agents.find(x=>x.name===sel)||S.agents[0];if(!a)return;sel=a.name;
+  const pane=$('#ipane');const a=S.agents.find(x=>x.name===sel)||S.agents[0];if(!a){pane.innerHTML='<div class="empty">Esta oficina aún no tiene agentes.</div>';return}sel=a.name;
   if(tab==='salida'){loadLog(a.name);return}
   if(tab==='hilo'){loadHilo(a.name);return}
   const st=statusOf(a);const stTxt={working:'trabajando',idle:'en reposo',waiting:'espera',blocked:'bloqueado'}[st];
@@ -703,11 +712,11 @@ function renderBoard(){
     return`<div class="tc"><b>${esc(t.id)} · ${esc(t.titulo)}</b><p>${esc(t.nota||'')}</p><div class="who2"><i class="led" style="background:${L.shirt}"></i>${esc(t.responsable||'—')}${t.aprobador?' · aprueba '+esc(t.aprobador):''}</div></div>`}).join('')}</div>`}).join('')}</div>`;
 }
 function renderCampus(){
-  const offs=OFFICES.length?OFFICES:[{id:'w1',nombre:'Strata3060',agentes:S.agents.map(a=>a.name),tareas:(S.tareas||[]).length,foco:true}];
-  $('#pv-campus').innerHTML=`<div class="camp">${offs.map(o=>`<button class="card oc" data-off="${esc(o.id)}"><div class="ill">${o.foco?ICB:ICF}</div><b>${esc(o.nombre==='Servidor IA'?'Strata3060':o.nombre)}</b><div style="color:var(--muted);font-size:12px">${o.agentes.length} agentes · ${o.tareas} tareas</div>${o.needs?'<i class="dot"></i>':''}</button>`).join('')}
+  const offs=OFFICES;
+  $('#pv-campus').innerHTML=`<div class="camp">${offs.map(o=>`<button class="card oc" data-off="${esc(o.id)}"><div class="ill">${o.strata?ICB:ICF}</div><b>${esc(o.nombre)}</b><div style="color:var(--muted);font-size:12px">${o.agentes.length} agentes${o.perfiles&&o.perfiles.length?' · '+[...new Set(o.perfiles.map(p=>p.rol))].join(', '):''}</div>${o.needs?'<i class="dot"></i>':''}</button>`).join('')}
     <button class="card oc new" id="newOff2" style="display:grid;place-items:center;min-height:190px">+ Nueva oficina</button></div>`;
   $('#newOff2').onclick=newOffice;
-  $$('#pv-campus [data-off]').forEach(b=>b.onclick=()=>setView('oficina'));
+  $$('#pv-campus [data-off]').forEach(b=>b.onclick=()=>{setOffice(b.dataset.off);setView('oficina')});
 }
 function renderAll(){if(!S)return;renderHeader();renderSide();if(view==='oficina'||tab!=='inspector')renderInspector();else renderInspector();
   if(view==='metricas')renderMetrics();if(view==='tablero')renderBoard();if(view==='campus')renderCampus();renderMenu();updateTo()}
@@ -741,9 +750,28 @@ async function send(agent,mode,text){try{const r=await api('/api/send',{method:'
 /* modal */
 function confirmModal(t,p,ok,body=''){$('#mt').textContent=t;$('#mp').textContent=p;$('#mb').innerHTML=body;$('#modal').classList.add('on');
   $('#mo').onclick=()=>{$('#modal').classList.remove('on');ok()};$('#mc').onclick=()=>$('#modal').classList.remove('on');setTimeout(()=>($('#mb input')||$('#mo')).focus(),30)}
-function newOffice(){confirmModal('Nueva oficina','Se crea un workspace nuevo en herdr con este nombre. Después puedes arrancar agentes en él.',async()=>{
-  const n=$('#mb input').value.trim();if(!n)return;try{const r=await api('/api/office',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
-  toast(r.ok?`Oficina “${n}” creada ✓`:(r.error||'No se pudo crear'),!r.ok);loadOffices()}catch(_){toast('No se pudo crear',true)}},'<input placeholder="Nombre del proyecto" maxlength="40">')}
+const PERF=[['arquitecto','Arquitecto','claude'],['desarrollador','Desarrollador','opencode'],['investigador','Investigador','agy · Gemini Flash'],['tester','Tester','pi · ada-next']];
+function newOffice(){
+  const body=`<input id="noName" placeholder="Nombre del proyecto (p. ej. Streamia)" maxlength="40">
+    <input id="noDir" placeholder="Carpeta (por defecto ~/nombre)" style="margin-top:8px">
+    ${PERF.map(([k,l,kind],i)=>`<div class="cnt"><span class="k"><span><b style="text-align:left">${l}</b> <small style="color:var(--muted)">${kind}</small></span></span><span><button type="button" data-m="${k}">−</button> <b id="n-${k}">${k==='desarrollador'?1:0}</b> <button type="button" data-p="${k}">+</button></span></div>`).join('')}
+    <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:13px;color:var(--muted)"><input type="checkbox" id="noAuto" style="width:auto"> Permisos automáticos (claude y agy no piden confirmación)</label>`;
+  confirmModal('Nueva oficina','Crea un workspace en herdr con su equipo. Cada agente arranca en su propio panel (unos segundos por agente).',async()=>{
+    const name=$('#noName').value.trim();if(!name){toast('Ponle un nombre',true);return}
+    const equipo={};PERF.forEach(([k])=>equipo[k]=+$('#n-'+k).textContent);
+    try{const r=await api('/api/office',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,cwd:$('#noDir').value.trim()||undefined,equipo,auto:$('#noAuto').checked})});
+      if(!r.ok){toast(r.error||'No se pudo crear',true);return}toast(`Creando “${name}”…`);followJob(r.job,name)}catch(_){toast('No se pudo crear',true)}},body);
+  $$('#mb [data-p]').forEach(b=>b.onclick=()=>{const e=$('#n-'+b.dataset.p);const tot=PERF.reduce((s2,[k])=>s2+ +$('#n-'+k).textContent,0);if(+e.textContent<4&&tot<8)e.textContent=+e.textContent+1});
+  $$('#mb [data-m]').forEach(b=>b.onclick=()=>{const e=$('#n-'+b.dataset.m);if(+e.textContent>0)e.textContent=+e.textContent-1});
+  $('#noName').oninput=()=>{$('#noDir').placeholder='~/'+($('#noName').value.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,12)||'nombre')}}
+async function followJob(id,name){let seen=0;
+  for(let i=0;i<120;i++){await new Promise(r=>setTimeout(r,1500));let j;try{j=await api('/api/office/job?id='+id)}catch(_){continue}
+    (j.pasos||[]).slice(seen).forEach(p=>toast(p,/ERROR/.test(p)));seen=(j.pasos||[]).length;
+    if(j.estado!=='en curso'){if(j.estado==='error')toast('Error: '+j.error,true);else toast(`Oficina “${name}” lista ✓`);await loadOffices();if(j.ws)setOffice(j.ws);return}}}
+function delOffice(id){const o=OFFICES.find(x=>x.id===id);if(!o)return;
+  confirmModal('Borrar “'+o.nombre+'”',`Se cerrará el workspace ${o.id} en herdr y se detendrán sus ${o.agentes.length} agentes. Escribe el nombre para confirmar.`,async()=>{
+    const c=$('#mb input').value;try{const r=await api('/api/office/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,confirm:c})});
+      toast(r.ok?`“${o.nombre}” borrada`:(r.error||'No se pudo borrar'),!r.ok);if(r.ok){if(WS===id)setOffice(STRATA_WS);loadOffices()}}catch(_){toast('No se pudo borrar',true)}},`<input placeholder="${esc(o.nombre)}">`)}
 $('#newOff').onclick=newOffice;
 
 /* teclado */
@@ -757,10 +785,15 @@ function clock(){$('#clock').textContent=new Date().toLocaleTimeString('es-ES',{
 new ResizeObserver(()=>$('#stage').classList.toggle('compact',$('#stage').clientWidth<1150)).observe($('#stage'));
 
 /* datos: SSE con reconexión y respaldo por sondeo */
-function apply(st){const prevW=JSON.stringify(S?.agents?.map(a=>[a.name,a.status,a.activity]));S=st;
-  let wi=0;for(const a of S.agents)if(!LOOK[a.name])workerIdx[a.name]=wi++;
+let wsTimer=null;
+function setOffice(id){if(!id)return;WS=id;clearInterval(wsTimer);sel=null;
+  if(OTHER()){const go=()=>api('/api/state?ws='+encodeURIComponent(id)).then(st=>{if(WS===id)apply(st,true)}).catch(()=>{});go();wsTimer=setInterval(go,5000)}
+  else api('/api/state').then(st=>apply(st,true)).catch(()=>{});renderSide()}
+function apply(st,force){if(!force&&OTHER())return;const prevW=JSON.stringify(S?.agents?.map(a=>[a.name,a.status,a.activity]));S=st;
+  let wi=0;for(const a of S.agents)if(OTHER()||!LOOK[a.name])workerIdx[a.name]=wi++;
+  if(!sel||!S.agents.find(a=>a.name===sel))sel=S.agents[0]?.name||null;
   scene3d.sync(S.agents);renderAll();if(prevW!==JSON.stringify(S.agents.map(a=>[a.name,a.status,a.activity])))scene3d.request()}
-async function loadOffices(){try{OFFICES=(await api('/api/offices')).offices||[];if(S)renderSide()}catch(_){}}
+async function loadOffices(){try{const r=await api('/api/offices');OFFICES=r.offices||[];STRATA_WS=r.strata;if(!WS)WS=STRATA_WS;if(S)renderSide()}catch(_){}}
 function connect(){const es=new EventSource('/api/events');es.onmessage=e=>{try{apply(JSON.parse(e.data))}catch(_){}};
   es.onerror=()=>{es.close();$('#live').className='live off';$('#live').textContent='reconectando…';setTimeout(connect,4000)}}
 api('/api/state').then(apply).catch(()=>{});loadOffices();setInterval(loadOffices,60000);connect();
