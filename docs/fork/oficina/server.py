@@ -14,7 +14,14 @@ ENVIADOS = H("~/explorer/ENVIADOS.md"); SUPLENCIA = H("~/.cache/strata-watchdog/
 LOG_UP = H("~/.cache/strata-upstream/log"); LOG_WD = H("~/.cache/strata-watchdog/log")
 PWF = os.environ.get("STRATA_OFICINA_PW", H("~/.config/strata-oficina/password.scrypt"))
 ENVLOG = H("~/.cache/strata-oficina/envios.log"); B64 = base64.b64decode
-SESS = {}; SELOCK = threading.Lock(); FAILS = {}
+SESSF = H("~/.cache/strata-oficina/sesiones.json"); SELOCK = threading.Lock(); FAILS = {}
+try: SESS = {k: v for k, v in json.loads(open(SESSF).read()).items() if v > time.time()}
+except Exception: SESS = {}
+def save_sess():
+    try:
+        os.makedirs(os.path.dirname(SESSF), exist_ok=True)
+        with open(os.open(SESSF, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f: json.dump(SESS, f)
+    except OSError: pass
 FIXED = ["claude", "opencode2", "tester", "explorer", "suplente"]
 ROLES = {"claude": "Arquitecto · supervisa y lleva la cola", "opencode2": "Dev · ejecuta contratos", "tester": "Carga con motor", "explorer": "Investiga hardware", "suplente": "Reserva"}
 COLORS = {"claude": "#8b5cf6", "opencode2": "#22c55e", "tester": "#f59e0b", "explorer": "#3b82f6", "suplente": "#9ca3af"}
@@ -189,7 +196,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         q = parse_qs(u.query).get("agent", [""])[0]
-        if u.path == "/login": self._send(200, LOGIN, "text/html; charset=utf-8")
+        if u.path == "/favicon.ico":
+            self.send_response(204); self.send_header("Content-Length", "0"); self.end_headers()
+        elif u.path == "/login": self._send(200, LOGIN, "text/html; charset=utf-8")
         elif u.path == "/" and not sess_ok(self.headers):
             self.send_response(302); self.send_header("Location", "/login"); self.end_headers()
         elif u.path.startswith("/api/") and not sess_ok(self.headers):
@@ -234,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
             elif pw_ok(d.get("password")):
                 FAILS.pop(ip, None)
                 sid = secrets.token_urlsafe(32)
-                with SELOCK: SESS[sid] = time.time() + 2592000
+                with SELOCK: SESS[sid] = time.time() + 2592000; save_sess()
                 self._send(200, b'{"ok": true}', "application/json",
                             "sid=" + sid + "; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict")
             else:

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Oficina Strata</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect width=%2224%22 height=%2224%22 rx=%226%22 fill=%22%2316a34a%22/%3E%3Cpath d=%22M6 18V10l6-4 6 4v8%22 fill=%22none%22 stroke=%22white%22 stroke-width=%222%22/%3E%3C/svg%3E">
 <style>
 :root{
   --bg:#e9ecf1;--panel:#ffffff;--panel2:#f5f6f9;--text:#0f172a;--muted:#64748b;--faint:#94a3b8;--line:#e3e6ec;
@@ -27,9 +28,16 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 /* Escenario 16:9 con letterbox */
 #stage{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
   width:min(100vw,calc(100vh*16/9));height:min(100vh,calc(100vw*9/16));
-  display:grid;grid-template-columns:64px 250px 1fr 330px;gap:12px;padding:12px}
-#stage.compact{grid-template-columns:56px 1fr 300px}
-#stage.compact #side{display:none}
+  display:grid;grid-template-columns:64px 250px 1fr 330px;gap:12px;padding:12px;overflow:hidden}
+#stage.compact{grid-template-columns:56px 1fr;gap:8px;padding:8px}
+#stage.compact #side,#stage.compact #subtitle,#stage.compact .legend,#stage.compact .float{display:none}
+#stage.compact #head h1{font-size:18px}
+#stage.compact #contract{max-width:40%;overflow:hidden;text-overflow:ellipsis}
+#stage.compact #insp{position:absolute;right:8px;top:8px;bottom:8px;width:min(340px,62%);z-index:40;transform:translateX(calc(100% + 16px));transition:transform .25s ease}
+#stage.compact.drawer #insp{transform:none}
+#closeInsp{display:none;position:absolute;right:10px;top:10px;width:30px;height:30px;border-radius:9px;background:var(--panel2);z-index:2}
+#stage.compact #closeInsp{display:grid;place-items:center}
+#stage.compact .tabs{padding-right:46px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
 /* Rail */
 #rail{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 0}
@@ -109,7 +117,7 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 #menu button:hover,#menu button.on{background:var(--panel2)}
 #menu small{color:var(--muted);margin-left:auto;font-size:11px}
 /* Inspector */
-#insp{display:flex;flex-direction:column;min-height:0}
+#insp{display:flex;flex-direction:column;min-height:0;position:relative}
 .tabs{display:flex;gap:4px;padding:10px 10px 0}
 .tab{flex:1;padding:9px 0;border-radius:12px;font-weight:600;color:var(--muted);transition:background .15s,color .15s}
 .tab.on{background:var(--ink);color:var(--inkText)}
@@ -176,6 +184,7 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
 .camp{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
 .oc{padding:14px;text-align:left;transition:transform .15s,box-shadow .15s;position:relative}
 .oc:hover{transform:translateY(-2px)}
+.oc .ill svg{width:44px;height:44px;color:var(--muted)}
 .oc .ill{height:110px;border-radius:12px;margin-bottom:12px;background:
   radial-gradient(ellipse at 50% 85%,rgba(0,0,0,.12),transparent 60%),linear-gradient(160deg,var(--panel2),var(--bg));display:grid;place-items:center;font-size:40px}
 /* Modal / toast */
@@ -202,7 +211,7 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
 <div id="stage">
   <nav id="rail" class="card" aria-label="Navegación">
     <div class="logo" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6"/></svg></div>
-    <button class="rb on" data-view="oficina" aria-label="Oficina"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span class="tip">Oficina · O</span></button>
+    <button class="rb on" data-view="oficina" aria-label="Oficina"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="10" width="18" height="3" rx="1"/><path d="M5 13v7M19 13v7M8 10V5h8v5"/></svg><span class="tip">Oficina · O</span></button>
     <button class="rb" data-view="tablero" aria-label="Tablero"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="13" rx="1.5"/></svg><span class="tip">Tablero de misiones · T</span></button>
     <button class="rb" data-view="metricas" aria-label="Métricas"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-7"/></svg><span class="tip">Métricas · M</span></button>
     <button class="rb" data-view="campus" aria-label="Campus"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="tip">Campus · C</span></button>
@@ -250,6 +259,7 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
   </main>
 
   <aside id="insp" class="card">
+    <button id="closeInsp" aria-label="Cerrar inspector">✕</button>
     <div class="tabs" role="tablist">
       <button class="tab on" data-tab="inspector">Inspector</button>
       <button class="tab" data-tab="salida">Salida</button>
@@ -275,6 +285,7 @@ const store={get(k){try{return localStorage.getItem(k)}catch(_){return null}},se
 function toast(t,bad){const d=document.createElement('div');d.className='toast'+(bad?' bad':'');d.textContent=t;$('#toasts').append(d);setTimeout(()=>d.remove(),4200)}
 async function api(path,opt){const r=await fetch(path,opt);if(r.status===401){location.href='/login';throw new Error('login')}return r.json()}
 
+const ICB='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',ICF='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 /* ---------- tema ---------- */
 const themeNow=()=>document.documentElement.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
 {const t=store.get('tema');if(t)document.documentElement.dataset.theme=t}
@@ -488,7 +499,7 @@ const scene3d=(()=>{
 
   /* cámara isométrica que encaja la sala */
   function resize(){const w=host.clientWidth,h=host.clientHeight;if(!w||!h)return;R.setSize(w,h,false);
-    const aspect=w/h;const need=Math.max(7.6/aspect,5.2)/zoom;cam.left=-need*aspect;cam.right=need*aspect;cam.top=need;cam.bottom=-need;
+    const aspect=w/h;const need=Math.max(7.6/aspect,5.2)/zoom/(w<700?1.25:1);cam.left=-need*aspect;cam.right=need*aspect;cam.top=need;cam.bottom=-need;
     const r=20;cam.position.set(Math.sin(az)*r*Math.cos(el),r*Math.sin(el),Math.cos(az)*r*Math.cos(el));cam.lookAt(0,.55,.2);cam.updateProjectionMatrix();request()}
   new ResizeObserver(resize).observe(host);
 
@@ -526,7 +537,9 @@ const scene3d=(()=>{
   function placeLabels(){
     const box=$('#labels'),w=host.clientWidth,h=host.clientHeight;if(!S)return;
     const items=[];
-    for(const a of S.agents){const d=desks[a.name];if(!d)continue;d.userData.head.getWorldPosition(v);v.y-=1.25;v.project(cam);
+    for(const a of S.agents){const d=desks[a.name];if(!d)continue;
+      if(d.userData.person.visible){d.userData.head.getWorldPosition(v);v.y-=1.25}else{d.getWorldPosition(v);v.y+=.2}
+      v.project(cam);
       items.push({a,x:(v.x+1)/2*w,y:(1-v.y)/2*h+6})}
     items.sort((p,q)=>p.y-q.y);
     for(let i=0;i<items.length;i++)for(let j=0;j<i;j++){const p=items[i],q=items[j];if(Math.abs(p.x-q.x)<150&&Math.abs(p.y-q.y)<28)p.y=q.y+28}
@@ -572,7 +585,7 @@ function renderSide(){
   $('#sideKpi').innerHTML=k('Escritura B1',p.B1,'t/s',p.B1&&b.B1?(p.B1/b.B1-1)*100:null)+k('Lectura P3',p.P3_s,'s',p.P3_s&&b.P3_s?(b.P3_s/p.P3_s-1)*100:null);
   const q=S.queue||{done:0,total:0};$('#qtxt').textContent=`${q.done} de ${q.total} contratos cerrados`;$('#qbar').style.width=(q.total?q.done/q.total*100:0)+'%';
   $('#offices').innerHTML=(OFFICES.length?OFFICES:[{id:'w1',nombre:'Strata3060',agentes:S.agents.map(a=>a.name),tareas:(S.tareas||[]).length,foco:true}]).map(o=>
-    `<button class="off${o.foco?' on':''}" data-off="${esc(o.id)}"><span class="ic">${o.foco?'⚡':'🗂️'}</span><span><b>${esc(o.nombre==='Servidor IA'?'Strata3060':o.nombre)}</b><small>${o.agentes.length} agentes · ${o.tareas} tareas</small></span>${o.needs?'<i class="dot"></i>':''}</button>`).join('');
+    `<button class="off${o.foco?' on':''}" data-off="${esc(o.id)}"><span class="ic">${o.foco?ICB:ICF}</span><span><b>${esc(o.nombre==='Servidor IA'?'Strata3060':o.nombre)}</b><small>${o.agentes.length} agentes · ${o.tareas} tareas</small></span>${o.needs?'<i class="dot"></i>':''}</button>`).join('');
 }
 function renderInspector(){
   const pane=$('#ipane');const a=S.agents.find(x=>x.name===sel)||S.agents[0];if(!a)return;sel=a.name;
@@ -623,7 +636,7 @@ function renderMetrics(){
       ${goal('Misión: leer 32K en 10 s',p.P3_s,b.P3_s,10,true,'s')}
       <div class="card goal"><b>Candidato en prueba</b><p style="margin:8px 0 0;color:var(--muted)">${esc(m.candidato?.nombre||'ninguno')} · ${esc(m.candidato?.IC||'')}</p></div>
     </div>
-    <div class="card boss" style="margin-top:12px"><div style="font-size:34px">👾</div><div class="hp"><b>Jefe actual: ${esc(boss.nombre)}</b><div class="bar"><i style="width:${(hp*100).toFixed(0)}%"></i></div><small style="color:var(--muted)">${fmt(boss.ms)} ms perdidos por paso · suelo físico ${fmt(boss.suelo)} ms. Cada mejora adoptada le quita vida.</small></div></div>
+    <div class="card boss" style="margin-top:12px"><div><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c-4 0-7 3-7 7v8l2-2 2 2 3-2 3 2 2-2 2 2v-8c0-4-3-7-7-7z"/><circle cx="9.5" cy="10" r="1.3" fill="#ef4444"/><circle cx="14.5" cy="10" r="1.3" fill="#ef4444"/></svg></div><div class="hp"><b>Jefe actual: ${esc(boss.nombre)}</b><div class="bar"><i style="width:${(hp*100).toFixed(0)}%"></i></div><small style="color:var(--muted)">${fmt(boss.ms)} ms perdidos por paso · suelo físico ${fmt(boss.suelo)} ms. Cada mejora adoptada le quita vida.</small></div></div>
     <div class="card" style="margin-top:12px;padding:16px"><b>Historial</b><div style="margin-top:8px">${h.slice(-8).reverse().map(x=>`<div style="display:flex;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-size:12.5px"><span class="mono" style="color:var(--muted);flex:none">${esc(x.fecha)}</span><span style="flex:1">${esc(x.cambio)}</span><b>${x.B1!=null?fmt(x.B1)+' t/s':''}</b></div>`).join('')}</div></div>`;
 }
 function renderBoard(){
@@ -633,7 +646,7 @@ function renderBoard(){
 }
 function renderCampus(){
   const offs=OFFICES.length?OFFICES:[{id:'w1',nombre:'Strata3060',agentes:S.agents.map(a=>a.name),tareas:(S.tareas||[]).length,foco:true}];
-  $('#pv-campus').innerHTML=`<div class="camp">${offs.map(o=>`<button class="card oc" data-off="${esc(o.id)}"><div class="ill">${o.foco?'⚡':'🗂️'}</div><b>${esc(o.nombre==='Servidor IA'?'Strata3060':o.nombre)}</b><div style="color:var(--muted);font-size:12px">${o.agentes.length} agentes · ${o.tareas} tareas</div>${o.needs?'<i class="dot"></i>':''}</button>`).join('')}
+  $('#pv-campus').innerHTML=`<div class="camp">${offs.map(o=>`<button class="card oc" data-off="${esc(o.id)}"><div class="ill">${o.foco?ICB:ICF}</div><b>${esc(o.nombre==='Servidor IA'?'Strata3060':o.nombre)}</b><div style="color:var(--muted);font-size:12px">${o.agentes.length} agentes · ${o.tareas} tareas</div>${o.needs?'<i class="dot"></i>':''}</button>`).join('')}
     <button class="card oc new" id="newOff2" style="display:grid;place-items:center;min-height:190px">+ Nueva oficina</button></div>`;
   $('#newOff2').onclick=newOffice;
   $$('#pv-campus [data-off]').forEach(b=>b.onclick=()=>setView('oficina'));
@@ -650,7 +663,8 @@ $$('.rb[data-view]').forEach(b=>b.onclick=()=>setView(b.dataset.view));
 $$('[data-goto]').forEach(b=>b.onclick=()=>setView(b.dataset.goto));
 $$('.tab').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;$$('.tab').forEach(x=>x.classList.toggle('on',x===b));renderInspector()});
 
-function select(n){sel=n;store.set('sel',n);if(n!=='claude'&&n!=='tester'){to=n}renderInspector();scene3d.request();updateTo()}
+$('#closeInsp').onclick=()=>$('#stage').classList.remove('drawer');
+function select(n){sel=n;store.set('sel',n);$('#stage').classList.add('drawer');if(n!=='claude'&&n!=='tester'){to=n}renderInspector();scene3d.request();updateTo()}
 
 /* chat */
 function renderMenu(){$('#menu').innerHTML=agentList().map(a=>`<button type="button" data-to="${esc(a.name)}" class="${a.name===to?'on':''}"><i class="led" style="background:${LED[statusOf(a)]}"></i>@${esc(a.name)}<small>${a.name==='claude'?'a la cola':'directo'}</small></button>`).join('');
@@ -675,7 +689,7 @@ $('#newOff').onclick=newOffice;
 
 /* teclado */
 document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'){if(e.key==='Escape')e.target.blur();return}
-  const k=e.key.toLowerCase();if(k==='escape'){$('#modal').classList.remove('on');$('#menu').classList.remove('open');setView('oficina')}
+  const k=e.key.toLowerCase();if(k==='escape'){$('#stage').classList.remove('drawer');$('#modal').classList.remove('on');$('#menu').classList.remove('open');setView('oficina')}
   else if(k==='t')setView('tablero');else if(k==='m')setView('metricas');else if(k==='c')setView('campus');else if(k==='o')setView('oficina');
   else if(k==='/'){e.preventDefault();$('#msg').focus()}else if(/^[1-9]$/.test(k)){const a=agentList()[+k-1];if(a)select(a.name)}});
 

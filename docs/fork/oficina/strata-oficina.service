@@ -3,6 +3,8 @@ Description=Oficina agentica v4 (monitor visual herdr, solo lectura + envios con
 After=network-online.target
 
 [Service]
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HERDR_SOCKET_PATH=%h/.config/herdr/herdr.sock
 Type=simple
 ExecStart=/usr/bin/python3 /tmp/opencode/wt-C30/oficina/server.py 8095
 WorkingDirectory=/tmp/opencode/wt-C30/oficina
