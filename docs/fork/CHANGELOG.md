@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: ESPERA: C29b adoptar/ampliar/seguir + C30 revisar | C28 obrero | 2026-10-05 02:25 UTC
+ESTADO: C28 fetch intacto (yo) | ESPERA C29b/C30 | 2026-10-05 02:42 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -61,6 +61,7 @@ ESTADO: ESPERA: C29b adoptar/ampliar/seguir + C30 revisar | C28 obrero | 2026-10
 | 2026-10-05 | C28-dg | Diagnóstico sin motor: plan_superblocks MUERTO en motor (solo enabled()); chunks 7936 iguales on/off | falta lending real, no descartar; C24 sigue en cola | - | Rehacer proto |
 | 2026-10-05 | C29-scr | Cribado N23 off/a/b x3: (a) 23,7 (−56% ROTO, a debug), (b) 51,8 (−4,5% térmico?, a 6+6 alterno) | off 54,27 (frío) | - | (b) a 6+6 |
 | 2026-10-05 | C28-re | No refutada (a medio hacer): obrero a lending + planner vivo + log bytes; bit-bit y A/B después | - | - | En curso |
+| 2026-10-05 | C28-ab2 | N23 OK; P3/P4 +0%; log c28: superbloques [2,3] pero fetch intacto por chunk (65-85 GiB) | premio real, mecanismo ausente: falta cirugía del bucle | - | Devolver |
 | 2026-10-05 | C29-b | ROWS2 6+6 N23: +1,91%±1,82 (IC95 +0,1/+3,7, justo; medianas +1,7%) | bit-exacto+parity; (a) roto; (c)(d) pdtes | - | Decide Claude |
 | 2026-10-05 | C29-cod | 4 palancas + parity (1153+/32-, binario listo); (b) NO descartada (bit-exacta lane-0) | GPU+A/B a su turno (tras C28/C27/P08) | - | Código listo |
 | 2026-10-05 | C30-dep | Oficina en :8095 (local+tailnet 200, v4-fix); N21; C31 creado (obrero) | BLOQUEO resuelto | - | Desplegada |
