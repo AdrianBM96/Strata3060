@@ -4,8 +4,8 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /tmp/opencode/wt-C30/oficina/server.py
-WorkingDirectory=/tmp/opencode/wt-C30/oficina
+ExecStart=/usr/bin/python3 /tmp/opencode/Strata3060/docs/fork/oficina/server.py 8095
+WorkingDirectory=/tmp/opencode/Strata3060/docs/fork/oficina
 Restart=on-failure
 # El token vive en ~/.config/strata-oficina/token (modo 600); la UI lo pide una vez.
 # Puerto 8090 por defecto (arg 1 = otro puerto). NO arrancar si el bench tiene lock

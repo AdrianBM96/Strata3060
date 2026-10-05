@@ -99,8 +99,10 @@ ni calidad.
   si chocan con una norma o con producción se pide confirmación a claude.
 - **N20.** ACELERAR: sin locks, el obrero en camino crítico compila con `-j12` sin nice (si ya va a
   `-j2`, no pararlo: otro make `-j12` en el mismo build continúa); los demás, `-j2` con nice. Compilar SOLO
-  el objetivo del motor que se mide. ccache: no instalado (necesita sudo → pendiente Adrián). En el A/B:
-  primero B1 6+6; si nulo/negativo claro, no gastar en B2.
+  el objetivo del motor que se mide. ccache 4.9.1 instalado. En el A/B: primero B1 6+6; si nulo/negativo
+  claro, no gastar en B2.
+- **N21.** Obreros SIEMPRE en segundo plano (background), nunca esperando en primer plano. Si uno se
+  cuelga, se mata y se relanza.
 - **C30** (oficina, AMPLIACIÓN UI/UX de Adrián: 16:9 letterbox + 'gira el dispositivo'; panel lateral con
   terminal 30 líneas + envío DIRECTO / VÍA CLAUDE (token POST, límite 3 s, ≤4000 chars, log envíos);
   tablero kanban desde TAREAS.json; pixel font embebida, ≤30 fps, atajos 1-5/T/Esc; capturas 1920×1080 y

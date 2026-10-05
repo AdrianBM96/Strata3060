@@ -3,7 +3,7 @@
 import hmac, json, os, re, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8090
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8095
 HERE = os.path.dirname(os.path.abspath(__file__))
 FORK = "/tmp/opencode/Strata3060/docs/fork"
 CHANGELOG = FORK + "/CHANGELOG.md"; COLA = FORK + "/COLA.md"
@@ -109,8 +109,7 @@ def get_state():
         CACHE["data"] = build_state(); CACHE["at"] = time.monotonic(); CACHE["data"]["interval"] = interval
     return CACHE["data"]
 def valid_agent(agent):
-    get_state()
-    return bool(re.match(r"^[\w][\w.\-]{0,31}$", agent or "")) and agent in LAST_AGENTS
+    get_state(); return bool(re.match(r"^[\w][\w.\-]{0,31}$", agent or "")) and agent in LAST_AGENTS
 def api_log(agent):
     if not valid_agent(agent):
         return {"error": "agente desconocido"}
@@ -132,19 +131,22 @@ def api_hilo(agent):
             env.append("%s [%s] %s" % (d.get("ts", ""), d.get("mode", ""), (d.get("text") or "")[:120]))
     men = [short_row(r) for r in table_rows(60) if agent.lower() in r.lower()][-8:]
     return {"agent": agent, "envios": env[-10:], "menciones": men}
+def intasks(ags, foco, alln):
+    return [t for t in tasks_list() if t.get("responsable") in ags or (foco and t.get("responsable") not in alln)]
 def api_offices():
     st = get_state()
     try: ws = json.loads(herdr_out(["workspace", "list"]))["result"]["workspaces"]; raw = json.loads(herdr_out(["agent", "list"]))["result"]["agents"]
     except Exception: ws, raw = [], []
-    esp = [t for t in (st.get("tareas") or []) if t.get("columna") == "ESPERA OK"]
+    alln = set(a.get("name") for a in raw)
     offs = []
     for w in ws:
         wid = w.get("workspace_id")
         ags = [a.get("name") for a in raw if a.get("workspace_id", "w1") == wid] or [a["name"] for a in st["agents"]]
-        offs.append({"id": wid, "nombre": w.get("label") or wid, "agentes": ags,
-                     "tareas": len(st.get("tareas") or []), "needs": bool(esp), "foco": bool(w.get("focused"))})
-    return {"offices": offs, "needs": [{"id": t.get("id"), "titulo": t.get("titulo"),
-                                        "responsable": t.get("responsable")} for t in esp]}
+        tl = intasks(ags, bool(w.get("focused")), alln)
+        esp = [t for t in tl if t.get("columna") == "ESPERA OK" and t.get("aprobador") == "adrian"]
+        offs.append({"id": wid, "nombre": w.get("label") or wid, "agentes": ags, "tareas": len(tl), "tl": tl,
+                     "needs": bool(esp), "foco": bool(w.get("focused"))})
+    return {"offices": offs}
 def api_send(body):
     global LAST_SEND
     try: d = json.loads(body[:8192])
@@ -205,14 +207,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, INDEX, "text/html; charset=utf-8")
         elif u.path == "/api/state":
             self._json(200, get_state())
-        elif u.path == "/api/log":
-            self._json(200, api_log(q))
-        elif u.path == "/api/tasks":
-            self._json(200, {"tareas": tasks_list()})
-        elif u.path == "/api/hilo":
-            self._json(200, api_hilo(q))
-        elif u.path == "/api/offices":
-            self._json(200, api_offices())
+        elif u.path == "/api/log": self._json(200, api_log(q))
+        elif u.path == "/api/tasks": self._json(200, {"tareas": tasks_list()})
+        elif u.path == "/api/hilo": self._json(200, api_hilo(q))
+        elif u.path == "/api/offices": self._json(200, api_offices())
         elif u.path == "/api/events":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream"); self.send_header("Cache-Control", "no-store")
