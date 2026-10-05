@@ -168,6 +168,7 @@ Estado: medida. **Sin aplicar nada** (espera validación).
 - **Veredicto propuesto**: subir a ~4.100 huecos **si** Claude lo valida; son +12 % de caché. Nota: el pico incluye
   los búferes del prefill largo, que toma prestados huecos — con más huecos fijos, el prefill largo tiene menos
   margen. Alternativa: quitar el micro-LLM (:8082) y sumar sus 246 MiB.
+- **CORRECCIÓN POSTERIOR (C11 cerrada, ver CHANGELOG): NO subir (base auto=3283, tope free−700: +38).**
 
 ## Orden 14a. ¿Cuenta el motor el uso de la capa del borrador?
 
@@ -243,3 +244,12 @@ Estado: medido. Instrumento `Strata/bench/te_sweep.cpp` (vía producción: pool 
 - **P09** (contiguo): refutado en RAM (×1,0). **VNNI**: micro +2 % en caché, sin prueba en RAM.
 
 **Veredicto: la CPU tiene margen pero no manda; el crítico es waitB (C27).**
+
+## Auditoría X5 (respuesta, 2026-10-05)
+
+- **B2 45,8→42,35**: el 45,8 es era 0.1.38 (orden 2, FETCH_ADMIT); el 42,35 es 0.1.39 (orden 7). Entre medias,
+  cambio de motor + distinta calidez de caché/sesión. Mis B2 recientes (0.1.39): 43,6-44,6, coherentes con
+  42-44, no con el 45,8 (outlier de la era anterior o sesión caliente). Sin regresión probada en producción.
+- **Filas 54,2 vs cabecera 44**: las filas son carriles concurrentes (GPU/CPU/PCIe se solapan); la cabecera
+  es wall (camino crítico: densa + max(CPU, PCIe+aciertos), modelo C22). No se suman.
+- bench.py: ya solo existe `docs/fork/ops/bench.py` (sin segunda copia). C11 de arriba, corregida a cerrada.
