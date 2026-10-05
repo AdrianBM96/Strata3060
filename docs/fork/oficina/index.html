@@ -111,6 +111,22 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 .legend span{display:inline-flex;align-items:center;gap:5px}
 /* Chat */
 #chat{display:flex;align-items:center;gap:10px;padding:8px 8px 8px 10px;border-radius:16px}
+#chat.open{flex-wrap:wrap}
+#thread{display:none;width:100%;max-height:38vh;overflow-y:auto;order:-1;flex-direction:column;gap:8px;padding:4px 2px 8px}
+#chat.open #thread{display:flex}
+.msg{max-width:88%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.45;word-break:break-word}
+.msg.you{align-self:flex-end;background:var(--accent);color:#fff}
+.msg.you small{display:block;opacity:.75;font-size:10.5px;margin-bottom:2px}
+.msg.them{align-self:flex-start;background:var(--panel2)}
+.msg.them small{display:block;color:var(--muted);font-size:10.5px;margin-bottom:2px}
+.msg.them pre{margin:4px 0 0;font-size:11.5px;white-space:pre-wrap}
+.kindchip{display:inline-block;font-size:10px;padding:1px 7px;border-radius:20px;background:var(--panel);border:1px solid var(--line);margin-left:6px}
+/* Ficha */
+.ficha{display:flex;gap:12px;align-items:center;padding:12px;border-radius:14px;background:var(--panel2)}
+.ficha .av{width:64px;height:64px;flex:none}
+.ficha b{font-size:15px}
+.ficha small{display:block;color:var(--muted);font-size:11.5px;margin-top:1px}
+#openChat{margin-top:10px;width:100%}
 #to{display:inline-flex;align-items:center;gap:6px;background:var(--ink);color:var(--inkText);font-weight:650;font-size:12.5px;padding:7px 11px;border-radius:11px;position:relative}
 #to .led{width:7px;height:7px}
 #msg{flex:1;border:0;outline:0;background:transparent;font:inherit;color:inherit;padding:8px 2px}
@@ -266,6 +282,7 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
       <div class="panelview" id="pv-campus"></div>
     </section>
     <form id="chat" class="card" autocomplete="off">
+      <div id="thread" aria-live="polite"></div>
       <div style="position:relative">
         <button type="button" id="to"><i class="led"></i><span>@claude</span></button>
         <div id="menu" class="card" role="menu"></div>
@@ -679,7 +696,8 @@ function renderInspector(){
   const L=lookOf(a.name,workerIdx[a.name]||0);
   const need=pendingAdrian(),wc=waitingClaude(),tl=tasksOf(a.name);
   pane.innerHTML=`
-    <div class="who">${avatarSVG(a.name,workerIdx[a.name]||0)}<div><b>${esc(a.name)}</b><small>${esc(a.role||L.role)}</small><small title="${esc(a.since||'')}">${esc(stTxt)} · ${esc(rel(a.ts))}</small></div><span class="st ${st}">${st==='working'?'Working':st==='idle'?'Ready':st}</span></div>
+    <div class="ficha">${avatarSVG(a.name,workerIdx[a.name]||0)}<div><b>${esc(a.name)}</b><small>${esc(a.role||L.role)} <span class="kindchip">${esc(kindOf(a.name))}</span></small><small title="${esc(a.since||'')}">${esc(stTxt)} · ${esc(rel(a.ts))}</small><small>${esc(a.activity||'')}</small></div></div>
+    <button class="btn" id="openChat" type="button">Abrir chat</button>
     <p class="act">Ahora: <b>${esc(a.activity||'—')}</b></p>
     <div class="sec">Te necesita <span>${need.length||''}</span></div>
     ${need.length?need.map(t=>`<div class="need"><span class="tag">NEEDS YOU</span> <b>${esc(t.id)} · ${esc(t.titulo)}</b><p>${esc(t.nota||'')}</p>
@@ -690,6 +708,7 @@ function renderInspector(){
     ${tl.length?tl.map(t=>`<div class="task"><p class="tt">${esc(t.id)} <span>· ${esc(t.titulo)}</span></p><div class="tl">${(t.pasos||[{nombre:t.nota||'en curso',estado:'curso',pct:50}]).map(s=>
       `<div class="step ${s.estado==='hecho'?'hecho':s.estado==='curso'?'curso':''}"><b>${esc(s.nombre)}</b><small>${s.estado==='hecho'?'hecho':s.estado==='curso'?'en curso · '+(s.pct||0)+' %':'pendiente'}</small>${s.estado==='curso'?`<div class="bar"><i style="width:${s.pct||0}%"></i></div>`:''}</div>`).join('')}</div></div>`).join('')
       :'<div class="empty">Sin tareas asignadas ahora mismo</div>'}`;
+  pane.querySelector('#openChat').onclick=()=>openChat(a.name);
   pane.querySelectorAll('[data-ok]').forEach(b=>b.onclick=()=>confirmModal('Aprobar '+b.dataset.ok,'Se enviará a claude: “OK a '+b.dataset.ok+'”. claude lo comunicará a quien corresponda.',()=>send('claude','viaclaude','OK a '+b.dataset.ok)));
   pane.querySelectorAll('[data-rev]').forEach(b=>b.onclick=()=>{to='claude';updateTo();$('#msg').value='Revisa conmigo '+b.dataset.rev+': ';$('#msg').focus()});
 }
@@ -700,7 +719,20 @@ async function loadHilo(n){$('#ipane').innerHTML='<div class="empty">Cargando…
   try{const d=await api('/api/hilo?agent='+encodeURIComponent(n));if(sel!==n||tab!=='hilo')return;
     const m=[...(d.envios||[]).map(x=>`<div class="m"><small>enviado desde la oficina</small>${esc(x)}</div>`),...(d.menciones||[]).map(x=>`<div class="m"><small>CHANGELOG</small>${esc(x)}</div>`)];
     $('#ipane').innerHTML=`<div class="msgs">${m.join('')||'<div class="empty">Sin mensajes todavía</div>'}</div>`}catch(_){}}
-let logTimer=setInterval(()=>{if(tab==='salida'&&sel)loadLog(sel)},5000);
+let logTimer=setInterval(()=>{if(tab==='salida'&&sel)loadLog(sel);if($('#chat').classList.contains('open')&&sel)loadThread(sel,true)},5000);
+/* ficha + chat expandido por CLI */
+function kindOf(n){return n==='claude'?'Claude Code':n==='tester'?'pi':n==='explorer'?'agy':n==='suplente'?'agy':n.startsWith('obrero')?'obrero':'opencode'}
+function openChat(n){to=n;updateTo();sel=n;store.set('sel',n);$('#stage').classList.add('drawer');$('#chat').classList.add('open');loadThread(n);$('#msg').focus()}
+function closeChat(){$('#chat').classList.remove('open')}
+async function loadThread(n,quiet){try{
+  const[h,l]=await Promise.all([api('/api/hilo?agent='+encodeURIComponent(n)),api('/api/log?agent='+encodeURIComponent(n))]);
+  if(sel!==n||!$('#chat').classList.contains('open'))return;
+  const k=kindOf(n);
+  const ours=(h.envios||[]).map(x=>`<div class="msg you"><small>tú · ${esc(k)}</small>${esc(x)}</div>`).join('');
+  const theirs=(l.lines||[]).slice(-30).map(x=>`<div class="msg them"><small>${esc(n)} · ${esc(k)}</small><pre>${esc(x)}</pre></div>`).join('');
+  $('#thread').innerHTML=ours+theirs||'<div class="empty">Sin mensajes todavía. Escríbele abajo.</div>';
+  if(!quiet)$('#thread').scrollTop=$('#thread').scrollHeight;
+}catch(_){if(!quiet)$('#thread').innerHTML='<div class="empty">herdr no responde</div>'}}
 
 function delta(p,b,lower){if(p==null||b==null)return null;return lower?(b/p-1)*100:(p/b-1)*100}
 function spark(vals){if(vals.length<2)return'<svg></svg>';const lo=Math.min(...vals),hi=Math.max(...vals),r=hi-lo||1;
@@ -758,7 +790,7 @@ function updateTo(){const a=agentList().find(x=>x.name===to)||{name:to,status:'i
 $('#to').onclick=e=>{e.stopPropagation();$('#menu').classList.toggle('open')};
 document.addEventListener('click',()=>$('#menu').classList.remove('open'));
 $('#chat').onsubmit=e=>{e.preventDefault();const t=$('#msg').value.trim();if(!t)return;
-  const go=()=>send(to,to==='claude'?'viaclaude':'direct',t).then(ok=>{if(ok)$('#msg').value=''});
+  const go=()=>send(to,to==='claude'?'viaclaude':'direct',t).then(ok=>{if(ok)$('#msg').value='';if($('#chat').classList.contains('open'))loadThread(to)});
   if(to==='tester')confirmModal('Mensaje directo a tester','tester comparte el motor con las mediciones: un mensaje ahora puede contaminar las cifras. ¿Enviar igualmente?',go);else go()};
 async function send(agent,mode,text){try{const r=await api('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent,mode,text})});
   if(r.ok){const who=mode==='viaclaude'?'claude':agent;toast(r.confirmed?`Entregado a ${who} ✓ · mira su respuesta en Salida`:'Enviado (sin confirmación de entrega)');
