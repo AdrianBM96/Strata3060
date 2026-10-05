@@ -1,0 +1,1345 @@
+diff --git a/include/strata/prefill/layer_major.hpp b/include/strata/prefill/layer_major.hpp
+new file mode 100644
+index 0000000..7acddaf
+--- /dev/null
++++ b/include/strata/prefill/layer_major.hpp
+@@ -0,0 +1,183 @@
++// include/strata/prefill/layer_major.hpp - C28: superblock partition rule.
++//
++// Pure-CPU planning for the layer-major prefill prototype: no CUDA, no model,
++// no GPU.  The engine executes fit-bounded chunks through its unchanged
++// chunk-major loop (each non-resident expert streams once per chunk, so one
++// chunk per superblock = once per superblock); this planner states the
++// superblock rule and PROVES its checkpoint parity: a superblock ends at
++// min(fits the staging budget, next checkpoint firing), firings simulated
++// EXACTLY like generate.cpp:5456-5473, so the deferred per-chunk reports of a
++// superblock only checkpoint at superblock ends - the same positions as the
++// chunk-major path, with the session state consistent.  The unit test covers
++// it without a GPU (including firing-set identity against chunk-major).
++//
++// Design (BRIEFING C28, docs/fork/exploracion/C28-ESTUDIO.md):
++//  1. A superblock is a run of consecutive chunks (one chunk per superblock
++//     when the whole superblock fits on the device: R stays in FP32 VRAM and
++//     no host spill is needed; the spill to pinned host RAM remains the
++//     fallback for prompts beyond the fit, with the loop interchange).
++//  2. A superblock ends at min(fits in the staging budget, next checkpoint
++//     firing).  Firings are simulated EXACTLY like generate.cpp:5456-5473:
++//     fire at the first chunk end >= pp_next_check, then pp_next = done+every.
++//     Intermediate chunk ends never reach pp_next, so checkpoints are only
++//     taken at superblock ends - the same positions as chunk-major.
++#pragma once
++
++#include <cstdint>
++#include <utility>
++#include <vector>
++
++namespace strata::prefill::layer_major {
++
++// The hyper-connected residual width: D = N*HC = 10240 floats/token, FP32
++// always (prefill.cpp:90,852).  R is bit-exact through the spill.
++inline constexpr int64_t kHyperDim = 10240;
++inline constexpr int64_t kHyperBytesPerToken = kHyperDim * 4;
++
++// A superblock: chunks [c0, c1) of the run (chunk indices, c1 exclusive).
++struct Superblock {
++    int64_t c0 = 0;
++    int64_t c1 = 0;
++};
++
++// Partition [0, n) (run starting at absolute position pos0, chunks of chunk_T
++// tokens) into superblocks.
++//   max_sb_tokens: staging fit cap (R spill budget); <= 0 = whole run.
++//   next_ckpt_abs: absolute pp_next_check (generate.cpp:6772); INT64_MAX or
++//     negative = no periodic checkpoint in range.
++//   every: prompt_cache_every; <= 0 = no periodic checkpoints.
++// A superblock end is always a chunk end; the last one is always n.
++std::vector<Superblock> plan_superblocks(int64_t n, int64_t pos0, int64_t chunk_T,
++                                         int64_t max_sb_tokens, int64_t next_ckpt_abs,
++                                         int64_t every);
++
++// FP32 bytes of the R spill of a superblock holding sb_tokens prompt tokens.
++inline int64_t r_spill_bytes(int64_t sb_tokens) { return sb_tokens * kHyperBytesPerToken; }
++
++// Tokens whose FP32 R (T*D*4) fits in lend_bytes - the borrowed expert-cache
++// bytes sizing this prompt's loan (generate.cpp: the tail slots lent by
++// plan_lend/lend, carved by Prefill::carve for R, the KV staging pool and the
++// streamed ring, refilled with experts after the prompt).  This is the
++// "cabe en huecos" side of the superblock cap; the caller takes
++// min(this, max_sb_tokens()), and plan_superblocks additionally cuts at the
++// next checkpoint firing, so the size is min(fit, checkpoint distance).
++// lend_bytes == 0 (own buffers, no loan): 0, meaning "no gap info" - the
++// planner then only cuts at checkpoint firings.
++inline int64_t fit_cap_tokens(uint64_t lend_bytes) {
++    if (lend_bytes == 0) return 0;
++    return (int64_t) (lend_bytes / ((uint64_t) kHyperBytesPerToken));
++}
++
++// Token range [t0, t1) of a superblock within its run (run-relative; the
++// caller adds the run's start): chunk units from the run start, the last one
++// possibly short.  Superblock ends are therefore always chunk ends, so
++// running a run superblock by superblock issues the same chunks in the same
++// order as one run - bit-identical, with checkpoints firing at the same
++// positions (plan_superblocks only ends superblocks at firings).
++inline std::pair<int64_t, int64_t> sb_token_range(Superblock sb, int64_t n, int64_t chunk_T) {
++    if (chunk_T <= 0 || n <= 0) return {0, 0};
++    const int64_t t0 = sb.c0 * chunk_T < n ? sb.c0 * chunk_T : n;
++    const int64_t t1 = sb.c1 * chunk_T < n ? sb.c1 * chunk_T : n;
++    return {t0, t1};
++}
++
++// STRATA_PREFILL_LAYER_MAJOR=1 enables the prototype path (default off: the
++// chunk-major path runs byte-identically to before).
++bool enabled();
++
++// STRATA_PREFILL_LM_MAX_TOKENS: staging fit cap in prompt tokens (default 32768:
++// the whole 32K prompt spills 32768*10240*4 = 1.31 GiB of pinned host RAM).
++int64_t max_sb_tokens();
++
++// ---- C28 layer-major execution model (pure CPU: no CUDA, no model, no GPU) ----
++//
++// The engine (Prefill::run_impl, single stage) runs a superblock wave by wave:
++// wave wl covers layer wl for every chunk, then wl+1. Between waves each
++// chunk's rows must survive: the FP32 residual R (T*D) plus the F-2 fused
++// norm carry (grs T*HC FP32, xn16 T*D BF16, xn16_lo when present). Spilling
++// them to pinned host RAM (plain byte copies, the same mechanism as the
++// layer-split hand-off) keeps every kernel's inputs bit-identical: the same
++// kernels run in the same per-(layer, chunk) order with the same T, so no
++// reduction ever runs in another order (see ENTREGA C28: kernel-by-kernel
++// enumeration). The expert stream plan (one seq for the whole run) is then
++// issued once per wave instead of once per chunk: the PCIe byte saving.
++
++// Pinned-host spill sizes for a run of n tokens (D = kHyperDim, HC = 4).
++struct SpillPlan {
++    int64_t tokens = 0;
++    uint64_t r_bytes = 0;       // tokens * D * 4 (FP32 residual rows)
++    uint64_t grs_bytes = 0;     // tokens * HC * 4 (fused norm row scales)
++    uint64_t xn16_bytes = 0;    // tokens * D * 2 (fused norm BF16 rows)
++    uint64_t total_bytes = 0;   // r + grs + xn16 (+ lo part below)
++    uint64_t lo_bytes = 0;      // tokens * D * 2 when the BF16-low carry exists
++};
++// with_lo: the bf16x2_hc() configuration carries xn16_lo too.
++SpillPlan spill_plan(int64_t n, bool with_lo);
++
++// Row stride (elements) of the spill: uniform chunks, so chunk c0 starts at
++// c0 * row_elems even when the last chunk is short (same layout as hand_in_).
++inline uint64_t spill_off_elems(int64_t c0, int64_t row_elems) {
++    return (uint64_t) c0 * (uint64_t) row_elems;
++}
++
++// Non-resident expert count per layer over [lb, le): entries with no VRAM
++// slot (host_res null, cache null, or slot < 0). The streamed walk issues
++// exactly these entries per wave, so this is the per-wave issue count the
++// engine compares against its ring slots for single-cohort eligibility.
++std::vector<int64_t> nonresident_per_layer(const int32_t* host_res, int64_t n_layers,
++                                           int64_t n_expert, int64_t lb, int64_t le);
++
++// Byte accountancy of one run (all waves): chunk-major issues every wave's
++// entries once per chunk; layer-major once per run. wave_bytes = sum over
++// waves of (entries * blob bytes); the blobs differ per layer, so the caller
++// sums them. Counting only: never feeds numerics.
++inline uint64_t stream_bytes_old(uint64_t wave_bytes_sum, int64_t chunks) {
++    return wave_bytes_sum * (uint64_t) (chunks > 0 ? chunks : 0);
++}
++inline uint64_t stream_bytes_lm(uint64_t wave_bytes_sum) { return wave_bytes_sum; }
++
++// ---- C28p: préstamo de huecos de decode (loan) para R+KV + anillo extra ----
++//
++// El camino por capas no se activaba nunca porque cada ola trae ~512
++// no-residentes y el ring es de 384 (`ring-o-stream`). Decisión del dueño:
++// PRÉSTAMO (no subir RING): durante el prefill, R+KV toman prestados huecos
++// de la caché de expertos de decode y se REPOBLAN al acabar (el refill ya
++// existente en generate.cpp). Todo lo de aquí es CPU puro (planificación y
++// contabilidad); el motor (prefill.cpp) lo usa solo con el flag on, y
++// generate.cpp presta/repuebla. Off: sin cambios (N15).
++//
++// Números: BLOB Q2_0 = 1.382.400 B. R @86K = 86016*10240*4 = 3.523.215.360 B
++// = ~2.548 slots ≈ ~2.600 huecos (~6 capas de 512 expertos por ola, 6*512 =
++// 3.072 menos el ring 384 = 2.688; con algunos residentes ≈ 2.600). @32K R =
++// 1.342.177.280 B ≈ 971 slots; con carry (grs+xn16) ≈ 1.456 slots.
++
++// Capas por ola del préstamo (default 6; STRATA_PREFILL_LM_WAVE_LAYERS).
++int64_t wave_layers();
++
++// Bytes VRAM del préstamo para el spill device de n tokens (R+carry FP32/BF16,
++// mismo spill_plan; en VRAM prestada en vez de RAM fijada).
++uint64_t loan_bytes_for_spill(int64_t n, bool with_lo);
++
++// Slots de caché necesarios para ese préstamo (techo(bytes/blob)).
++int64_t loan_slots_for_spill(int64_t n, bool with_lo, int64_t blob_bytes);
++
++// Cohortes necesarias si e_nr no cabe en el ring (techo(e_nr/ring), mín 1).
++inline int64_t cohorts_needed(int64_t e_nr, int64_t ring) {
++    if (ring <= 0 || e_nr <= 0) return 1;
++    return (e_nr + ring - 1) / ring;
++}
++
++// Slots extra de anillo que el préstamo debe aportar (0 si cabe).
++inline int64_t extra_ring_slots(int64_t max_nr, int64_t ring) {
++    return max_nr > ring ? max_nr - ring : 0;
++}
++
++// true si la ola cabe con el préstamo (anillo + slots prestados).
++inline bool wave_fits_with_loan(int64_t e_nr, int64_t ring, int64_t loan_extra_slots) {
++    return e_nr <= ring + loan_extra_slots;
++}
++
++// Olas como rangos [w0,w1) de capas (agrupadas de wave_layers en wave_layers).
++std::vector<std::pair<int64_t, int64_t>> plan_waves(int64_t lb, int64_t le, int64_t wave_layers);
++
++}  // namespace strata::prefill::layer_major
+diff --git a/include/strata/prefill/prefill.hpp b/include/strata/prefill/prefill.hpp
+index 15df6e4..fcebcf4 100644
+--- a/include/strata/prefill/prefill.hpp
++++ b/include/strata/prefill/prefill.hpp
+@@ -32,6 +32,9 @@ struct PrefillStats {
+     double ms_total = 0;
+     double ms_experts_host = 0;     ///< host time staging non-resident experts
+     int64_t experts_streamed = 0;   ///< expert blobs copied host -> device
++    uint64_t experts_bytes = 0;     ///< C28: PCIe host->device bytes of those blobs (same events as
++                                    ///< experts_streamed; blob sizes differ per layer, so the count alone
++                                    ///< does not give bytes). Counting only: never feeds numerics.
+     int64_t experts_dma = 0;        ///< ...of which straight from the pinned arena (no CPU copy)
+     int64_t experts_resident = 0;   ///< expert-layer groups served from the VRAM tier
+     double ms_ple = 0;
+@@ -72,6 +75,15 @@ public:
+     bool relayout(int64_t chunk, void* borrow, uint64_t borrow_bytes, std::string& err);
+     int64_t chunk() const;
+ 
++    /// C28p: préstamo de huecos de decode para el camino por capas (STRATA_PREFILL_LAYER_MAJOR=1).
++    /// `base`/`bytes`: cola de la caché de expertos prestada para el spill device (R+carry de todo
++    /// el prompt) + los slots extra de anillo que la ola necesita (max_nr - ring). El driver
++    /// (generate.cpp) los marca no-residentes antes del prompt y los REPOBLA después (refill
++    /// existente); este objeto solo los usa como buffers device (D2D, sin PCIe host) durante el
++    /// run. Sin préstamo (null/0): el spill cae a RAM fijada (C28d) y la elegibilidad exige
++    /// max_nr <= ring. Off (flag apagado): sin efecto (N15).
++    bool set_lm_loan(void* base, uint64_t bytes);
++
+     /// The share of the streamed experts' bytes DMA-able straight from pinned RAM (1 = all).  Sizes the streamed
+     /// ring (a big one only pays when the copy engine, not the host copies, is the limit); set before bytes_needed.
+     static void set_pinned_share(double share);
+diff --git a/src/prefill/layer_major.cpp b/src/prefill/layer_major.cpp
+new file mode 100644
+index 0000000..f223702
+--- /dev/null
++++ b/src/prefill/layer_major.cpp
+@@ -0,0 +1,120 @@
++// src/prefill/layer_major.cpp - C28 superblock planner (pure CPU, no CUDA).
++#include "strata/prefill/layer_major.hpp"
++
++#include <algorithm>
++#include <cstdint>
++#include <cstdlib>
++#include <limits>
++#include <vector>
++
++namespace strata::prefill::layer_major {
++
++std::vector<Superblock> plan_superblocks(int64_t n, int64_t pos0, int64_t chunk_T,
++                                         int64_t max_sb_tokens, int64_t next_ckpt_abs,
++                                         int64_t every) {
++    std::vector<Superblock> out;
++    if (n <= 0 || chunk_T <= 0) return out;
++    const int64_t nchunks = (n + chunk_T - 1) / chunk_T;
++    // Chunk end i (i = 1..nchunks, exclusive chunk count): absolute position.
++    auto end_of = [&](int64_t i) { return pos0 + std::min(i * chunk_T, n); };
++    // Periodic firing chunk-ends, simulated like generate.cpp:5456-5473:
++    // fire at the first chunk end >= pending, then pending = fired + every.
++    std::vector<int64_t> bounds;  // exclusive chunk counts
++    if (every > 0 && next_ckpt_abs >= 0 && next_ckpt_abs != std::numeric_limits<int64_t>::max()) {
++        int64_t pending = next_ckpt_abs;
++        for (int64_t guard = 0; guard <= nchunks + 1; ++guard) {
++            int64_t hit = -1;
++            for (int64_t i = 1; i <= nchunks; ++i) {
++                if (end_of(i) >= pending) { hit = i; break; }
++            }
++            if (hit < 0) break;
++            bounds.push_back(hit);
++            pending = end_of(hit) + every;
++        }
++    }
++    const int64_t cap_chunks =
++        max_sb_tokens > 0 ? std::max<int64_t>(1, max_sb_tokens / chunk_T) : nchunks;
++    int64_t start = 0;
++    size_t bi = 0;
++    while (start < nchunks) {
++        int64_t end = std::min(start + cap_chunks, nchunks);
++        while (bi < bounds.size() && bounds[bi] <= start) ++bi;
++        if (bi < bounds.size()) end = std::min(end, bounds[bi]);
++        if (end <= start) end = start + 1;  // defensive: never stall
++        if (end > nchunks) end = nchunks;
++        out.push_back({start, end});
++        start = end;
++    }
++    return out;
++}
++
++bool enabled() {
++    const char* v = std::getenv("STRATA_PREFILL_LAYER_MAJOR");
++    return v != nullptr && v[0] == '1';
++}
++
++int64_t max_sb_tokens() {
++    const char* v = std::getenv("STRATA_PREFILL_LM_MAX_TOKENS");
++    if (v != nullptr && std::atoll(v) > 0) return (int64_t) std::atoll(v);
++    return 32768;
++}
++
++SpillPlan spill_plan(int64_t n, bool with_lo) {
++    SpillPlan p;
++    if (n <= 0) return p;
++    p.tokens = n;
++    p.r_bytes = (uint64_t) n * (uint64_t) kHyperDim * 4u;
++    p.grs_bytes = (uint64_t) n * 4u * 4u;  // HC = 4 floats/token
++    p.xn16_bytes = (uint64_t) n * (uint64_t) kHyperDim * 2u;
++    p.lo_bytes = with_lo ? (uint64_t) n * (uint64_t) kHyperDim * 2u : 0u;
++    p.total_bytes = p.r_bytes + p.grs_bytes + p.xn16_bytes + p.lo_bytes;
++    return p;
++}
++
++std::vector<int64_t> nonresident_per_layer(const int32_t* host_res, int64_t n_layers,
++                                           int64_t n_expert, int64_t lb, int64_t le) {
++    std::vector<int64_t> out;
++    if (n_layers <= 0 || n_expert <= 0) return out;
++    if (lb < 0) lb = 0;
++    if (le > n_layers) le = n_layers;
++    for (int64_t l = lb; l < le; ++l) {
++        int64_t e_nr = n_expert;  // no table: nothing resident
++        if (host_res != nullptr) {
++            e_nr = 0;
++            for (int64_t e = 0; e < n_expert; ++e)
++                if (host_res[l * n_expert + e] < 0) ++e_nr;
++        }
++        out.push_back(e_nr);
++    }
++    return out;
++}
++
++// ---- C28p: préstamo (CPU puro) ----
++
++int64_t wave_layers() {
++    const char* v = std::getenv("STRATA_PREFILL_LM_WAVE_LAYERS");
++    if (v != nullptr) {
++        const int64_t w = (int64_t) std::atoll(v);
++        if (w >= 1 && w <= 48) return w;
++    }
++    return 6;
++}
++
++uint64_t loan_bytes_for_spill(int64_t n, bool with_lo) {
++    return spill_plan(n, with_lo).total_bytes;
++}
++
++int64_t loan_slots_for_spill(int64_t n, bool with_lo, int64_t blob_bytes) {
++    if (n <= 0 || blob_bytes <= 0) return 0;
++    const uint64_t need = loan_bytes_for_spill(n, with_lo);
++    return (int64_t) ((need + (uint64_t) blob_bytes - 1u) / (uint64_t) blob_bytes);
++}
++
++std::vector<std::pair<int64_t, int64_t>> plan_waves(int64_t lb, int64_t le, int64_t wave_layers) {
++    std::vector<std::pair<int64_t, int64_t>> out;
++    if (le <= lb || wave_layers <= 0) return out;
++    for (int64_t w0 = lb; w0 < le; w0 += wave_layers) out.emplace_back(w0, std::min(w0 + wave_layers, le));
++    return out;
++}
++
++}  // namespace strata::prefill::layer_major
+diff --git a/src/prefill/prefill.cpp b/src/prefill/prefill.cpp
+index e76fb6d..43f9504 100644
+--- a/src/prefill/prefill.cpp
++++ b/src/prefill/prefill.cpp
+@@ -26,6 +26,7 @@
+ #include "strata/prefill/moe_fused.hpp"
+ #include "strata/prefill/moe_fused_iq.hpp"
+ #include "strata/prefill/moe_mmq.hpp"
++#include "strata/prefill/layer_major.hpp"   // C28: eligibility, spill sizes, byte model (flag off: unused)
+ #include "strata/core/peer_experts.hpp"
+ #include "strata/prefill/kernels.hpp"
+ 
+@@ -562,6 +563,12 @@ struct Prefill::Impl {
+     // layer split: the next stage's GPU as a stream-only peer (set_stage_helper); its buffers are that stage's own
+     // prompt buffers, bound per prompt, and it takes the place of `pp` for a run it helps
+     std::unique_ptr<PeerPrefill> help_pp;
++    // C28p: préstamo de huecos de decode (generate.cpp presta, aquí solo se usa).
++    // Base device + bytes de la cola prestada (spill R+carry de todo el prompt +
++    // slots extra de anillo). Null/0 = sin préstamo (spill a RAM fijada, C28d).
++    // Solo con el flag on; off: sin efecto.
++    void* lm_loan_base = nullptr;
++    uint64_t lm_loan_bytes = 0;
+ };
+ 
+ namespace {
+@@ -955,6 +962,13 @@ bool Prefill::relayout(int64_t chunk, void* borrow, uint64_t borrow_bytes, std::
+ 
+ int64_t Prefill::chunk() const { return impl_->T; }
+ 
++bool Prefill::set_lm_loan(void* base, uint64_t bytes) {
++    Impl& m = *impl_;
++    m.lm_loan_base = base;
++    m.lm_loan_bytes = base != nullptr ? bytes : 0;
++    return true;
++}
++
+ bool Prefill::draft_kv(core::MtpDrafter& mtp, const float* R_rows, const int32_t* next_tokens, int64_t n, int64_t cell0,
+                        std::string& err) {
+     Impl& m = *impl_;
+@@ -1615,12 +1629,225 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+     std::future<bool> ple_next;             // declared after everything it reads: an early return waits for it
+     int ple_buf = 0;
+ 
++    // C28 layer-major (STRATA_PREFILL_LAYER_MAJOR=1): waves outer, chunks inner.
++    // One stream plan (seq) for the whole run, issued once per wave and retained
++    // across the wave's chunks; R plus the F-2 norm carry spilled to pinned host
++    // between waves. Off: lm stays false and every guard below evaluates to
++    // today's statement (no new log lines, no behavior change).
++    struct StreamEntry { int32_t l, e; const uint8_t* blob; int job; };
++    std::vector<StreamEntry> seq;
++    std::vector<size_t> seq_start;
++    size_t issued = 0, consumed = 0;
++    const strata::kernels::cpu::ExpertLayout& lay0 = strata::kernels::cpu::expert_layout();
++    int lm_ring = m.ring;   // C28p: anillo efectivo (m.ring + slots prestados); off: == m.ring.
++    auto issue_until = [&](size_t limit) {
++        limit = std::min(limit, seq.size());
++        while (issued < limit) {
++            const StreamEntry& en = seq[issued];
++            const int sl = (int) (issued % (size_t) lm_ring);
++            const auto th = Clock::now();
++            const size_t bytes = (size_t) lay0.blob_bytes(en.l);
++            if (m.stage_live[sl]) cudaStreamWaitEvent(m.copy, m.used[m.used_of[sl]], 0);
++            if (en.job < 0) {
++                cudaMemcpyAsync(m.stage_dev[sl], en.blob, bytes, cudaMemcpyHostToDevice, m.copy);
++                ++stats_.experts_dma;
++            } else {
++                const uint8_t* hb = m.stager->wait(en.job);
++                cudaMemcpyAsync(m.stage_dev[sl], hb, bytes, cudaMemcpyHostToDevice, m.copy);
++                m.stager->issued_one(en.job, m.copy);
++            }
++            cudaEventRecord(m.copied[sl], m.copy);
++            m.stage_live[sl] = true;
++            stats_.ms_experts_host += ms_since(th);
++            ++stats_.experts_streamed;
++            stats_.experts_bytes += (uint64_t) bytes;   // C28: same event, in bytes
++            ++issued;
++        }
++    };
++    struct LmSpill {   // C28: pinned R + F-2 carry, freed at run end (also on early returns)
++        float* R = nullptr;
++        float* grs = nullptr;
++        uint16_t* xn16 = nullptr;
++        uint16_t* xn16_lo = nullptr;
++        ~LmSpill() {
++            if (R) cudaFreeHost(R);
++            if (grs) cudaFreeHost(grs);
++            if (xn16) cudaFreeHost(xn16);
++            if (xn16_lo) cudaFreeHost(xn16_lo);
++        }
++    } lm_spill;
++    // C28p: spill en huecos prestados (device, D2D sin PCIe host). Punteros tallados
++    // del préstamo por run; null = spill a RAM fijada (C28d). Solo con flag on.
++    float *lmRd = nullptr, *lmGd = nullptr;
++    uint16_t *lmXd = nullptr, *lmXld = nullptr;
++    bool lm_device_spill = false;
++    int lm_extra = 0;   // slots extra de anillo prestados (max_nr - ring, 0 si cabe)
++    struct LmStagerDone {   // C28: the run-scoped stager finish (the chunk one stays for the old path)
++        Stager* st;
++        ~LmStagerDone() { if (st) st->finish(); }
++    } lm_stager_done{nullptr};
++    std::vector<char> lm_normed;   // C28: per-chunk F-2 carry flag across waves
++    bool lm = false;
++    if (strata::prefill::layer_major::enabled())   // C28: UNA línea de decisión por run (motivo)
++        std::fprintf(stderr, "strata c28: lm=%s motivo=%s\n",
++                     (next_ == nullptr && hand_in_ == nullptr && helper_ == nullptr && m.pp == nullptr &&
++                      m.stager != nullptr && m.T > 0 && n > m.T && LE > LB)
++                         ? "evalua"
++                         : "off",
++                     next_ != nullptr ? "next_" : hand_in_ != nullptr ? "hand_in" : helper_ != nullptr ? "helper"
++                         : m.pp != nullptr             ? "pp"
++                         : m.stager == nullptr         ? "stager"
++                         : m.T <= 0                    ? "T"
++                         : n <= m.T                    ? "1chunk"
++                         : LE <= LB                    ? "LE"
++                                                       : "ring-o-stream");
++    if (strata::prefill::layer_major::enabled() && next_ == nullptr && hand_in_ == nullptr &&
++        helper_ == nullptr && m.pp == nullptr && m.stager != nullptr && m.T > 0 && n > m.T && LE > LB) {
++        bool all_streamed = m.src != nullptr;
++        for (int64_t c = 0; all_streamed && c < n; c += m.T)
++            all_streamed = m.ring > STAGE && std::min(m.T, n - c) >= stream_all_min();
++        // Single-cohort waves: every wave's non-resident entries must fit the ring,
++        // so no slot is ever overwritten while a later chunk still needs its blob.
++        // C28p: con préstamo, la ola cabe en ring + huecos prestados (no subir RING).
++        int64_t max_nr = 0;
++        if (all_streamed) {
++            for (int64_t e_nr : strata::prefill::layer_major::nonresident_per_layer(
++                     m.host_res, g.n_layers, g.n_expert, LB, LE))
++                max_nr = std::max(max_nr, e_nr);
++        }
++        namespace lmns = strata::prefill::layer_major;
++        const bool with_lo = bf16x2_hc();
++        const lmns::SpillPlan sp = lmns::spill_plan(n, with_lo);
++        const bool need_carry = !gr_unfused();
++        const int64_t need_extra = lmns::extra_ring_slots(max_nr, (int64_t) m.ring);
++        const uint64_t loan_need =
++            sp.total_bytes + (uint64_t) (need_extra > 0 ? need_extra : 0) * (uint64_t) MAXBLOB();
++        const int64_t eff_ring_want = (int64_t) m.ring + need_extra;
++        const bool loan_have = all_streamed && m.lm_loan_base != nullptr && m.lm_loan_bytes >= loan_need &&
++                               need_extra >= 0 && eff_ring_want <= (int64_t) ring_cap() &&
++                               eff_ring_want <= RING_MAX;
++        if (all_streamed && (max_nr <= (int64_t) m.ring || loan_have)) {
++            const bool use_loan = loan_have;
++            float *Rh = nullptr, *gh = nullptr;
++            uint16_t *xh = nullptr, *xhh = nullptr;
++            bool spill_ok = false;
++            if (use_loan) {
++                // Talla el préstamo: primero los blobs extra de anillo, luego R+carry.
++                // Base device prestada (cola de la caché de decode; el driver la repuebla).
++                uint8_t* q = (uint8_t*) m.lm_loan_base;
++                uint64_t left = m.lm_loan_bytes;
++                auto take_d = [&](uint64_t bytes) -> void* {
++                    bytes = (bytes + 255u) & ~(uint64_t) 255u;
++                    if (bytes > left) return nullptr;
++                    void* p = q;
++                    q += bytes;
++                    left -= bytes;
++                    return p;
++                };
++                bool ok_loan = true;
++                for (int64_t i = 0; i < need_extra; ++i) {
++                    void* b = take_d((uint64_t) MAXBLOB());
++                    if (b == nullptr) { ok_loan = false; break; }
++                    const int sl = m.ring + (int) i;
++                    m.stage_dev[sl] = (uint8_t*) b;
++                    m.stage_live[sl] = false;
++                    m.used_of[sl] = sl;
++                }
++                float* Rd = (float*) take_d((uint64_t) sp.r_bytes);
++                float* gd = (!need_carry) ? nullptr : (float*) take_d((uint64_t) sp.grs_bytes);
++                uint16_t* xd = (!need_carry) ? nullptr : (uint16_t*) take_d((uint64_t) sp.xn16_bytes);
++                uint16_t* xld = (!need_carry || !with_lo) ? nullptr : (uint16_t*) take_d((uint64_t) sp.lo_bytes);
++                if (!ok_loan || Rd == nullptr || (need_carry && (gd == nullptr || xd == nullptr)) ||
++                    (need_carry && with_lo && xld == nullptr)) {
++                    spill_ok = false;
++                } else {
++                    lmRd = Rd; lmGd = gd; lmXd = xd; lmXld = xld;
++                    lm_device_spill = true;
++                    lm_extra = (int) need_extra;
++                    lm_ring = m.ring + (int) need_extra;
++                    spill_ok = true;
++                }
++                if (!spill_ok) {
++                    // Sin préstamo útil: solo cabe si ya cabía sin él (no corromper).
++                    lmRd = lmGd = nullptr; lmXd = lmXld = nullptr;
++                    lm_device_spill = false;
++                    lm_extra = 0;
++                    lm_ring = m.ring;
++                    if (max_nr > (int64_t) m.ring) {
++                        std::fprintf(stderr,
++                                     "strata c28: layer-major off for this run (chunk-major keeps it: loan short, max "
++                                     "%lld/wave vs ring %d)\n",
++                                     (long long) max_nr, m.ring);
++                        std::fflush(stderr);
++                    }
++                }
++            } else {
++                spill_ok =
++                    cudaHostAlloc((void**) &Rh, (size_t) sp.r_bytes, cudaHostAllocDefault) == cudaSuccess;
++                if (spill_ok && need_carry)
++                    spill_ok =
++                        cudaHostAlloc((void**) &gh, (size_t) sp.grs_bytes, cudaHostAllocDefault) == cudaSuccess &&
++                        cudaHostAlloc((void**) &xh, (size_t) sp.xn16_bytes, cudaHostAllocDefault) == cudaSuccess;
++                if (spill_ok && need_carry && with_lo)
++                    spill_ok =
++                        cudaHostAlloc((void**) &xhh, (size_t) sp.lo_bytes, cudaHostAllocDefault) == cudaSuccess;
++            }
++            if (spill_ok && (use_loan || max_nr <= (int64_t) m.ring)) {
++                lm = true;
++                if (!use_loan) {
++                    lm_spill.R = Rh; lm_spill.grs = gh; lm_spill.xn16 = xh; lm_spill.xn16_lo = xhh;
++                }
++                lm_normed.assign((size_t) ((n + m.T - 1) / m.T), 0);
++                if (use_loan) {
++                    const int64_t wl = lmns::wave_layers();
++                    std::fprintf(stderr,
++                                 "strata c28: layer-major on: %lld tokens in %lld chunks, waves [%lld,%lld) x%lld, "
++                                 "ring %d + loan %d = %d slots (olas caben por prestamo), max non-resident/wave "
++                                 "%lld, spill device %.2f GiB\n",
++                                 (long long) n, (long long) ((n + m.T - 1) / m.T), (long long) LB,
++                                 (long long) LE, (long long) wl, m.ring, lm_extra, lm_ring,
++                                 (long long) max_nr, (double) sp.total_bytes / 1073741824.0);
++                } else {
++                    std::fprintf(stderr,
++                                 "strata c28: layer-major on: %lld tokens in %lld chunks, waves [%lld,%lld), "
++                                 "ring %d, max non-resident/wave %lld\n",
++                                 (long long) n, (long long) ((n + m.T - 1) / m.T), (long long) LB,
++                                 (long long) LE, m.ring, (long long) max_nr);
++                }
++                std::fflush(stderr);
++            } else {
++                if (Rh) cudaFreeHost(Rh);
++                if (gh) cudaFreeHost(gh);
++                if (xh) cudaFreeHost(xh);
++                if (xhh) cudaFreeHost(xhh);
++                if (!use_loan) {
++                    std::fprintf(stderr, "strata c28: layer-major off for this run (spill needs %.2f GiB pinned)\n",
++                                 (double) sp.total_bytes / 1073741824.0);
++                    std::fflush(stderr);
++                }
++            }
++        } else {
++            std::fprintf(stderr,
++                         "strata c28: layer-major off for this run (chunk-major keeps it: %s, max %lld/wave vs ring %d)\n",
++                         all_streamed ? "a wave exceeds the ring" : "not every chunk streams", (long long) max_nr,
++                         m.ring);
++            std::fflush(stderr);
++        }
++    }
++
++    // C28: waves outer, chunks inner (off: a single pass over today's loop, wl == LB).
++    for (int64_t wl = LB; wl < (lm ? LE : LB + 1); ++wl)
+     for (int64_t c0 = 0; c0 < n; c0 += m.T) {
+         if (should_stop && should_stop()) { err = "cancelled"; return false; }
+-        if (std::getenv("STRATA_TRACE")) { std::fprintf(stderr, "strata trace: prompt chunk %lld of %lld\n", (long long) c0, (long long) n); std::fflush(stderr); }
++        if (std::getenv("STRATA_TRACE") && (!lm || wl == LB)) { std::fprintf(stderr, "strata trace: prompt chunk %lld of %lld\n", (long long) c0, (long long) n); std::fflush(stderr); }
+         const int64_t T = std::min(m.T, n - c0), p0 = pos0 + c0;
+-        core::progress_at("reading the prompt (batched): preparing the chunk from token", p0);   // #251
+-        ++stats_.chunks;
++        const int64_t ci = c0 / m.T;            // C28: this chunk's spill slot
++        const bool lm_last = c0 + m.T >= n;     // C28: the wave's last chunk
++        const bool need_embed = !lm || wl == LB;   // C28: later waves read the spill, not the tokens
++        if (!lm) { seq.clear(); issued = consumed = 0; }
++        if (!lm || wl == LB)
++            core::progress_at("reading the prompt (batched): preparing the chunk from token", p0);   // #251
++        if (!lm || wl == LE - 1) ++stats_.chunks;
+         pt.mark(kPfStart, cs);
+         const auto tsetup = Clock::now();
+         // ---- embeddings, broadcast to the four streams - or, in a later stage of a layer split, the rows the
+@@ -1646,7 +1873,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+             if ((embd_rows && embd_rows[p0 + t]) || tok < 0 || (wemb && tok >= wemb->ne1)) batched = false;
+             else m.tok_host[(size_t) t] = (int32_t) tok;
+         }
+-        if (batched) {
++        if (batched && need_embed) {
+             if (cudaMemcpyAsync(m.tok_dev, m.tok_host.data(), (size_t) T * sizeof(int32_t), cudaMemcpyHostToDevice,
+                                 m.cs) != cudaSuccess) {
+                 err = "prefill: the token id upload failed";
+@@ -1665,7 +1892,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                                                       (uint64_t) (wemb->ne0 / wemb->group_elems), m.emb, m.cs);
+             }
+         }
+-        for (int64_t t = 0; hand_in_ == nullptr && !batched && t < T; ++t) {
++        for (int64_t t = 0; hand_in_ == nullptr && !batched && need_embed && t < T; ++t) {
+             const float* row = embd_rows ? embd_rows[p0 + t] : nullptr;
+             if (row) {
+                 if (cudaMemcpyAsync(m.emb + t * N, row, (size_t) N * 4, cudaMemcpyHostToDevice, m.cs) != cudaSuccess) {
+@@ -1676,15 +1903,56 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                 return false;
+             }
+         }
+-        if (hand_in_ == nullptr) gr_broadcast(m.emb, m.R, T, m.cs);
++        if (hand_in_ == nullptr && need_embed) gr_broadcast(m.emb, m.R, T, m.cs);
++        else if (lm && wl > LB) {
++            // C28: this chunk's rows from the spill (the previous wave's final R + F-2 carry).
++            // C28p: préstamo device (D2D, sin PCIe host) o RAM fijada (C28d).
++            if (lm_device_spill) {
++                if (cudaMemcpyAsync(m.R, lmRd + (size_t) c0 * D, (size_t) T * D * 4, cudaMemcpyDeviceToDevice,
++                                    m.cs) != cudaSuccess) {
++                    err = "prefill: the layer-major spill load failed";
++                    return false;
++                }
++                if (!gr_unfused()) {
++                    if (cudaMemcpyAsync(m.grs, lmGd + (size_t) c0 * HC, (size_t) T * HC * 4,
++                                        cudaMemcpyDeviceToDevice, m.cs) != cudaSuccess ||
++                        cudaMemcpyAsync(m.xn16, lmXd + (size_t) c0 * D, (size_t) T * D * 2,
++                                        cudaMemcpyDeviceToDevice, m.cs) != cudaSuccess ||
++                        (bf16x2_hc() && lmXld != nullptr &&
++                         cudaMemcpyAsync(m.xn16_lo, lmXld + (size_t) c0 * D, (size_t) T * D * 2,
++                                         cudaMemcpyDeviceToDevice, m.cs) != cudaSuccess)) {
++                        err = "prefill: the layer-major carry load failed";
++                        return false;
++                    }
++                }
++            } else {
++            if (cudaMemcpyAsync(m.R, lm_spill.R + (size_t) c0 * D, (size_t) T * D * 4, cudaMemcpyHostToDevice,
++                                m.cs) != cudaSuccess) {
++                err = "prefill: the layer-major spill load failed";
++                return false;
++            }
++            if (!gr_unfused()) {
++                if (cudaMemcpyAsync(m.grs, lm_spill.grs + (size_t) c0 * HC, (size_t) T * HC * 4,
++                                    cudaMemcpyHostToDevice, m.cs) != cudaSuccess ||
++                    cudaMemcpyAsync(m.xn16, lm_spill.xn16 + (size_t) c0 * D, (size_t) T * D * 2,
++                                    cudaMemcpyHostToDevice, m.cs) != cudaSuccess ||
++                    (bf16x2_hc() && lm_spill.xn16_lo != nullptr &&
++                     cudaMemcpyAsync(m.xn16_lo, lm_spill.xn16_lo + (size_t) c0 * D, (size_t) T * D * 2,
++                                     cudaMemcpyHostToDevice, m.cs) != cudaSuccess)) {
++                    err = "prefill: the layer-major carry load failed";
++                    return false;
++                }
++            }
++            }
++        }
+         // ---- the PLE rows of the whole chunk, one batched SSD request on a thread (see ple_gather).  A later chunk's
+         // were read ahead during the previous chunk; the first chunk's are read beside layer 0 - they are needed from
+         // layer 1 on, and gathering them here first left the GPU idle for the whole read (~0.4 s of a 32K prompt)
+-        if (ple_on && !ple_next.valid())
++        if (ple_on && !ple_next.valid() && (!lm || wl == 1))
+             ple_next = std::async(std::launch::async, [&ple_gather, &ple_next_err, c0, b = ple_buf] {
+                 return ple_gather(c0, b, ple_next_err);
+             });
+-        bool ple_pending = ple_on;
++        bool ple_pending = ple_on && (!lm || wl == 1);   // C28: read-ahead only in wave 1
+         // the chunk's rows onto the device just before layer 1 reads them, and the next chunk's gather started
+         auto ple_land = [&]() -> bool {
+             if (!ple_pending) return true;
+@@ -1714,18 +1982,18 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+             stats_.ms_ple += ms_since(tp);
+             return true;
+         };
+-        for (int64_t t = 0; t < T; ++t) { prev[0] = prev[1]; prev[1] = (int32_t) tokens[c0 + t]; }
++        if (!lm || wl == LB) for (int64_t t = 0; t < T; ++t) { prev[0] = prev[1]; prev[1] = (int32_t) tokens[c0 + t]; }
+         // ---- the QSA step records of every position in the chunk
+         for (int64_t t = 0; t < T; ++t) strata::kernels::qsa_step_fill(m.steps_host.data() + t * strata::kernels::kStepCount, p0 + t, s);
+         cudaMemcpyAsync(m.steps_dev, m.steps_host.data(), (size_t) T * strata::kernels::kStepCount * 4,
+                         cudaMemcpyHostToDevice, m.cs);
+ 
+         int64_t qsa_index = 0, gdn_index = 0;
+-        for (int64_t l = 0; l < LB; ++l) (core::is_qsa_layer(g, l) ? qsa_index : gdn_index) += 1;
++        for (int64_t l = 0; l < (lm ? wl : LB); ++l) (core::is_qsa_layer(g, l) ? qsa_index : gdn_index) += 1;
+         // step 3: this chunk's stream - every non-resident expert of every layer, layer by layer in id order (entry
+         // k lands in ring slot k % ring); a copy is issued once the entry `ring` before it is consumed (its slot's
+         // `used` event recorded), so the copy stream never waits on an event that is not queued yet
+-        const strata::kernels::cpu::ExpertLayout& lay0 = strata::kernels::cpu::expert_layout();
++        // (C28: lay0 and issue_until live above the loops now; the build below runs once per run when lm)
+         const bool stream_all = m.ring > STAGE && T >= stream_all_min() && m.src != nullptr;
+         const bool ps_on = stream_all && m.pp && m.pp->ps_frac > 0.0;
+         if (m.pp && !ps_on) m.pp->ps_flag.clear();
+@@ -1752,11 +2020,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                 p_issue_until(P.pk + (size_t) P.RP);
+             }
+         };
+-        struct StreamEntry { int32_t l, e; const uint8_t* blob; int job; };
+-        std::vector<StreamEntry> seq;
+-        std::vector<size_t> seq_start;
+-        size_t issued = 0, consumed = 0;
+-        if (stream_all) {
++        if (stream_all && (!lm || (wl == LB && c0 == 0))) {   // C28: one plan per run when lm
+             seq_start.assign((size_t) g.n_layers + 1, 0);
+             std::vector<Stager::Job> js;
+             if (ps_on) {
+@@ -1802,34 +2066,13 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                 if (ps_on) m.pp->pseq_start[(size_t) l] = m.pp->pseq.size();
+             }
+             m.stager->start(std::move(js));
++            if (lm) lm_stager_done.st = m.stager.get();   // C28: finished once at run end, not per chunk
+         }
+         struct StagerDone {
+             Stager* st;
+             ~StagerDone() { if (st) st->finish(); }
+-        } chunk_stager_done{stream_all ? m.stager.get() : nullptr};
+-        auto issue_until = [&](size_t limit) {
+-            limit = std::min(limit, seq.size());
+-            while (issued < limit) {
+-                const StreamEntry& en = seq[issued];
+-                const int sl = (int) (issued % (size_t) m.ring);
+-                const auto th = Clock::now();
+-                const size_t bytes = (size_t) lay0.blob_bytes(en.l);
+-                if (m.stage_live[sl]) cudaStreamWaitEvent(m.copy, m.used[m.used_of[sl]], 0);
+-                if (en.job < 0) {
+-                    cudaMemcpyAsync(m.stage_dev[sl], en.blob, bytes, cudaMemcpyHostToDevice, m.copy);
+-                    ++stats_.experts_dma;
+-                } else {
+-                    const uint8_t* hb = m.stager->wait(en.job);
+-                    cudaMemcpyAsync(m.stage_dev[sl], hb, bytes, cudaMemcpyHostToDevice, m.copy);
+-                    m.stager->issued_one(en.job, m.copy);
+-                }
+-                cudaEventRecord(m.copied[sl], m.copy);
+-                m.stage_live[sl] = true;
+-                stats_.ms_experts_host += ms_since(th);
+-                ++stats_.experts_streamed;
+-                ++issued;
+-            }
+-        };
++        } chunk_stager_done{(!lm && stream_all) ? m.stager.get() : nullptr};
++        // (C28: issue_until lives above the loops now - the same copies in the same order)
+         // D-5: the stream is issued by its own host thread, so the thread launching the layers' kernels never waits
+         // behind a host copy of an unpinned blob (that wait left the GPU idle: the 'wait copy' / 'dequant' time of the
+         // i-quant prompts).  The same copies in the same order into the same slots, and a slot is refilled only once
+@@ -1842,13 +2085,14 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+         std::atomic<bool> a_stop{false};
+         double iss_ms = 0;
+         int64_t iss_streamed = 0, iss_dma = 0;
++        uint64_t iss_bytes = 0;   // C28: PCIe bytes of the issuer thread's copies
+         std::thread issuer;
+         struct IssuerJoin {
+             std::atomic<bool>* stop;
+             std::thread* t;
+             ~IssuerJoin() { if (t->joinable()) { stop->store(true); t->join(); } }
+         } issuer_join{&a_stop, &issuer};
+-        const bool threaded_issue = stream_all && issuer_on;
++        const bool threaded_issue = stream_all && issuer_on && !lm;   // C28: lm issues inline, once per wave
+         if (threaded_issue) {
+             issuer = std::thread([&] {
+                 const core::OnDevice od(m.device);
+@@ -1874,12 +2118,13 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                     m.stage_live[sl] = true;
+                     iss_ms += ms_since(th);
+                     ++iss_streamed;
++                    iss_bytes += (uint64_t) bytes;   // C28: same event, in bytes
+                     a_issued.store(idx + 1, std::memory_order_release);
+                 }
+             });
+-        } else if (stream_all) {
++        } else if (stream_all && !lm) {
+             issue_until((size_t) m.ring);   // layer 0's first experts, behind the embedding and the PLE
+-        }
++        }   // C28: with lm each wave is issued once up front (below), never prefetched here
+         // the consumer's side: entry k's copy is on the copy stream (the thread issued it), then k is given back
+         auto wait_issued = [&](size_t k) {
+             if (!threaded_issue) return;
+@@ -1887,7 +2132,9 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+         };
+         auto give_back = [&](size_t upto) {
+             if (threaded_issue) a_consumed.store(upto, std::memory_order_release);
+-            else issue_until(upto + (size_t) m.ring);
++            else if (!lm) issue_until(upto + (size_t) m.ring);
++            // C28: with lm the wave's slice is issued once up front (below) and slots are
++            // retained across chunks - prefetching here would overwrite a live blob.
+         };
+         if (ps_on) {
+             int pd = 0;
+@@ -1897,7 +2144,11 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+             cudaSetDevice(pd);
+         }
+         host_setup_ms += ms_since(tsetup);
+-        bool normed = false;   // F-2: the previous half's write already normed R for this half (grs, xn16)
++        // C28: the wave's slice is issued once (first chunk); later chunks retain the slots.
++        if (lm && c0 == 0 && stream_all && seq_start.size() > (size_t) wl + 1)
++            issue_until(seq_start[(size_t) wl + 1]);
++        // C28: across waves the F-2 carry arrives in the spill (same kernels, same inputs).
++        bool normed = (lm && wl > LB && !gr_unfused()) ? (bool) lm_normed[(size_t) ci] : false;
+         // #579 #613 (opt-in diagnosis, STRATA_PF_STEP_SYNC=1): the compute and copy streams are waited for after each
+         // step named below, a step that took over 250 ms is logged, and a stall's report names the step it is in.
+         // Slower (a sync per step); the bytes are the same.
+@@ -1912,14 +2163,15 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                 std::fprintf(stderr, "strata pf-step: chunk from token %lld, layer %lld: %s took %.0f ms (%s / %s)\n",
+                              (long long) p0, (long long) layer, what, ms, cudaGetErrorString(a), cudaGetErrorString(b));
+         };
+-        for (int64_t l = LB; l < LE; ++l) {
++        for (int64_t l = (lm ? wl : LB); l < (lm ? wl + 1 : LE); ++l) {   // C28: one wave per pass
+             core::progress_beat();   // the serve watchdog: a prompt chunk of 8192 tokens is still moving
+             if (l > LB) pf_step("reading the prompt (batched, step sync): the experts and the rest of layer", l - 1);
+             core::progress_at("reading the prompt (batched): layer", l, p0);   // #251: a stall names layer and chunk
+             const core::LayerView v(*m.wt, l);
+             if (l == std::max<int64_t>(LB, 1) && !ple_land()) return false;   // the PLE rows, read from layer 1 on
+             // ---- the PLE block at layer 1, token by token (its conv reads the previous tokens' rows)
+-            if (l == 1 && ple_on && ple_batch) {
++            // C28: runs once per chunk, in wave 1 (later waves read the spill, which carries its R update).
++            if (l == 1 && ple_on && ple_batch && (!lm || wl == 1)) {
+                 // the whole chunk at once, in sub-batches carved from the idle scratch region: the key and value
+                 // projections as GEMMs (a token at a time they re-read ~52 MB of BF16 key per token on the IQ
+                 // files), the rest with the per-token kernels' arithmetic (native_ple_postops_batch)
+@@ -1958,7 +2210,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                     } catch (const std::exception& e) { err = std::string("prefill PLE: ") + e.what(); return false; }
+                 }
+                 stats_.ms_ple += ms_since(tp);
+-            } else if (l == 1 && ple_on) {
++            } else if (l == 1 && ple_on && (!lm || wl == 1)) {
+                 pt.mark(kPfPle, cs);
+                 const auto tp = Clock::now();
+                 for (int64_t t = 0; t < T; ++t) {
+@@ -2283,7 +2535,8 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                         // launches over the experts in id order, each at most kMaxBatch experts of which at most a
+                         // third of the ring streamed: the next batch's blobs arrive while one computes.  An expert
+                         // the routing did not pick has no tiles; its ring slot is given back with its batch.
+-                        const size_t per = (size_t) std::max(1, m.ring / 3);
++                        // C28p: con préstamo el anillo efectivo (off: == m.ring, idéntico).
++                        const size_t per = (size_t) std::max(1, lm_ring / 3);
+                         size_t k = seq_start[(size_t) l];
+                         const size_t kend = seq_start[(size_t) l + 1];
+                         for (int32_t e = 0; e < m.g->n_expert;) {
+@@ -2293,7 +2546,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                             for (; e < m.g->n_expert && e - b.e0 < fused::kMaxBatch; ++e) {
+                                 if (k < kend && seq[k].e == e) {
+                                     if (k - k0 == per) break;
+-                                    b.blob[e - b.e0] = m.stage_dev[k % (size_t) m.ring];
++                                    b.blob[e - b.e0] = m.stage_dev[k % (size_t) lm_ring];
+                                     ++k;
+                                 } else {                  // not streamed: resident (the walk streams all others)
+                                     b.blob[e - b.e0] = m.cache->device_slot(m.host_res[(size_t) l * m.g->n_expert + e]);
+@@ -2307,7 +2560,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                                 // one copy stream, in order: the batch's last blob covers the others
+                                 pt.mark(kPfWaitCopy, cs);
+                                 wait_issued(k - 1);
+-                                cudaStreamWaitEvent(m.cs, m.copied[(k - 1) % (size_t) m.ring], 0);
++                                cudaStreamWaitEvent(m.cs, m.copied[(k - 1) % (size_t) lm_ring], 0);
+                             }
+                             pt.mark(kPfGemmGU, cs);
+                             if (fused_nat) {
+@@ -2318,9 +2571,10 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                             } else {
+                                 fused::experts(b, (int) m.g->n_expert, T * K, m.GU, m.Xq, m.src_dev, m.H, m.Dm, m.cs);
+                             }
+-                            for (size_t kk = k0; kk < k; ++kk) {
+-                                cudaEventRecord(m.used[kk % (size_t) m.ring], m.cs);
+-                                m.used_of[kk % (size_t) m.ring] = (int) (kk % (size_t) m.ring);
++                            for (size_t kk = k0; kk < k; ++kk) {   // C28: lm records at wave end (retained)
++                                if (lm) continue;
++                                cudaEventRecord(m.used[kk % (size_t) lm_ring], m.cs);
++                                m.used_of[kk % (size_t) lm_ring] = (int) (kk % (size_t) lm_ring);
+                             }
+                             if (k > k0) {
+                                 consumed = k;
+@@ -2684,6 +2938,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                             stage_of[j] = sl;
+                             stats_.ms_experts_host += ms_since(th);
+                             ++stats_.experts_streamed;
++                            stats_.experts_bytes += (uint64_t) lay.blob_bytes(l);   // C28: same event, in bytes
+                             return true;
+                         };
+                         // In the streamed walk an MMQ group is gathered in ONE launch, after ONE wait on its last
+@@ -2718,7 +2973,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                                                        m.grp_gu + i * mmq_gub, m.grp_d + i * mmq_db, m.cs);
+                                 }
+                             }
+-                            if (gg_nslots > 0) {
++                            if (gg_nslots > 0 && !lm) {   // C28: lm records at wave end (retained)
+                                 const int rel = gg_slots[gg_nslots - 1];
+                                 cudaEventRecord(m.used[rel], m.cs);
+                                 for (int i = 0; i < gg_nslots; ++i) m.used_of[gg_slots[i]] = rel;
+@@ -2748,7 +3003,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                                 } else {
+                                     mmq::gather_strata_q2(blob_dev, m.grp_gu + q * mmq_gub, m.grp_d + q * mmq_db, m.cs);
+                                 }
+-                                if (slot >= 0 && !group_gather) { cudaEventRecord(m.used[slot], m.cs); m.used_of[slot] = slot; }
++                                if (slot >= 0 && !group_gather && !lm) { cudaEventRecord(m.used[slot], m.cs); m.used_of[slot] = slot; }
+                                 if (q + 1 < MMQ_GROUP && j + 1 < order.size()) return true;
+                                 // the group's products: gate/up, swiglu, the group's H to q8_1, down
+                                 const size_t j0 = j - q, g = j0 / MMQ_GROUP, n = order.size();
+@@ -2786,7 +3041,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                             } else {
+                                 blob_dequant_f16(blob_dev, m.dq_gu[q], m.dq_d[q], m.cs);
+                             }
+-                            if (slot >= 0) { cudaEventRecord(m.used[slot], m.cs); m.used_of[slot] = slot; }
++                            if (slot >= 0 && !lm) { cudaEventRecord(m.used[slot], m.cs); m.used_of[slot] = slot; }
+                             const int64_t o0 = m.off[(size_t) e], ne = m.cnt[(size_t) e];
+                             pt.mark(kPfGemmGU, cs);
+                             m.gemm.f16(m.Xs + o0 * N, m.dq_gu[q], m.GU + o0 * 1280, ne, 1280, N);
+@@ -2821,9 +3076,11 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                             auto release_to = [&](int32_t e_stop) {
+                                 while (k < kend && seq[k].e < e_stop) {
+                                     if (gg_nslots > 0) flush();   // the open group's slots get their event first
+-                                    const int sl = (int) (k % (size_t) m.ring);
+-                                    cudaEventRecord(m.used[sl], m.cs);
+-                                    m.used_of[sl] = sl;
++                                    const int sl = (int) (k % (size_t) lm_ring);
++                                    if (!lm) {   // C28: retained across the wave's chunks; recorded at wave end
++                                        cudaEventRecord(m.used[sl], m.cs);
++                                        m.used_of[sl] = sl;
++                                    }
+                                     consumed = ++k;
+                                     give_back(consumed);
+                                 }
+@@ -2832,7 +3089,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                                 const int32_t e = order[j];
+                                 release_to(e);
+                                 if (k < kend && seq[k].e == e) {
+-                                    const int sl = (int) (k % (size_t) m.ring);
++                                    const int sl = (int) (k % (size_t) lm_ring);
+                                     wait_issued(k);
+                                     if (!group_gather) {
+                                         pt.mark(kPfWaitCopy, cs);
+@@ -2914,9 +3171,22 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+             stats_.ms_experts_host += iss_ms;
+             stats_.experts_streamed += iss_streamed;
+             stats_.experts_dma += iss_dma;
++            stats_.experts_bytes += iss_bytes;   // C28
++        }
++        if (lm && stream_all && lm_last && seq_start.size() > (size_t) wl + 1) {
++            // C28: the wave's slots are free once its last chunk computed them (compute-stream order,
++            // so one event per slot covers every chunk that read it).
++            // C28p: anillo efectivo (off: == m.ring).
++            for (size_t k = seq_start[(size_t) wl]; k < seq_start[(size_t) wl + 1]; ++k) {
++                const int sl = (int) (k % (size_t) lm_ring);
++                cudaEventRecord(m.used[sl], m.cs);
++                m.used_of[sl] = sl;
++            }
++            consumed = seq_start[(size_t) wl + 1];
+         }
+-        stats_.tokens += T;
+-        core::progress_at("reading the prompt (batched): finishing the chunk from token", p0);
++        if (!lm || wl == LE - 1) stats_.tokens += T;
++        if (!lm || wl == LE - 1)
++            core::progress_at("reading the prompt (batched): finishing the chunk from token", p0);
+         pt.mark(kPfStart, cs);
+         if (next_ != nullptr) {
+             // The current hand-off slot was used two chunks ago.
+@@ -2939,7 +3209,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+             hand_buf_ ^= 1;
+             continue;   // the last stage reports the chunk (on_chunk)
+         }
+-        if (const char* dump = std::getenv("STRATA_PREFILL_DUMP_R")) {   // debug: the final residuals, every 64th
++        if (const char* dump = std::getenv("STRATA_PREFILL_DUMP_R"); dump != nullptr && (!lm || wl == LE - 1)) {   // debug: the final residuals, every 64th
+             cudaStreamSynchronize(m.cs);                                  // position (A/B quality of this path)
+             if (std::FILE* f = std::fopen(dump, c0 == 0 ? "wb" : "ab")) {
+                 std::vector<float> row((size_t) D);
+@@ -2952,7 +3222,79 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                 std::fclose(f);
+             }
+         }
+-        if (on_chunk || on_stage_chunk) {
++        if (lm) {
++            // C28: this chunk's final rows (+ the F-2 carry) to the spill for the next wave.
++            // C28p: préstamo device (D2D) o RAM fijada.
++            if (lm_device_spill) {
++                if (cudaMemcpyAsync(lmRd + (size_t) c0 * D, m.R, (size_t) T * D * 4, cudaMemcpyDeviceToDevice,
++                                    m.cs) != cudaSuccess) {
++                    err = "prefill: the layer-major spill store failed";
++                    return false;
++                }
++                if (!gr_unfused()) {
++                    if (cudaMemcpyAsync(lmGd + (size_t) c0 * HC, m.grs, (size_t) T * HC * 4,
++                                        cudaMemcpyDeviceToDevice, m.cs) != cudaSuccess ||
++                        cudaMemcpyAsync(lmXd + (size_t) c0 * D, m.xn16, (size_t) T * D * 2,
++                                        cudaMemcpyDeviceToDevice, m.cs) != cudaSuccess ||
++                        (bf16x2_hc() && lmXld != nullptr &&
++                         cudaMemcpyAsync(lmXld + (size_t) c0 * D, m.xn16_lo, (size_t) T * D * 2,
++                                         cudaMemcpyDeviceToDevice, m.cs) != cudaSuccess)) {
++                        err = "prefill: the layer-major carry store failed";
++                        return false;
++                    }
++                    lm_normed[(size_t) ci] = (char) (normed ? 1 : 0);
++                }
++            } else {
++            if (cudaMemcpyAsync(lm_spill.R + (size_t) c0 * D, m.R, (size_t) T * D * 4, cudaMemcpyDeviceToHost,
++                                m.cs) != cudaSuccess) {
++                err = "prefill: the layer-major spill store failed";
++                return false;
++            }
++            if (!gr_unfused()) {
++                if (cudaMemcpyAsync(lm_spill.grs + (size_t) c0 * HC, m.grs, (size_t) T * HC * 4,
++                                    cudaMemcpyDeviceToHost, m.cs) != cudaSuccess ||
++                    cudaMemcpyAsync(lm_spill.xn16 + (size_t) c0 * D, m.xn16, (size_t) T * D * 2,
++                                    cudaMemcpyDeviceToHost, m.cs) != cudaSuccess ||
++                    (bf16x2_hc() && lm_spill.xn16_lo != nullptr &&
++                     cudaMemcpyAsync(lm_spill.xn16_lo + (size_t) c0 * D, m.xn16_lo, (size_t) T * D * 2,
++                                     cudaMemcpyDeviceToHost, m.cs) != cudaSuccess)) {
++                    err = "prefill: the layer-major carry store failed";
++                    return false;
++                }
++                lm_normed[(size_t) ci] = (char) (normed ? 1 : 0);
++            }
++            }
++        }
++        if (!lm && (on_chunk || on_stage_chunk)) {
++            const auto toc = Clock::now();
++            if (cudaStreamSynchronize(m.cs) != cudaSuccess) {
++                err = std::string("prefill: ") + cudaGetErrorString(cudaGetLastError());
++                return false;
++            }
++            const auto toc2 = Clock::now();
++            if (on_stage_chunk && !on_stage_chunk(p0 + T, err)) return false;
++            if (on_chunk && !on_chunk(m.R, T, p0, err)) return false;
++            host_sync_ms += std::chrono::duration<double, std::milli>(toc2 - toc).count();
++            host_chunk_ms += ms_since(toc2);
++        }
++    }
++    if (lm && (on_chunk || on_stage_chunk)) {
++        // C28: every chunk's final rows exist only now (after the last wave); report them
++        // in chunk order with the same arguments as the chunk-major path.
++        for (int64_t c0 = 0; c0 < n; c0 += m.T) {
++            const int64_t T = std::min(m.T, n - c0), p0 = pos0 + c0;
++            if (c0 + m.T < n) {  // the last chunk's rows are still in m.R
++                const bool ok_rep =
++                    lm_device_spill
++                        ? cudaMemcpyAsync(m.R, lmRd + (size_t) c0 * D, (size_t) T * D * 4,
++                                          cudaMemcpyDeviceToDevice, m.cs) == cudaSuccess
++                        : cudaMemcpyAsync(m.R, lm_spill.R + (size_t) c0 * D, (size_t) T * D * 4,
++                                          cudaMemcpyHostToDevice, m.cs) == cudaSuccess;
++                if (!ok_rep) {
++                err = "prefill: the layer-major report reload failed";
++                return false;
++                }
++            }
+             const auto toc = Clock::now();
+             if (cudaStreamSynchronize(m.cs) != cudaSuccess) {
+                 err = std::string("prefill: ") + cudaGetErrorString(cudaGetLastError());
+diff --git a/src/program/generate.cpp b/src/program/generate.cpp
+index 65b9072..18df597 100644
+--- a/src/program/generate.cpp
++++ b/src/program/generate.cpp
+@@ -51,6 +51,7 @@
+ #include "strata/core/verify.hpp"
+ #include "strata/core/mtp.hpp"
+ #include "strata/prefill/prefill.hpp"
++#include "strata/prefill/layer_major.hpp"  // C28: prototype gate (superblock chunks)
+ #include "strata/core/native_dense.hpp"
+ #include "strata/program/logits_selection.hpp"
+ #include "strata/program/conv_cache.hpp"
+@@ -4501,7 +4502,12 @@ int main(int argc, char** argv) {
+     // context, but a bare `auto` always reaches 8192.  32768 and 16384 stay opt-in (#282): a 32K prompt with
+     // IQ2_XS (RTX 5090, 64K context) read at 5,624 tok/s in 8192-token chunks and 6,465 in one 32768 chunk (40K
+     // -> 18K experts streamed; an NVFP4 pack at 262K: 3,535 -> 5,201).
+-    const int64_t auto_ceiling = std::max<int64_t>(8192, std::min<int64_t>(o.prefill_auto_max, o.max_context));
++    // C28 (prototype, STRATA_PREFILL_LAYER_MAJOR=1): a bare `auto` scans to 32768-token superblock chunks when
++    // they fit the lent slots - each non-resident expert then streams once per superblock through the unchanged
++    // chunk-major loop (fewer passes, same kernels; needs the owner's logpos-compare: bigger chunks regroup GEMMs).
++    const int64_t lm_floor = strata::prefill::layer_major::enabled() ? 32768 : 8192;
++    const int64_t auto_ceiling =
++        std::max<int64_t>(lm_floor, std::min<int64_t>(o.prefill_auto_max, o.max_context));
+     // The auto scan used to walk a fixed list of sizes - 32768, 16384, 8192, 6144, ... - and take the first that
+     // fit.  That list is coarse exactly where a rig needs it: this one affords ~8,700 tokens and was handed 8192,
+     // and 8704 is not on it.  `bytes_needed` is a sum of (T x positive constant) terms plus a max of such sums,
+@@ -6967,6 +6973,10 @@ int main(int argc, char** argv) {
+             bool batch_fatal = false;
+             int64_t il_parts = 0;   // the slots' windows run between this prompt's chunks
+             double il_ms = 0;
++            // C28 (STRATA_PREFILL_LAYER_MAJOR=1): this prompt's superblock accountancy for the test log
++            // (off: stays empty and no line is printed).  Filled by read_part below, reported after the refill.
++            size_t c28_sbs = 0;
++            std::vector<int64_t> c28_sb_chunks;
+             int64_t yielded_at = -1;   // BYIELD: the read stopped here and its slot holds it
+             int yielded_slot = -1;
+             // `BYIELD <slot>` (the server: a shorter request is waiting): at the next chunk boundary the part read so
+@@ -6974,15 +6984,48 @@ int main(int argc, char** argv) {
+             // the request ends with `YIELDED <slot> <tokens>` + DONE cancel, and the server sends it again later: it
+             // continues from the slot with the same chunks.  #656's cooperative preemption, with a slot as the park.
+             auto read_part = [&](int64_t a0, int64_t b0, std::string& e) -> bool {
++                // C28: with STRATA_PREFILL_LAYER_MAJOR=1 the segment runs superblock by superblock:
++                // plan_superblocks sizes each to min(what fits the lent gaps, the next checkpoint firing)
++                // and ends every superblock at a chunk end, so the chunks run in the same order as one
++                // run - bit-identical, with checkpoints firing at the same positions.  Off (or a single
++                // superblock): one segment, today's exact sequence.
++                std::vector<std::pair<int64_t, int64_t>> lm_segs{{a0, b0}};
++                if (strata::prefill::layer_major::enabled() && b0 > a0) {
++                    const int64_t C0 = std::max<int64_t>(sp.chunk(), 1);
++                    uint64_t lm_loan = 0;
++                    if (!pf_parts.empty() && pf_parts[0].first_now >= 0)
++                        lm_loan = part_bytes(pf_parts[0], pf_parts[0].first_now);
++                    int64_t lm_cap = strata::prefill::layer_major::max_sb_tokens();
++                    const int64_t lm_fit = strata::prefill::layer_major::fit_cap_tokens(lm_loan);
++                    if (lm_fit > 0) lm_cap = std::min(lm_cap, lm_fit);
++                    auto sbs = strata::prefill::layer_major::plan_superblocks(
++                        b0 - a0, a0, C0, lm_cap, pp_next_check, o.prompt_cache_every);
++                    if (!sbs.empty()) {
++                        lm_segs.clear();
++                        for (const auto& sb : sbs) {
++                            const auto rg = strata::prefill::layer_major::sb_token_range(sb, b0 - a0, C0);
++                            lm_segs.emplace_back(a0 + rg.first, a0 + rg.second);
++                            c28_sb_chunks.push_back(sb.c1 - sb.c0);
++                        }
++                        c28_sbs += sbs.size();
++                    }
++                }
+                 // (a layer split reads its stages as a pipeline over one run's chunks: in pieces only beside slots)
+-                if (o.batch <= 0 || piped || (!stages.empty() && !batch_on())) return sp.run(ids.data() + a0, b0 - a0, a0, e);
++                if (o.batch <= 0 || piped || (!stages.empty() && !batch_on())) {
++                    for (const auto& sg : lm_segs)
++                        if (!sp.run(ids.data() + sg.first, sg.second - sg.first, sg.first, e)) return false;
++                    return true;
++                }
+                 const int64_t C = std::max<int64_t>(sp.chunk(), 1);
+-                for (int64_t q = a0; q < b0;) {
+-                    const int64_t r = std::min(b0, q + C);
++                for (const auto& sg : lm_segs) {
++                const int64_t s0 = sg.first, s1 = sg.second;
++                for (int64_t q = s0; q < s1;) {
++                    const int64_t r = std::min(s1, q + C);
+                     const auto tq = Clock::now();
+                     if (!sp.run(ids.data() + q, r - q, q, e)) return false;
+                     q = r;
+-                    if (q >= b0) continue;
++                    if (q >= b0) continue;   // C28: unchanged - the tail below still runs at every
++                                             // chunk end, including superblock ends short of b0
+                     int ys = -1;
+                     {   // a BSTOP that came meanwhile ends its slot at its next window; a BYIELD is for this read
+                         std::lock_guard<std::mutex> lk(in_mu);
+@@ -7045,7 +7088,8 @@ int main(int argc, char** argv) {
+                                      (long long) q, std::chrono::duration<double, std::milli>(Clock::now() - td).count());
+                         std::fflush(stderr);
+                     }
+-                }
++                }   // q chunks of this superblock
++                }   // C28 superblocks of this segment (off: the single segment above)
+                 return true;
+             };
+             apply_pending(true);
+@@ -7121,6 +7165,20 @@ int main(int argc, char** argv) {
+             }
+             const int64_t split_at = s1 ? -1 : turn_at;
+             int64_t at = read_from;
++            // C28: the prefill counters before this prompt, summed over every stage's prompt path
++            // (a layer split reads through its stages' paths; one GPU: just sp). The test log below
++            // reports this prompt's delta. Counting only: the sums never feed numerics.
++            auto c28_stats_sum = [&]() -> strata::prefill::PrefillStats {
++                strata::prefill::PrefillStats s = sp.stats();
++                for (const auto& st : stages) {
++                    const strata::prefill::PrefillStats& q = st->sp.stats();
++                    s.tokens += q.tokens; s.chunks += q.chunks;
++                    s.experts_streamed += q.experts_streamed; s.experts_dma += q.experts_dma;
++                    s.experts_resident += q.experts_resident; s.experts_bytes += q.experts_bytes;
++                }
++                return s;
++            };
++            const strata::prefill::PrefillStats c28_pre = c28_stats_sum();
+             for (const int64_t to : {reread_to, root_at, split_at, n - fold}) {
+                 if (to <= at) continue;
+                 err.clear();
+@@ -7168,6 +7226,29 @@ int main(int argc, char** argv) {
+                 return 1;
+             }
+             tr("prompt done (slots refilled)");
++            // C28 test log (STRATA_PREFILL_LAYER_MAJOR=1 only; off: nothing printed): this prompt's
++            // superblocks, chunks per superblock, and PCIe expert bytes - the A/B figure against off.
++            // The lent slots are refilled above (refill(): same slots, residency table restored, one
++            // upload per device), so the decode that follows sees the whole expert cache; the owner
++            // measures that the decode does not sink (hit-rate lines below) and the byte comparison.
++            if (strata::prefill::layer_major::enabled()) {
++                const strata::prefill::PrefillStats c28_post = c28_stats_sum();
++                std::string c28_list;
++                for (size_t i = 0; i < c28_sb_chunks.size(); ++i) {
++                    char b[32];
++                    std::snprintf(b, sizeof b, "%s%lld", i ? "," : "", (long long) c28_sb_chunks[i]);
++                    c28_list += b;
++                }
++                std::fprintf(stderr,
++                             "strata c28: prompt %lld tokens (from %lld): %zu superblocks (chunks/sb [%s]), "
++                             "prefill chunks %lld, experts streamed %lld, PCIe expert bytes %.3f GiB%s\n",
++                             (long long) n, (long long) read_from, c28_sbs, c28_list.c_str(),
++                             (long long) (c28_post.chunks - c28_pre.chunks),
++                             (long long) (c28_post.experts_streamed - c28_pre.experts_streamed),
++                             (double) (c28_post.experts_bytes - c28_pre.experts_bytes) / 1073741824.0,
++                             cancelled ? " (cancelled)" : (yielded_at >= 0 ? " (yielded)" : ""));
++                std::fflush(stderr);
++            }
+             if (il_parts > 0)
+                 std::fprintf(stderr, "strata batch: the prompt was read in %lld parts, the slots decoding %.0f ms between "
+                                      "them\n", (long long) il_parts + 1, il_ms);
+@@ -7672,6 +7753,8 @@ int main(int argc, char** argv) {
+     if (o.prefill_chunk > 0 && n_prompt > 1) {
+         void* borrow = nullptr;
+         uint64_t borrow_bytes = 0;
++        void* lm_loan_base = nullptr;   // C28p: préstamo R+KV + anillo extra (off: null)
++        uint64_t lm_loan_bytes = 0;
+         if (!o.no_prefill_borrow && !host_res.empty() && d_res != nullptr) {
+             int64_t chunk = o.prefill_chunk;
+             int64_t k = plan_lend(chunk);             // auto: the largest chunk that fits; fixed: halved to fit
+@@ -7703,6 +7786,52 @@ int main(int argc, char** argv) {
+                 std::fprintf(stderr, "strata generate: prompt path borrows %lld cache slots (%.2f GiB)\n", (long long) k,
+                              (double) borrow_bytes / 1073741824.0);
+             }
++            // C28p: préstamo de huecos de decode para el camino por capas (solo con flag on;
++            // off: este bloque no existe). R+KV de todo el prompt + anillo extra en la cola
++            // prestada; se REPUEBLA con el refill de abajo (mismo `lent`). Sin hueco: sin
++            // préstamo (el motor cae a RAM/host o a chunk-major, sin corromper).
++            if (strata::prefill::layer_major::enabled() && k > 0 && borrow != nullptr && n_batched > 0) {
++                namespace lmns = strata::prefill::layer_major;
++                const uint64_t spill_need = lmns::loan_bytes_for_spill(n_batched, true);  // peor caso (con lo)
++                int64_t max_nr = 0;
++                for (int64_t e_nr : lmns::nonresident_per_layer(host_res.data(), g.n_layers, g.n_expert, 0,
++                                                                g.n_layers))
++                    max_nr = std::max(max_nr, e_nr);
++                const int64_t ring = strata::prefill::Prefill::ring_slots_for(o.prefill_chunk);
++                const int64_t need_extra = lmns::extra_ring_slots(max_nr, ring);
++                const uint64_t loan_need =
++                    spill_need + (uint64_t) (need_extra > 0 ? need_extra : 0) * (uint64_t) blob;
++                // Slots para loan_need justo antes del préstamo del chunk ([first_lm, first)).
++                const int32_t first = (int32_t) (xcache.slots() - k);
++                int64_t k_lm = 0;
++                if (xcache.slot_offsets() != nullptr) {
++                    const uint64_t* off = xcache.slot_offsets();
++                    int32_t f = first;
++                    while (f > 0 && (uint64_t) ((int64_t) off[first] - (int64_t) off[f]) < loan_need) --f;
++                    if ((uint64_t) ((int64_t) off[first] - (int64_t) off[f]) >= loan_need) k_lm = (int64_t) (first - f);
++                } else {
++                    k_lm = (int64_t) ((loan_need + (uint64_t) blob - 1u) / (uint64_t) blob);
++                }
++                const int32_t first_lm = first - (int32_t) k_lm;
++                if (k_lm > 0 && first_lm >= 0 && k + k_lm + 128 <= xcache.slots()) {
++                    for (size_t i = 0; i < host_res.size(); ++i)
++                        if (host_res[i] >= first_lm && host_res[i] < first) {
++                            lent.emplace_back((int32_t) i, host_res[i]);
++                            host_res[i] = strata::core::kNotResident;
++                        }
++                    cudaMemcpy(d_res, host_res.data(), host_res.size() * sizeof(int32_t), cudaMemcpyHostToDevice);
++                    lm_loan_base = xcache.device_slot(first_lm);
++                    lm_loan_bytes = xcache.slot_offsets()
++                                        ? (uint64_t) (xcache.bytes() - (int64_t) xcache.slot_offsets()[first_lm]) -
++                                          borrow_bytes
++                                        : (uint64_t) k_lm * (uint64_t) blob;
++                    std::fprintf(stderr,
++                                 "strata c28: loan %lld slots (%.2f GiB) for R+KV + %lld extra ring slots "
++                                 "(max %lld/wave vs ring %lld)\n",
++                                 (long long) k_lm, (double) (loan_need) / 1073741824.0, (long long) need_extra,
++                                 (long long) max_nr, (long long) ring);
++                }
++            }
+         }
+         if (borrow == nullptr)
+             std::fprintf(stderr, "strata generate: prompt path allocates its own buffers (no cache slots to borrow)\n");
+@@ -7712,6 +7841,9 @@ int main(int argc, char** argv) {
+             std::fprintf(stderr, "strata generate: %s\n", err.c_str());
+             return 1;
+         }
++        // C28p: entrega el préstamo al motor (solo con flag on; off: sin préstamo).
++        if (strata::prefill::layer_major::enabled() && lm_loan_base != nullptr && lm_loan_bytes > 0)
++            prefill.set_lm_loan(lm_loan_base, lm_loan_bytes);
+         if (!o.mtp.empty()) {
+             if (!mtp.bind(wt, &native_head, nullptr, err)) {
+                 std::fprintf(stderr, "strata generate: %s\n", err.c_str());
+@@ -7726,10 +7858,57 @@ int main(int argc, char** argv) {
+             };
+         }
+         const Clock::time_point tp0 = Clock::now();
+-        if (!prefill.run(o.tokens.data(), n_batched, 0, err)) {
++        // C28: with STRATA_PREFILL_LAYER_MAJOR=1 the prompt runs superblock by superblock -
++        // plan_superblocks sizes each to min(what fits the lent gaps, the next checkpoint firing).
++        // This path takes no periodic checkpoints (no conversation cache), so the planner only
++        // cuts at the fit cap; every superblock still ends at a chunk end, hence the same chunks
++        // in the same order as one run (bit-identical). Off: one run, today's exact call.
++        bool c28_ok = true;
++        size_t c28_sbs = 0;
++        std::string c28_list;
++        if (strata::prefill::layer_major::enabled() && n_batched > 0) {
++            int64_t lm_cap = strata::prefill::layer_major::max_sb_tokens();
++            // C28p: con préstamo el superbloque lo limita el spill device (todo el prompt cabe);
++            // sin préstamo, el de antes (huecos del chunk). Off: este bloque no existe.
++            const uint64_t lm_cap_loan = lm_loan_bytes > 0 ? lm_loan_bytes : borrow_bytes;
++            const int64_t lm_fit = strata::prefill::layer_major::fit_cap_tokens(lm_cap_loan);
++            if (lm_fit > 0) lm_cap = std::min(lm_cap, lm_fit);
++            auto sbs = strata::prefill::layer_major::plan_superblocks(
++                n_batched, 0, o.prefill_chunk, lm_cap, INT64_MAX, 0);
++            if (sbs.empty()) {
++                c28_ok = prefill.run(o.tokens.data(), n_batched, 0, err);
++            } else {
++                c28_sbs = sbs.size();
++                for (const auto& sb : sbs) {
++                    const auto rg = strata::prefill::layer_major::sb_token_range(sb, n_batched, o.prefill_chunk);
++                    char b[32];
++                    std::snprintf(b, sizeof b, "%s%lld", c28_list.empty() ? "" : ",", (long long) (sb.c1 - sb.c0));
++                    c28_list += b;
++                    if (!prefill.run(o.tokens.data() + rg.first, rg.second - rg.first, rg.first, err)) {
++                        c28_ok = false;
++                        break;
++                    }
++                }
++            }
++        } else {
++            c28_ok = prefill.run(o.tokens.data(), n_batched, 0, err);
++        }
++        if (!c28_ok) {
+             std::fprintf(stderr, "strata generate: %s\n", err.c_str());
+             return 1;
+         }
++        // C28 test log (flag only; off: nothing printed): superblocks, chunks per superblock and
++        // PCIe expert bytes per prompt - the A/B figure against off. `prefill` is fresh here, so its
++        // counters are this prompt's. The lent slots are refilled just below (same slots, residency
++        // table restored, device upload), so the decode that follows sees the whole expert cache.
++        if (c28_sbs > 0)
++            std::fprintf(stderr,
++                         "strata c28: prompt %lld tokens: %zu superblocks (chunks/sb [%s]), prefill chunks %lld, "
++                         "experts streamed %lld, PCIe expert bytes %.3f GiB\n",
++                         (long long) n_batched, c28_sbs, c28_list.c_str(),
++                         (long long) prefill.stats().chunks,
++                         (long long) prefill.stats().experts_streamed,
++                         (double) prefill.stats().experts_bytes / 1073741824.0);
+         // refill the lent slots from the arena and give them back to the decode tier
+         if (!lent.empty()) {
+             const Clock::time_point tr = Clock::now();

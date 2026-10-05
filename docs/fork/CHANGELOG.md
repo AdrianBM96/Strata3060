@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C24 hecho (yo) | prod ok | 2026-10-05 05:33 UTC
+ESTADO: C36 listo (yo) | E1 siguiente | 2026-10-05 05:37 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -67,6 +67,8 @@ ESTADO: C24 hecho (yo) | prod ok | 2026-10-05 05:33 UTC
 | 2026-10-05 | C29b-rep | Réplica 6+6 en marcha (lock); C28 a cirugía (obrero); C30 v4-fix en :8095 para revisión | capturas v4-*.png en docs/fork/oficina/ | - | En curso |
 | 2026-10-05 | C28-ring | RING=512: log on real pero bytes sin reúso (fetch por chunk persiste); pgrep-N23 poco fiable en inline (usar scripts) | prod restaurada | - | Devolver con métrica B/leído |
 | 2026-10-05 | C33 | Paso1 (windows_ok generate:6789, short_read=128) + paso2 (CKPT_REREAD): ventanas 0,51s vs prefill 1,92s | camino actual correcto; ideas 1-2 aparcadas | - | HECHO |
+| 2026-10-05 | C28-fin | Cerrada archivada (patches/c28-layermajor.patch, 1345 lín); TAREAS→DESCARTADO | - | - | Archivada |
+| 2026-10-05 | C36 | Cómputo 32K: MoE-gemm 24% (~20 TFLOPS, ~10% pico INT8T), GDN 13,6%, HC-read 10,2% (puro movimiento), attn 9,2% | margen en alimentar cores, no en kernels (shapes flacos) | - | Medido |
 | 2026-10-05 | C34-blq | RAM: 17GB libres < 20GB del criterio (mib 8192→16384 = +8GB) | no aplico 16/16384; opciones: parcial u otra vía | - | BLOQUEO |
 | 2026-10-05 | C30-fin | Oficina v5 terminada por Claude (799074e) en :8095; TAREAS→HECHO | - | 799074e | HECHO |
 | 2026-10-05 | C32 | Precarga ExecStartPost + POST /v1/load (OK prod, --lazy intacto) | GPU 11,3GB ~25s (obj ≤20s, +5s por RAM); 1ª petición 1,35s; un arranque falló y rearrancó solo | - | Desplegado |
