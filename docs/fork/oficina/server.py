@@ -201,13 +201,17 @@ def state_ws(oid):
     return {"agents": ags, "metrics": {}, "ticker": [], "queue": {"done": 0, "total": 0}, "lock": False, "bench": False,
             "suplencia": False, "herdr": True, "tareas": [], "ws": oid, "maquina": mach or "bazzite", "updated": time.strftime("%H:%M:%S UTC", time.gmtime())}
 def slug(t): return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")[:12] or "ofi"
-KINDS = {"claude": "Claude Code", "opencode": "opencode", "pi": "pi", "ada-cli": "ada-cli (beta)", "agy": "Antigravity (agy)"}
+KINDS = {"claude": "Claude Code", "opencode": "opencode", "pi": "pi", "ada-cli": "ada-cli", "agy": "Antigravity (agy)"}
 KCACHE = {}
 ADA_DIR = H("~/.local/share/strata-oficina/ada")
 ADA_PATH = ADA_DIR + ":" + H("~/.nvm/versions/node/v22.23.2/bin") + ":" + H("~/.local/bin") + ":/usr/local/bin:/usr/bin:/bin"
+# En los paneles de ada-cli, `pi` es este script: herdr lo arranca como pi y HERDR_AGENT=pi (solo en este proceso)
+# mantiene la identidad aunque ada-cli se renombre a sí mismo al arrancar.
 try:
-    os.makedirs(ADA_DIR, exist_ok=True)
-    if not os.path.islink(os.path.join(ADA_DIR, "pi")): os.symlink(H("~/ada-cli/packages/coding-agent/dist/cli.js"), os.path.join(ADA_DIR, "pi"))
+    os.makedirs(ADA_DIR, exist_ok=True); f = os.path.join(ADA_DIR, "pi")
+    if os.path.islink(f): os.unlink(f)
+    with open(f, "w") as fh: fh.write("#!/bin/sh\nexport HERDR_AGENT=pi\nexec %s %s \"$@\"\n" % (H("~/.nvm/versions/node/v22.23.2/bin/node"), H("~/ada-cli/packages/coding-agent/dist/cli.js")))
+    os.chmod(f, 0o755)
 except OSError: pass
 def _cmd(args, t=25):
     env = dict(os.environ, PATH=H("~/.local/bin") + ":/snap/bin:" + os.path.dirname(sys.executable) + ":" + os.environ.get("PATH", ""))
