@@ -1,0 +1,108 @@
+diff --git a/src/program/generate.cpp b/src/program/generate.cpp
+index 65b9072..b7feee4 100644
+--- a/src/program/generate.cpp
++++ b/src/program/generate.cpp
+@@ -1837,9 +1837,15 @@ int main(int argc, char** argv) {
+     // Prompt lookup (the suffix drafter, on by default): the MTP keeps its --spec windows and a lookup window may be
+     // up to 2 tokens longer; the draft policy (strata/spec/draft_policy.hpp) takes one only where it pays. Code
+     // edits +6-11%, ordinary text unchanged (bench/results/2026-09-27-spec). --suffix-draft 0 turns it off.
++    // C35b (opt-in, for an A/B): STRATA_SFX_T8=1 opens the asymmetric window - the MTP stays at --spec while a
++    // lookup window with a long match (>= 16) may go up to T=8 (kVerifyMaxT); shorter matches keep the +2 ceiling.
++    static const bool sfx_t8 = [] {
++        const char* v = std::getenv("STRATA_SFX_T8");
++        return v != nullptr && v[0] == '1';
++    }();
+     if (o.suffix_draft > 0 && o.spec >= 2 && o.mtp_max_t == 0) {
+         o.mtp_max_t = o.spec;
+-        o.spec = std::min(o.spec + 2, 8);   // kVerifyMaxT
++        o.spec = std::min(o.spec + (sfx_t8 ? 4 : 2), 8);   // kVerifyMaxT
+     }
+     strata::core::layer_set_shared_early(!o.shared_late);
+     if (!o.native_preset.empty()) {
+@@ -7189,13 +7195,27 @@ int main(int argc, char** argv) {
+             // why a lookup proposal did not become the window: the MTP's first draft disagreed, the lookup's first
+             // token is outside the draft head's subset (draft_vocab.bin: the MTP could never agree), or the policy
+             // expected more from the MTP window
+-            int64_t sfx_proposed = 0, sfx_gate_disagree = 0, sfx_gate_oov = 0, sfx_policy_mtp = 0, sfx_oov_taken = 0;
++            int64_t sfx_proposed = 0, sfx_gate_disagree = 0, sfx_gate_oov = 0, sfx_policy_mtp = 0, sfx_oov_taken = 0,
++                    sfx_dec_taken = 0;
+             // STRATA_SFX_OOV=1 (opt-in, for an A/B): a lookup whose first token the MTP cannot propose passes the gate
+             // when its match is long.  Verification is unchanged, so greedy text is what the window would give anyway
+             static const int sfx_oov_min = [] {
+                 const char* v = std::getenv("STRATA_SFX_OOV");
+                 return v != nullptr && v[0] == '1' ? 12 : 0;
+             }();
++            // C35a (opt-in, for an A/B): STRATA_SFX_DECOUPLE=1 lets a lookup with a long match (>= 8) pass the gate
++            // even when its first token disagrees with the MTP's first draft.  The policy still picks MTP vs lookup
++            // and verification is unchanged, so temperature-0 text is bit-exact either way.
++            static const int sfx_dec_min = [] {
++                const char* v = std::getenv("STRATA_SFX_DECOUPLE");
++                return v != nullptr && v[0] == '1' ? 8 : 0;
++            }();
++            // C35b (opt-in, for an A/B): with STRATA_SFX_T8=1 (asymmetric window, see above) a lookup whose match is
++            // >= 16 may use the full T=8; shorter matches keep the MTP+2 ceiling.  MTP windows never change.
++            static const bool sfx_t8w = [] {
++                const char* v = std::getenv("STRATA_SFX_T8");
++                return v != nullptr && v[0] == '1';
++            }();
+             int64_t draft_offered = 0, draft_accepted = 0;
+             // what the session holds once this request is done: the prompt read so far, then every committed token
+             std::vector<int32_t> consumed;
+@@ -7243,9 +7263,14 @@ int main(int argc, char** argv) {
+                         ++sfx_proposed;
+                         const bool agree = sbuf[0] == drafts[0];
+                         const bool oov = !agree && !mtp.in_draft_vocab(sbuf[0]);
+-                        if (agree || (oov && sfx_oov_min > 0 && sfx_match >= sfx_oov_min)) {
+-                            const strata::spec::DraftPolicy::Pick pk = policy.choose(T, k, sfx_match);
+-                            if (pk.lookup) { T = pk.t; from_sfx = true; sfx_oov_taken += oov; }
++                        const bool dec = !agree && !oov && sfx_dec_min > 0 && sfx_match >= sfx_dec_min;
++                        if (agree || (oov && sfx_oov_min > 0 && sfx_match >= sfx_oov_min) || dec) {
++                            int k_use = k;
++                            if (sfx_t8w && sfx_match < 16) k_use = std::min(k, S_mtp + 1);   // the MTP+2 ceiling
++                            const strata::spec::DraftPolicy::Pick pk = policy.choose(T, k_use, sfx_match);
++                            if (pk.lookup) {
++                                T = pk.t; from_sfx = true; sfx_oov_taken += oov; sfx_dec_taken += !agree && !oov;
++                            }
+                             else ++sfx_policy_mtp;
+                         } else if (oov) {
+                             ++sfx_gate_oov;
+@@ -7639,10 +7664,12 @@ int main(int argc, char** argv) {
+                 std::fprintf(stderr, "strata serve: suffix drafts: %lld windows, %lld of %lld drafts accepted\n",
+                              (long long) sfx_windows, (long long) sfx_ok, (long long) sfx_drafts);
+             if (sfx_proposed > 0)
+-                std::fprintf(stderr, "strata serve: lookup proposals %lld: taken %lld (%lld past the draft vocab), "
++                std::fprintf(stderr, "strata serve: lookup proposals %lld: taken %lld (%lld past the draft vocab, "
++                                     "%lld decoupled past the MTP), "
+                                      "policy chose the MTP %lld, gate: MTP disagreed %lld, first token outside the "
+                                      "draft vocab %lld\n",
+                              (long long) sfx_proposed, (long long) sfx_windows, (long long) sfx_oov_taken,
++                             (long long) sfx_dec_taken,
+                              (long long) sfx_policy_mtp, (long long) sfx_gate_disagree, (long long) sfx_gate_oov);
+             for (int r = 0; r < 3; ++r) if (o.expert_cache_remote[(size_t) r] > 0)
+                 std::fprintf(stderr, "strata serve: CUDA%d: %lld expert entries, %lld active layer launches, %.1f MiB returned "
+@@ -8202,8 +8229,23 @@ int main(int argc, char** argv) {
+             if (o.suffix_draft > 0 && !first_window) {
+                 const int k = sfx.propose(o.spec - 1, sbuf.data());
+                 sfx_match = sfx.last_match();
+-                if (k > 0 && (!use_mtp || sbuf[0] == drafts[0])) {
+-                    const strata::spec::DraftPolicy::Pick pk = policy.choose(T, k, sfx_match);
++                // C35a/C35b (both opt-in, for an A/B; see the serve path): a long match (>= 8) passes the gate past
++                // the MTP's first draft, and with STRATA_SFX_T8=1 a match >= 16 may use the full T=8 while shorter
++                // ones keep the MTP+2 ceiling.  Off by default: the gate below is then unchanged.
++                static const int sfx_dec_min = [] {
++                    const char* v = std::getenv("STRATA_SFX_DECOUPLE");
++                    return v != nullptr && v[0] == '1' ? 8 : 0;
++                }();
++                static const bool sfx_t8w = [] {
++                    const char* v = std::getenv("STRATA_SFX_T8");
++                    return v != nullptr && v[0] == '1';
++                }();
++                const bool agree = !use_mtp || sbuf[0] == drafts[0];
++                const bool dec = use_mtp && !agree && sfx_dec_min > 0 && sfx_match >= sfx_dec_min;
++                if (k > 0 && (agree || dec)) {
++                    int k_use = k;
++                    if (sfx_t8w && sfx_match < 16) k_use = std::min(k, S_mtp + 1);   // the MTP+2 ceiling
++                    const strata::spec::DraftPolicy::Pick pk = policy.choose(T, k_use, sfx_match);
+                     if (pk.lookup) { T = pk.t; from_sfx = true; }
+                 }
+             }
