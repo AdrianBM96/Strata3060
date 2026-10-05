@@ -100,3 +100,4 @@ ESTADO: PAUSA (decisión de Adrián) | prod verificada | 2026-10-05 07:41 UTC
 | 2026-10-05 | C29-cd | Cribado (c) 44,9 (−15% ROTO) y (d) 52,5 (−0,8% nulo); prod restaurada | (a)(c) rotos, (b)(d) nulos: C29 archivado entero | - | Archivado |
 | 2026-10-05 | C37-fin | Archivado (frío +4%/−2% contradictorio; +19% era caché; auto se queda) | - | - | Archivado |
 | 2026-10-05 | PAUSA | Sesión: ADOPTADO C32 (precarga), C34-parcial (12/12288/4096); DESCARTADO P02/P08/C26/C27/C28/C29/C35/C37/E2/C18; HECHO C19/C22/C23/C24/C33/E1/C30 | prod da9a7a9b, flags limpios, GPU 11,4GB, locks fuera | - | PAUSA |
+| 2026-10-05 | C14a | CARGA + B4 largo: MTP top-128 86,7%, top-256 97,8%, top-384 100% (4.260 routed); B4 630/669 (94%) | dump vía /v1/unload (SIGTERM no vuelca); prod da9a7a9b verificada | - | HECHO+PAUSA |
