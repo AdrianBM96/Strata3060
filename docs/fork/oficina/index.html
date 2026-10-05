@@ -757,7 +757,7 @@ async function send(agent,mode,text){try{const r=await api('/api/send',{method:'
     sel=who;tab='salida';$$('.tab').forEach(x=>x.classList.toggle('on',x.dataset.tab==='salida'));$('#stage').classList.add('drawer');renderInspector();scene3d.request();return true}toast(r.error||'Error al enviar',true)}catch(_){toast('No se pudo enviar',true)}return false}
 
 /* modal */
-function confirmModal(t,p,ok,body=''){$('#mt').textContent=t;$('#mp').textContent=p;$('#mb').innerHTML=body;$('#modal').classList.add('on');
+function confirmModal(t,p,ok,body='',okText='Aceptar'){$('#mo').textContent=okText;$('#mt').textContent=t;$('#mp').textContent=p;$('#mb').innerHTML=body;$('#modal').classList.add('on');
   $('#mo').onclick=()=>{$('#modal').classList.remove('on');ok()};$('#mc').onclick=()=>$('#modal').classList.remove('on');setTimeout(()=>($('#mb input')||$('#mo')).focus(),30)}
 let KINDS=null;
 const DEF_ROWS=[{perfil:'Arquitecto',kind:'claude',model:'opus',n:1},{perfil:'Desarrollador',kind:'opencode',model:'litellm-gateway/ada-next',n:2}];
@@ -790,7 +790,7 @@ async function newOffice(){
     const name=$('#noName').value.trim();if(!name){toast('Ponle un nombre',true);return}
     if(rows.some(r=>!r.perfil.trim())){toast('Cada fila necesita un nombre de perfil',true);return}
     try{const r=await api('/api/office',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,cwd:$('#noDir').value.trim()||undefined,equipo:rows,auto:$('#noAuto').checked})});
-      if(!r.ok){toast(r.error||'No se pudo crear',true);return}toast(`Creando “${name}”…`);followJob(r.job,name)}catch(_){toast('No se pudo crear',true)}},body);
+      if(!r.ok){toast(r.error||'No se pudo crear',true);return}toast(`Creando “${name}”…`);followJob(r.job,name)}catch(_){toast('No se pudo crear',true)}},body,'Crear oficina');
   draw();
   $('#addRow').onclick=()=>{if(rows.reduce((a,x)=>a+x.n,0)>=8){toast('Máximo 8 agentes por oficina',true);return}rows.push({perfil:'',kind:'opencode',model:'',n:1});draw();$$('#frows .fp').at(-1).focus()};
   $('#mc').addEventListener('click',()=>$('#modal .card').classList.remove('wide'),{once:true});
@@ -802,7 +802,7 @@ async function followJob(id,name){let seen=0;
 function delOffice(id){const o=OFFICES.find(x=>x.id===id);if(!o)return;
   confirmModal('Borrar “'+o.nombre+'”',`Se cerrará el workspace ${o.id} en herdr y se detendrán sus ${o.agentes.length} agentes. Escribe el nombre para confirmar.`,async()=>{
     const c=$('#mb input').value;try{const r=await api('/api/office/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,confirm:c})});
-      toast(r.ok?`“${o.nombre}” borrada`:(r.error||'No se pudo borrar'),!r.ok);if(r.ok){if(WS===id)setOffice(STRATA_WS);loadOffices()}}catch(_){toast('No se pudo borrar',true)}},`<input placeholder="${esc(o.nombre)}">`)}
+      toast(r.ok?`“${o.nombre}” borrada`:(r.error||'No se pudo borrar'),!r.ok);if(r.ok){if(WS===id)setOffice(STRATA_WS);loadOffices()}}catch(_){toast('No se pudo borrar',true)}},`<input placeholder="${esc(o.nombre)}">`,'Borrar')}
 $('#newOff').onclick=newOffice;
 
 /* teclado */
