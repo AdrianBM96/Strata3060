@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C35 nulo (yo) | 2026-10-05 06:34 UTC
+ESTADO: C37 curva lista (yo) | 2026-10-05 06:51 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -96,3 +96,4 @@ ESTADO: C35 nulo (yo) | 2026-10-05 06:34 UTC
 | 2026-10-05 | E1 | Diag (35W, 3,8GHz, gov/EPP/THP óptimos) + afinidad −1,22%±2,45 + dma −5,01%±3,00 (rechazado) | sistema ya óptimo; hugepages requiere código; -lgc sin throttling | - | HECHO |
 | 2026-10-05 | C35-ab | (b) B4 6+6 +1,05%±4,63 y B1 +0,65%±1,77 (ambos IC0); bit-bit OK (fence en suelo) | (a)(b) nulos; parche en patches/c35-suffix.patch | - | Archivado |
 | 2026-10-05 | C37 | Curva chunk efectivo 5120-8192 (fijos recortados a buffers): P3 5,86/5,82/5,00/4,36, B1 plano | 8192 −13% P3-short; proponer A/B fijo-8192 vs auto | - | Curva lista |
+| 2026-10-05 | C37-limpio | Frío 6+6 tok/s: 32K +3,97%±3,46 (borde) y 86K −1,97%±5,52 (contradictorio) | sin OOM/puerta ptes; a decisión | - | Borde |
