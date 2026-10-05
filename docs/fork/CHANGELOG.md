@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C29 archivado (yo) | 2026-10-05 07:32 UTC
+ESTADO: C16 CARGA (motor) | C37 archivado | 2026-10-05 06:34 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -99,3 +99,4 @@ ESTADO: C29 archivado (yo) | 2026-10-05 07:32 UTC
 | 2026-10-05 | C37-limpio | Frío 6+6 tok/s: 32K +3,97%±3,46 (borde) y 86K −1,97%±5,52 (contradictorio) | sin OOM/puerta ptes; a decisión | - | Borde |
 | 2026-10-05 | C29-cd | Cribado (c) 44,9 (−15% ROTO) y (d) 52,5 (−0,8% nulo); prod restaurada | (a)(c) rotos, (b)(d) nulos: C29 archivado entero | - | Archivado |
 | 2026-10-05 | C37-fin | Archivado (frío +4%/−2% contradictorio; +19% era caché; auto se queda) | - | - | Archivado |
+| 2026-10-05 | PAUSA | Sesión: ADOPTADO C32 (precarga), C34-parcial (12/12288/4096); DESCARTADO P02/P08/C26/C27/C28/C29/C35/C37/E2/C18; HECHO C19/C22/C23/C24/C33/E1/C30 | prod da9a7a9b, flags limpios, GPU 11,4GB, locks fuera | - | PAUSA |
