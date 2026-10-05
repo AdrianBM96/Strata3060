@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: P08 A/B-bis (yo, con lock) | C27 revisar | 2026-10-05 01:43 UTC
+ESTADO: redos listos (yo) | C29 GPU pdte | 2026-10-05 01:56 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -57,6 +57,7 @@ ESTADO: P08 A/B-bis (yo, con lock) | C27 revisar | 2026-10-05 01:43 UTC
 | 2026-10-05 | C28-ab | P3/P4 off/on: P3 12,8/12,8, P4 18,9/19,0 (+0%): el proto no cambia chunks (techo intacto, sin efecto) | revisar planner (lending real); prod restaurada | - | Revisar |
 | 2026-10-05 | C31-tab | Timeline 850 vent (B1/B2/B3, 0 fallos): d10 ~0,02ms, d21 0,004ms, d32 0, d43 ~0,17ms; viaje+issuer REFUTADO; 8ms solo con fallos | prod restaurada da9a7a9b | - | Falta tráfico con fallos |
 | 2026-10-05 | C27-redo | FLAGB B1 6+6 (N23 OK): +2,12%±3,79, medianas +1,2% (IC incluye 0, sin B2); waitB no baja | revisar (adoptar exige IC>0) | - | P08-bis en marcha |
+| 2026-10-05 | P08-redo | B1 6+6 N23 (P08+MTMIN vs prod): −1,62%±2,11 (IC incluye 0) | los tres redos nulos; P08 archivado final; sin candidato | - | Cerrado |
 | 2026-10-05 | C29-cod | 4 palancas + parity (1153+/32-, binario listo); (b) NO descartada (bit-exacta lane-0) | GPU+A/B a su turno (tras C28/C27/P08) | - | Código listo |
 | 2026-10-05 | C30-dep | Oficina en :8095 (local+tailnet 200, v4-fix); N21; C31 creado (obrero) | BLOQUEO resuelto | - | Desplegada |
 | 2026-10-05 | C28-redo | N23 OK ambos brazos; P3 +1%, P4 +0,6% (chunks 7936 iguales: el techo no muerde) | proto sin efecto sin lending real | - | Revisar |
