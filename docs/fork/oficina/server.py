@@ -390,7 +390,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204); self.send_header("Content-Length", "0"); self.end_headers()
         elif u.path == "/login": self._send(200, LOGIN, "text/html; charset=utf-8")
         elif u.path == "/" and not sess_ok(self.headers):
-            self.send_response(302); self.send_header("Location", "/login"); self.end_headers()
+            self.send_response(302); self.send_header("Location", "/login"); self.send_header("Content-Length", "0"); self.end_headers()
         elif u.path.startswith("/api/") and not sess_ok(self.headers):
             self._json(401, {"error": "login"})
         elif u.path == "/": self._send(200, INDEX, "text/html; charset=utf-8")
