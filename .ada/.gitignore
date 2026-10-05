@@ -1,0 +1,16 @@
+# Ada Project ignore rules
+# Ficheros de sesión local efímera y claves
+*.local
+*.tmp
+*.tmp.*
+sessions/
+keys/
+vault/
+cache/
+undo/
+
+# Ficheros compartidos permitidos (nunca ignorar)
+!project.json
+!wiki.json
+!knowledge.json
+!team-memory.jsonl

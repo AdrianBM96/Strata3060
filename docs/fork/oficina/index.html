@@ -195,7 +195,16 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
 /* Modal / toast */
 #modal{position:fixed;inset:0;background:rgba(10,12,17,.38);backdrop-filter:blur(3px);display:none;place-items:center;z-index:50}
 #modal.on{display:grid}
-#modal .card{width:min(420px,92vw);padding:22px}
+#modal .card{width:min(420px,92vw);padding:22px;max-height:92vh;overflow:auto}
+#modal .card.wide{width:min(820px,96vw)}
+.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.fhead,.frow{display:grid;grid-template-columns:1.1fr 1fr 1.6fr auto 32px;gap:8px;align-items:center}
+.fhead{margin:16px 2px 6px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.frow{padding:6px;border:1px solid var(--line);border-radius:12px;margin-bottom:6px;background:var(--panel)}
+.frow input,.frow select{width:100%;font:inherit;font-size:13px;color:inherit;background:var(--panel2);border:1px solid transparent;border-radius:9px;padding:8px 9px;outline:none;min-width:0}
+.frow input:focus,.frow select:focus{border-color:var(--accent)}
+.fn{display:flex;align-items:center;gap:6px}.fn button{width:28px;height:28px;border-radius:8px;background:var(--panel2);font-weight:700}.fn b{min-width:16px;text-align:center}
+.fx{width:30px;height:30px;border-radius:9px;color:var(--muted)}.fx:hover{background:var(--badSoft);color:var(--bad)}
 #modal h3{margin:0 0 6px;font-size:17px}
 #modal p{margin:0 0 14px;color:var(--muted)}
 #modal input{width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:12px;padding:11px 13px;outline:none}
@@ -750,19 +759,41 @@ async function send(agent,mode,text){try{const r=await api('/api/send',{method:'
 /* modal */
 function confirmModal(t,p,ok,body=''){$('#mt').textContent=t;$('#mp').textContent=p;$('#mb').innerHTML=body;$('#modal').classList.add('on');
   $('#mo').onclick=()=>{$('#modal').classList.remove('on');ok()};$('#mc').onclick=()=>$('#modal').classList.remove('on');setTimeout(()=>($('#mb input')||$('#mo')).focus(),30)}
-const PERF=[['arquitecto','Arquitecto','claude'],['desarrollador','Desarrollador','opencode'],['investigador','Investigador','agy · Gemini Flash'],['tester','Tester','pi · ada-next']];
-function newOffice(){
-  const body=`<input id="noName" placeholder="Nombre del proyecto (p. ej. Streamia)" maxlength="40">
-    <input id="noDir" placeholder="Carpeta (por defecto ~/nombre)" style="margin-top:8px">
-    ${PERF.map(([k,l,kind],i)=>`<div class="cnt"><span class="k"><span><b style="text-align:left">${l}</b> <small style="color:var(--muted)">${kind}</small></span></span><span><button type="button" data-m="${k}">−</button> <b id="n-${k}">${k==='desarrollador'?1:0}</b> <button type="button" data-p="${k}">+</button></span></div>`).join('')}
+let KINDS=null;
+const DEF_ROWS=[{perfil:'Arquitecto',kind:'claude',model:'opus',n:1},{perfil:'Desarrollador',kind:'opencode',model:'litellm-gateway/ada-next',n:2}];
+function rowHTML(r,i){const K=KINDS||{};const ms=(K[r.kind]?.modelos)||[];
+  return`<div class="frow" data-i="${i}">
+    <input class="fp" value="${esc(r.perfil)}" placeholder="Perfil" maxlength="24" aria-label="Perfil">
+    <select class="fk" aria-label="Tipo de agente">${Object.entries(K).map(([k,v])=>`<option value="${k}"${k===r.kind?' selected':''}>${esc(v.nombre)}</option>`).join('')}</select>
+    <select class="fm" aria-label="Modelo"><option value="">(por defecto)</option>${ms.map(m=>`<option${m===r.model?' selected':''}>${esc(m)}</option>`).join('')}</select>
+    <span class="fn"><button type="button" class="m">−</button><b>${r.n}</b><button type="button" class="p">+</button></span>
+    <button type="button" class="fx" aria-label="Quitar perfil">✕</button></div>`}
+async function newOffice(){
+  if(!KINDS){toast('Cargando tipos de agente y modelos…');try{KINDS=await api('/api/kinds')}catch(_){toast('No se pudieron cargar los modelos',true);return}}
+  let rows=DEF_ROWS.map(r=>({...r}));
+  const body=`<div class="fgrid"><input id="noName" placeholder="Nombre del proyecto (p. ej. Streamia)" maxlength="40"><input id="noDir" placeholder="Carpeta (por defecto ~/nombre)"></div>
+    <div class="fhead"><span>Perfil</span><span>Tipo de agente</span><span>Modelo</span><span>Nº</span><span></span></div>
+    <div id="frows"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px"><button type="button" class="btn" id="addRow">+ Añadir perfil</button><small id="ftot" style="color:var(--muted)"></small></div>
     <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:13px;color:var(--muted)"><input type="checkbox" id="noAuto" style="width:auto"> Permisos automáticos (claude y agy no piden confirmación)</label>`;
-  confirmModal('Nueva oficina','Crea un workspace en herdr con su equipo. Cada agente arranca en su propio panel (unos segundos por agente).',async()=>{
+  $('#modal .card').classList.add('wide');
+  const draw=()=>{$('#frows').innerHTML=rows.map(rowHTML).join('');const t=rows.reduce((a,r)=>a+r.n,0);$('#ftot').textContent=`${t} agente${t===1?'':'s'} · máximo 8`;
+    $$('#frows .frow').forEach(el=>{const i=+el.dataset.i,r=rows[i];
+      el.querySelector('.fp').oninput=e=>r.perfil=e.target.value;
+      el.querySelector('.fk').onchange=e=>{r.kind=e.target.value;r.model='';draw()};
+      el.querySelector('.fm').onchange=e=>r.model=e.target.value;
+      el.querySelector('.p').onclick=()=>{if(r.n<4&&rows.reduce((a,x)=>a+x.n,0)<8){r.n++;draw()}};
+      el.querySelector('.m').onclick=()=>{if(r.n>1){r.n--;draw()}};
+      el.querySelector('.fx').onclick=()=>{rows.splice(i,1);draw()}})};
+  confirmModal('Nueva oficina','Define el equipo: cada fila es un perfil con su tipo de agente, modelo y cuántos. Se crea un workspace en herdr y cada agente arranca en su panel.',async()=>{
+    $('#modal .card').classList.remove('wide');
     const name=$('#noName').value.trim();if(!name){toast('Ponle un nombre',true);return}
-    const equipo={};PERF.forEach(([k])=>equipo[k]=+$('#n-'+k).textContent);
-    try{const r=await api('/api/office',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,cwd:$('#noDir').value.trim()||undefined,equipo,auto:$('#noAuto').checked})});
+    if(rows.some(r=>!r.perfil.trim())){toast('Cada fila necesita un nombre de perfil',true);return}
+    try{const r=await api('/api/office',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,cwd:$('#noDir').value.trim()||undefined,equipo:rows,auto:$('#noAuto').checked})});
       if(!r.ok){toast(r.error||'No se pudo crear',true);return}toast(`Creando “${name}”…`);followJob(r.job,name)}catch(_){toast('No se pudo crear',true)}},body);
-  $$('#mb [data-p]').forEach(b=>b.onclick=()=>{const e=$('#n-'+b.dataset.p);const tot=PERF.reduce((s2,[k])=>s2+ +$('#n-'+k).textContent,0);if(+e.textContent<4&&tot<8)e.textContent=+e.textContent+1});
-  $$('#mb [data-m]').forEach(b=>b.onclick=()=>{const e=$('#n-'+b.dataset.m);if(+e.textContent>0)e.textContent=+e.textContent-1});
+  draw();
+  $('#addRow').onclick=()=>{if(rows.reduce((a,x)=>a+x.n,0)>=8){toast('Máximo 8 agentes por oficina',true);return}rows.push({perfil:'',kind:'opencode',model:'',n:1});draw();$$('#frows .fp').at(-1).focus()};
+  $('#mc').addEventListener('click',()=>$('#modal .card').classList.remove('wide'),{once:true});
   $('#noName').oninput=()=>{$('#noDir').placeholder='~/'+($('#noName').value.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,12)||'nombre')}}
 async function followJob(id,name){let seen=0;
   for(let i=0;i<120;i++){await new Promise(r=>setTimeout(r,1500));let j;try{j=await api('/api/office/job?id='+id)}catch(_){continue}

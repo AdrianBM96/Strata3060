@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Login scrypt + sesion cookie; GET lectura (+SSE) y POST solo con sesion."""
-import base64, hashlib, hmac, json, os, re, secrets, subprocess, sys, threading, time
+import base64, hashlib, hmac, json, os, re, secrets, shlex, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8095
@@ -168,7 +168,43 @@ def state_ws(wid):
     return {"agents": ags, "metrics": {}, "ticker": [], "queue": {"done": 0, "total": 0}, "lock": False, "bench": False,
             "suplencia": False, "herdr": True, "tareas": [], "ws": wid, "updated": time.strftime("%H:%M:%S UTC", time.gmtime())}
 def slug(t): return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")[:12] or "ofi"
-def _crear(jid, name, cwd, equipo, auto):
+KINDS = {"claude": "Claude Code", "opencode": "opencode", "pi": "pi", "ada-cli": "ada-cli", "agy": "Antigravity (agy)"}
+KCACHE = {"at": 0, "data": None}
+def _cmd(args, t=25):
+    env = dict(os.environ, PATH=H("~/.local/bin") + ":/snap/bin:" + os.path.dirname(sys.executable) + ":" + os.environ.get("PATH", ""))
+    for d in (H("~/.nvm/versions/node"),):
+        try: env["PATH"] = ":".join(os.path.join(d, v, "bin") for v in os.listdir(d)) + ":" + env["PATH"]
+        except OSError: pass
+    try: return subprocess.run(args, capture_output=True, text=True, timeout=t, env=env, cwd=H("~")).stdout
+    except Exception: return ""
+def _table(out):
+    res = []
+    for ln in out.splitlines():
+        c = ln.split()
+        if len(c) >= 2 and c[0] not in ("provider",) and not ln.startswith("["): res.append(c[0] + "/" + c[1])
+    return res
+def kinds():
+    if KCACHE["data"] and time.time() - KCACHE["at"] < 600: return KCACHE["data"]
+    d = {"claude": ["opus", "sonnet", "haiku", "fable"],
+         "opencode": [l.strip() for l in _cmd(["opencode", "models"]).splitlines() if "/" in l],
+         "pi": _table(_cmd(["pi", "--list-models"])), "ada-cli": _table(_cmd(["ada-cli", "--list-models"])),
+         "agy": [l.split()[0] for l in _cmd(["agy", "models"]).splitlines() if l and not l.startswith("Fetching")]}
+    KCACHE.update(at=time.time(), data={k: {"nombre": KINDS[k], "modelos": v} for k, v in d.items()}); return KCACHE["data"]
+def _start(nombre, kind, model, pid, cwd, auto):
+    if kind == "ada-cli":
+        cmd = "ada-cli" + (" --model " + shlex.quote(model) if model else "")
+        herdr_out(["pane", "run", pid, cmd], 10)
+        for _ in range(30):
+            time.sleep(2)
+            a = next((x for x in raw_agents() if x.get("pane_id") == pid), None)
+            if a:
+                herdr_out(["agent", "rename", pid, nombre], 10); return "listo"
+        return "ERROR ada-cli no arrancó en su panel"
+    extra = (["--model", model] if model else []) + (["--dangerously-skip-permissions"] if auto and kind in ("claude", "agy") else [])
+    out = herdr_out(["agent", "start", nombre, "--kind", kind, "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 75)
+    if '"interactive_ready":true' in out or '"agent_started"' in out: return "listo"
+    return "espera confirmación en su panel" if "agent_not_ready" in out else "ERROR " + out[-160:]
+def _crear(jid, name, cwd, filas, auto):
     J = JOBS[jid]; log = J["pasos"].append
     try:
         env = "PATH=" + H("~/.local/bin") + ":/snap/bin:/usr/local/bin:/usr/bin:/bin"
@@ -177,7 +213,7 @@ def _crear(jid, name, cwd, equipo, auto):
         wid = r["workspace"]["workspace_id"]; pane = r["root_pane"]["pane_id"]; J["ws"] = wid
         log("Workspace %s creado en %s" % (wid, cwd))
         m = meta(); m[wid] = {"nombre": name, "cwd": cwd, "agentes": []}; save_meta(m)
-        lista = [(rol, n + 1) for rol, k in equipo for n in range(k)]
+        lista = [(f, n + 1) for f in filas for n in range(f["n"])]
         panes = [pane]
         for idx in range(1, len(lista)):
             base = panes[(idx - 1) // 2] if idx > 1 else panes[0]
@@ -185,17 +221,11 @@ def _crear(jid, name, cwd, equipo, auto):
             if not sp: raise RuntimeError("no se pudo dividir el panel %d" % idx)
             panes.append(sp["pane"]["pane_id"])
         time.sleep(1.5)
-        for (rol, n), pid in zip(lista, panes):
-            kind, etiqueta = PERFILES[rol]; nombre = ("%s-%s%d" % (slug(name), rol[:4], n))[:32]
-            args = ["agent", "start", nombre, "--kind", kind, "--pane", pid, "--timeout", "60000"]
-            extra = []
-            if kind == "agy": extra = ["--model", "gemini-3.8-flash-high"] + (["--dangerously-skip-permissions"] if auto else [])
-            if kind == "claude" and auto: extra = ["--dangerously-skip-permissions"]
-            out = herdr_out(args + (["--"] + extra if extra else []), 75)
-            ok = '"agent_started"' in out or '"interactive_ready":true' in out
-            bloq = "agent_not_ready" in out
-            log("%s (%s, %s): %s" % (nombre, etiqueta, kind, "listo" if ok else ("espera confirmación en su panel" if bloq else "ERROR " + out[-160:])))
-            m = meta(); m[wid]["agentes"].append({"name": nombre, "rol": etiqueta, "kind": kind}); save_meta(m)
+        for (f, n), pid in zip(lista, panes):
+            nombre = ("%s-%s%d" % (slug(name)[:10], slug(f["perfil"])[:8], n))[:32]
+            res = _start(nombre, f["kind"], f["model"], pid, cwd, auto)
+            log("%s · %s · %s%s: %s" % (nombre, f["perfil"], f["kind"], (" · " + f["model"]) if f["model"] else "", res))
+            m = meta(); m[wid]["agentes"].append({"name": nombre, "rol": f["perfil"], "kind": f["kind"], "model": f["model"]}); save_meta(m)
         J["estado"] = "hecho"
     except Exception as e:
         J["estado"] = "error"; J["error"] = str(e)[:300]
@@ -208,20 +238,21 @@ def api_office(body):
     cwd = os.path.realpath(H(str(d.get("cwd") or ("~/" + slug(name)))))
     if not (cwd == home or cwd.startswith(home + os.sep)): return 400, {"ok": False, "error": "la carpeta debe estar dentro de tu home"}
     if any(part.startswith(".") for part in cwd[len(home):].split(os.sep) if part): return 400, {"ok": False, "error": "no se permiten carpetas ocultas (agy no las ve)"}
-    equipo = []
-    for rol in PERFILES:
-        try: k = int((d.get("equipo") or {}).get(rol, 0))
-        except Exception: k = 0
-        if k < 0 or k > 4: return 400, {"ok": False, "error": "maximo 4 por perfil"}
-        if k: equipo.append((rol, k))
-    total = sum(k for _, k in equipo)
+    K = kinds(); filas = []
+    for f in (d.get("equipo") or [])[:8]:
+        perfil = str(f.get("perfil") or "").strip()[:24]; kind = str(f.get("kind") or ""); model = str(f.get("model") or "")
+        try: n = int(f.get("n", 1))
+        except Exception: n = 0
+        if not re.match(r"^[\w][\w .\-]{0,23}$", perfil): return 400, {"ok": False, "error": "perfil invalido: " + perfil}
+        if kind not in K: return 400, {"ok": False, "error": "tipo de agente no permitido"}
+        if model and model not in K[kind]["modelos"]: return 400, {"ok": False, "error": "modelo no disponible para " + kind}
+        if not 1 <= n <= 4: return 400, {"ok": False, "error": "de 1 a 4 por perfil"}
+        filas.append({"perfil": perfil, "kind": kind, "model": model, "n": n})
+    total = sum(f["n"] for f in filas)
     if total > 8: return 400, {"ok": False, "error": "maximo 8 agentes por oficina"}
     os.makedirs(cwd, exist_ok=True)
     jid = secrets.token_hex(6); JOBS[jid] = {"estado": "en curso", "pasos": [], "ws": None, "total": total}
-    if total == 0:
-        threading.Thread(target=_crear, args=(jid, name, cwd, [], False), daemon=True).start()
-    else:
-        threading.Thread(target=_crear, args=(jid, name, cwd, equipo, bool(d.get("auto"))), daemon=True).start()
+    threading.Thread(target=_crear, args=(jid, name, cwd, filas, bool(d.get("auto"))), daemon=True).start()
     return 200, {"ok": True, "job": jid}
 def api_send(body):
     global LAST_SEND
@@ -291,6 +322,8 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/state":
             ws = parse_qs(u.query).get("ws", [""])[0]
             self._json(200, state_ws(ws) if ws and re.match(r"^w\d+$", ws) else get_state())
+        elif u.path == "/api/kinds":
+            self._json(200, kinds())
         elif u.path == "/api/office/job":
             j = JOBS.get(parse_qs(u.query).get("id", [""])[0]); self._json(200 if j else 404, j or {"error": "no existe"})
         elif u.path == "/api/log": self._json(200, api_log(q))
