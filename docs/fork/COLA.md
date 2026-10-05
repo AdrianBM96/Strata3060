@@ -103,6 +103,9 @@ ni calidad.
   claro, no gastar en B2.
 - **N21.** Obreros SIEMPRE en segundo plano (background), nunca esperando en primer plano. Si uno se
   cuelga, se mata y se relanza.
+- **N22.** El binario que sirve es `engine/strata` (no `build/strata`); todo A/B con binario se hace ahí
+  (stop-swap-start con md5: en marcha da `Text file busy`). Las env SÍ llegan al engine vía drop-ins.
+  `engine/strata` = prod (da9a7a9b, 0.1.39+adopciones).
 - **C30** (oficina, AMPLIACIÓN UI/UX de Adrián: 16:9 letterbox + 'gira el dispositivo'; panel lateral con
   terminal 30 líneas + envío DIRECTO / VÍA CLAUDE (token POST, límite 3 s, ≤4000 chars, log envíos);
   tablero kanban desde TAREAS.json; pixel font embebida, ≤30 fps, atajos 1-5/T/Esc; capturas 1920×1080 y

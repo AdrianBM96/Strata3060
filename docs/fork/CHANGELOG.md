@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: C28 medido +0% (yo) | C31 obrero | C30 en :8095 | 2026-10-05 01:01 UTC
+ESTADO: C31 tabla lista (yo) | prod restaurada | 2026-10-05 01:22 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -55,6 +55,7 @@ ESTADO: C28 medido +0% (yo) | C31 obrero | C30 en :8095 | 2026-10-05 01:01 UTC
 | 2026-10-04 | C26-bis | bench.py 6+6: B1 −0,16%±1,51, B2 +0,08%±2,91 (IC incluye 0); prod restaurada md5 OK | P08 se queda archivado; METRICAS actualizado (N17) | - | Archivado |
 | 2026-10-04 | C27-AB | FLAGB B1 6+6: −1,25%±1,68 (IC incluye 0, sin B2); perfil FLAGB: waitB 10,2 (no baja de 8-9) | palanca 1 refutada como está; prod restaurada | - | Revisar |
 | 2026-10-05 | C28-ab | P3/P4 off/on: P3 12,8/12,8, P4 18,9/19,0 (+0%): el proto no cambia chunks (techo intacto, sin efecto) | revisar planner (lending real); prod restaurada | - | Revisar |
+| 2026-10-05 | C31-tab | Timeline 850 vent (B1/B2/B3, 0 fallos): d10 ~0,02ms, d21 0,004ms, d32 0, d43 ~0,17ms; viaje+issuer REFUTADO; 8ms solo con fallos | prod restaurada da9a7a9b | - | Falta tráfico con fallos |
 | 2026-10-05 | C30-dep | Oficina en :8095 (local+tailnet 200, v4-fix); N21; C31 creado (obrero) | BLOQUEO resuelto | - | Desplegada |
 | 2026-10-04 | C27-C28 | C27 OK (compila sin lock, A/B motor primero); C28 a desformatear (layer_major.cpp + gancho) | - | - | En curso |
 | 2026-10-04 | N20 | Acelerar: -j12 en crítico sin locks (C27 en marcha), solo target motor, ccache→Adrián, A/B B1 primero | - | - | Vigente |
