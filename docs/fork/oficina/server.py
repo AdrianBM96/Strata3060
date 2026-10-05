@@ -17,7 +17,7 @@ FIXED = ["claude", "opencode2", "tester", "explorer", "suplente"]
 ROLES = {"claude": "Arquitecto · supervisa y lleva la cola", "opencode2": "Dev · ejecuta contratos", "tester": "Carga con motor",
          "explorer": "Investiga hardware", "suplente": "Reserva"}
 COLORS = {"claude": "#8b5cf6", "opencode2": "#22c55e", "tester": "#f59e0b", "explorer": "#3b82f6", "suplente": "#9ca3af"}
-CACHE = {"at": 0.0, "data": None}; SEEN = {}; LAST_AGENTS = set(FIXED); LOGCACHE = {}
+CACHE = {"at": 0.0, "data": None}; SEEN = {}; LAST_AGENTS = set(FIXED)
 LAST_SEND = 0.0; SEND_LOCK = threading.Lock()
 def tailscale_ip():
     try:
@@ -59,8 +59,9 @@ def herdr_out(args, timeout=8):
 def mkagent(name, status, activity, color, role):
     st = "working" if status == "working" else "idle"
     if SEEN.get(name, [None])[0] != st:
-        SEEN[name] = [st, time.strftime("%d %H:%M UTC", time.gmtime())]
-    return {"name": name, "status": st, "activity": activity, "color": color, "role": role, "since": SEEN[name][1]}
+        SEEN[name] = [st, time.strftime("%d %H:%M UTC", time.gmtime()), time.time()]
+    return {"name": name, "status": st, "activity": activity, "color": color, "role": role, "since": SEEN[name][1],
+            "ts": SEEN[name][2]}
 def tasks_list():
     try: return json.loads(read(TAREAS) or "{}").get("tareas", [])
     except Exception: return []
@@ -113,13 +114,10 @@ def valid_agent(agent):
 def api_log(agent):
     if not valid_agent(agent):
         return {"error": "agente desconocido"}
-    now = time.monotonic()
-    if agent in LOGCACHE and now - LOGCACHE[agent][0] < 5: return {"agent": agent, "lines": LOGCACHE[agent][1]}
     out = herdr_out(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "45", "--format", "text"], 10)
     if not out:
         return {"agent": agent, "error": "herdr no responde"}
-    LOGCACHE[agent] = (now, out.strip().splitlines()[-30:])
-    return {"agent": agent, "lines": LOGCACHE[agent][1]}
+    return {"agent": agent, "lines": out.strip().splitlines()[-30:]}
 def api_hilo(agent):
     if not valid_agent(agent):
         return {"error": "agente desconocido"}
