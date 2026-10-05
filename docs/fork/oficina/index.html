@@ -563,7 +563,9 @@ const scene3d=(()=>{
   function hitName(e){const r=R.domElement.getBoundingClientRect();ptr.set((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1);ray.setFromCamera(ptr,cam);
     const hits=ray.intersectObjects([...Object.values(desks).map(d=>d.userData.hit),...Object.values(people).map(p=>p.userData.hit)]);return hits[0]&&hits[0].object.parent.userData.name}
   function pick(e){const n=hitName(e);if(n)select(n)}
-  function hover(e){R.domElement.style.cursor=hitName(e)?'pointer':'default'}
+  let hovered=null;
+  function hover(e){const n=hitName(e)||null;R.domElement.style.cursor=n?'pointer':'default';if(n!==hovered){hovered=n;placeLabels()}}
+  R.domElement.addEventListener('pointerleave',()=>{if(hovered){hovered=null;placeLabels()}});
 
   /* bucle bajo demanda: solo anima si alguien trabaja o el rack está activo */
   let need=true,last=0,running=false;
@@ -592,7 +594,7 @@ const scene3d=(()=>{
   function placeLabels(){
     const box=$('#labels'),w=host.clientWidth,h=host.clientHeight;if(!S)return;
     const items=[];
-    for(const a of S.agents){const p=people[a.name];if(!p)continue;
+    for(const a of S.agents){const p=people[a.name];if(!p||a.name!==hovered)continue;
       p.userData.head.getWorldPosition(v);v.y+=.34;v.project(cam);
       items.push({a,x:(v.x+1)/2*w,y:(1-v.y)/2*h-26})}
     items.sort((p,q)=>q.y-p.y);
@@ -604,7 +606,8 @@ const scene3d=(()=>{
   }
   function bubbles(items){
     const need=pendingAdrian();if(!need.length)return'';
-    const it=items.find(i=>i.a.name==='opencode2')||items[0];if(!it)return'';
+    const p=people.opencode2;if(!p)return'';const w=host.clientWidth,h=host.clientHeight;p.userData.head.getWorldPosition(v);v.y+=.34;v.project(cam);
+    const it={x:(v.x+1)/2*w,y:(1-v.y)/2*h-26};
     return`<div class="bub" data-a="opencode2" style="left:${it.x}px;top:${it.y-8}px"><b>TE NECESITA</b>${esc(need[0].id)} · ${esc(need[0].titulo)}</div>`}
 
   function applyTheme(){const dark=palette();hemi.color.set(theme.sky);hemi.groundColor.set(theme.ground);hemi.intensity=theme.hemiI;sun.intensity=theme.sunI;R.toneMappingExposure=theme.exp;
