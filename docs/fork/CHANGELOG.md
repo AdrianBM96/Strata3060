@@ -102,3 +102,4 @@ ESTADO: CUP fusionando (obrero) | oficina docs | 2026-10-06 07:25 UTC
 | 2026-10-05 | PAUSA | Sesión: ADOPTADO C32 (precarga), C34-parcial (12/12288/4096); DESCARTADO P02/P08/C26/C27/C28/C29/C35/C37/E2/C18; HECHO C19/C22/C23/C24/C33/E1/C30 | prod da9a7a9b, flags limpios, GPU 11,4GB, locks fuera | - | PAUSA |
 | 2026-10-05 | C14a | CARGA + B4 largo: MTP top-128 86,7%, top-256 97,8%, top-384 100% (4.260 routed); B4 630/669 (94%) | dump vía /v1/unload (SIGTERM no vuelca); prod da9a7a9b verificada | - | HECHO+PAUSA |
 | 2026-10-06 | CUP | Tag v0.1.40 (307 commits, +30K/-2K, 274 fich): perf(iq/moe/gr/rope/mtp/verify/quantize), fix, setup-HIP; 6 conflictos (nuestras zonas) a wt-CUP | - | - | Fusionando |
+| 2026-10-06 | CUP-ab | Bit-bit OK (ruido); B1/B2/P3/P4 nulos; frío −0,5/−0,7%; aceptación igual; prod intacta | sin motivo perf para desplegar; a tu OK | - | ESPERA OK |
