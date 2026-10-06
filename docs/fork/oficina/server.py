@@ -14,19 +14,40 @@ ENVIADOS = H("~/explorer/ENVIADOS.md"); SUPLENCIA = H("~/.cache/strata-watchdog/
 LOG_UP = H("~/.cache/strata-upstream/log"); LOG_WD = H("~/.cache/strata-watchdog/log")
 PWF = os.environ.get("STRATA_OFICINA_PW", H("~/.config/strata-oficina/password.scrypt"))
 ENVLOG = H("~/.cache/strata-oficina/envios.log"); B64 = base64.b64decode
-SESSF = H("~/.cache/strata-oficina/sesiones.json"); SELOCK = threading.Lock(); FAILS = {}
+SESSF = H("~/.cache/strata-oficina/sesiones.json"); SELOCK = threading.RLock(); FAILS = {}; FLOCK = threading.Lock()
+# T7 (locks): `SELOCK` protege `SESS` y su fichero. `FLOCK` protege `FAILS`: podar, comprobar el
+# limite y registrar un fallo son una sola lectura-modificacion-escritura; sin lock dos hilos cuentan
+# números distintos y un fallo registrado se pierde.
 try: SESS = {k: v for k, v in json.loads(open(SESSF).read()).items() if v > time.time()}
 except Exception: SESS = {}
+def _atomic(path, texto):
+    """Escritura atomica (T7): temp en el mismo directorio, mode 0600, y `os.replace` publica.
+
+    Abrir el fichero con `"w"` trunca antes de escribir: un crash a mitad deja `sesiones.json` o
+    `oficinas.json` vacio o truncado. Con `os.replace` el lector ve el fichero viejo completo o el
+    nuevo completo, nunca un fichero a medias.
+    """
+    tmp = path + ".tmp"
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f: f.write(texto)
+    os.replace(tmp, path)
 def save_sess():
     try:
         os.makedirs(os.path.dirname(SESSF), exist_ok=True)
-        with open(os.open(SESSF, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f: json.dump(SESS, f)
+        with SELOCK: _atomic(SESSF, json.dumps(SESS))   # T7: SELOCK y publicacion atomica
     except OSError: pass
 FIXED = ["claude", "opencode2", "tester", "explorer", "suplente"]
 ROLES = {"claude": "Arquitecto · supervisa y lleva la cola", "opencode2": "Dev · ejecuta contratos", "tester": "Carga con motor", "explorer": "Investiga hardware", "suplente": "Reserva"}
 COLORS = {"claude": "#8b5cf6", "opencode2": "#22c55e", "tester": "#f59e0b", "explorer": "#3b82f6", "suplente": "#9ca3af"}
 CACHE = {"at": 0.0, "data": None}; SEEN = {}; LAST_AGENTS = set(FIXED)
 LAST_SEND = 0.0; SEND_LOCK = threading.Lock()
+# T7: `STLOCK` es el lock del rebuild: protege `CACHE` y todo lo que se escribe dentro de una
+# construccion (`SEEN`, `SNAP`, `LAST_AGENTS`). Es RLock porque `mkagent` lo toma desde `build_state`
+# (ya dentro del lock) y desde `state_ws` (solo).
+# `MLOCK` protege `MCACHE`, `HOMES` y `AGCACHE` (las maquinas y su mapa de agentes); es RLock porque
+# `rhome` -> `ssh_run` -> `target` -> `machines` vuelve a entrar. `KLOCK` protege `KCACHE`.
+# Orden de adquisicion: `MLOCK` -> `STLOCK` (solo en `agmap`) y `KLOCK` -> `MLOCK` (solo en `kinds`
+# remoto). `STLOCK` nunca toma `MLOCK` ni `KLOCK`, asi que no hay ciclo y no hay deadlock.
+STLOCK = threading.RLock(); MLOCK = threading.RLock(); KLOCK = threading.Lock()
 def tailscale_ip():
     try: return re.search(r"(\d+\.\d+\.\d+\.\d+)", subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5).stdout).group(1)
     except Exception: return "100.79.41.59"
@@ -49,8 +70,10 @@ def pw_ok(pw):
         return False
     return hmac.compare_digest(h, B64(hb))
 def limited(ip):
-    n = time.time(); FAILS[ip] = [t for t in FAILS.get(ip, []) if n - t < 900]
-    return len(FAILS[ip]) >= 5
+    n = time.time()
+    with FLOCK:   # T7: podar y contar bajo un solo lock
+        FAILS[ip] = [t for t in FAILS.get(ip, []) if n - t < 900]
+        return len(FAILS[ip]) >= 5
 def last_line(path): txt = read(path).strip().splitlines(); return txt[-1].strip() if txt else ""
 def estado_segments():
     segs = []
@@ -177,8 +200,11 @@ ACTS = {"working": "trabajando", "blocked": "esperando confirmación", "done": "
 def estado_real(st): return st if st in ESTADOS else "unknown"
 def mkagent(name, status, activity, color, role, h=None):   # h: dict del agente en `agent list` (None si no esta)
     st = estado_real(status)
-    if SEEN.get(name, [None])[0] != st: SEEN[name] = [st, time.strftime("%d %H:%M UTC", time.gmtime()), time.time()]
-    a = {"name": name, "status": st, "activity": activity, "color": color, "role": role, "since": SEEN[name][1], "ts": SEEN[name][2]}
+    with STLOCK:   # T7: `SEEN` se escribe dentro del lock del rebuild: una transicion por cambio de estado,
+                   # no dos. `state_ws` tambien pasa por aqui, sin `build_state`, y toma el mismo lock.
+        if SEEN.get(name, [None])[0] != st: SEEN[name] = [st, time.strftime("%d %H:%M UTC", time.gmtime()), time.time()]
+        since, ts = SEEN[name][1], SEEN[name][2]
+    a = {"name": name, "status": st, "activity": activity, "color": color, "role": role, "since": since, "ts": ts}
     for k in CAMPOS_H: a[k] = h.get(k) if h else None   # opcionales por agente: None si Herdr no los trae
     return a
 def tasks_list():
@@ -225,11 +251,15 @@ def build_state():
             "herdr": bool(statuses), "tareas": tasks_list(), "updated": time.strftime("%H:%M:%S UTC", time.gmtime())}
 def get_state():
     interval = 30 if os.path.exists(BENCH) else 5
-    if CACHE["data"] is None or time.monotonic() - CACHE["at"] >= interval:
-        SNAP["ttl"] = interval   # T6: el snapshot envejece igual que el estado que construye
-        CACHE["data"] = build_state(); CACHE["at"] = time.monotonic(); CACHE["data"]["interval"] = interval
-    return CACHE["data"]
-def valid_agent(agent): get_state(); return bool(re.match(r"^[\w][\w.\-]{0,31}$", agent or "")) and (agent in LAST_AGENTS or agent in agmap())
+    with STLOCK:   # T7: un solo hilo construye por intervalo; los demas leen lo publicado. Antes era
+                   # check-then-act: N hilos SSE y de peticion entraban todos a `build_state`.
+        if CACHE["data"] is None or time.monotonic() - CACHE["at"] >= interval:
+            SNAP["ttl"] = interval   # T6: el snapshot envejece igual que el estado que construye
+            nuevo = build_state(); nuevo["interval"] = interval   # T7: `interval` antes de publicar
+            CACHE["data"] = nuevo; CACHE["at"] = time.monotonic()   # publicar con una sola asignacion
+        return CACHE["data"]   # el dict publicado no se muta nunca: los hilos SSE lo iteran sin riesgo
+def valid_agent(agent):   # `LAST_AGENTS` se reasocia entero en `build_state`, nunca se muta en sitio
+    get_state(); return bool(re.match(r"^[\w][\w.\-]{0,31}$", agent or "")) and (agent in LAST_AGENTS or agent in agmap())
 def api_log(agent):
     if not valid_agent(agent): return {"error": "agente desconocido"}
     r = herdr_cmd(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "45", "--format", "text"], 15, agmap().get(agent))
@@ -249,15 +279,43 @@ def api_hilo(agent):
     men = [short_row(r) for r in table_rows(60) if agent.lower() in r.lower()][-8:]
     return {"agent": agent, "envios": env[-10:], "menciones": men}
 OFIMETA = H("~/.cache/strata-oficina/oficinas.json")
+MFLOCK = threading.Lock()   # T7: `oficinas.json` (antes read-modify-write sin lock y truncate-and-write)
 PERFILES = {"arquitecto": ("claude", "Arquitecto"), "desarrollador": ("opencode", "Desarrollador"),
             "investigador": ("agy", "Investigador"), "tester": ("pi", "Tester")}
 JOBS = {}
+JLOCK = threading.Lock()   # T7: `JOBS`: el hilo de `_crear` escribe y el handler lee una copia estable
+def job_step(jid, s):
+    with JLOCK:
+        if jid in JOBS: JOBS[jid]["pasos"].append(s)
+def job_set(jid, k, v):
+    with JLOCK:
+        if jid in JOBS: JOBS[jid][k] = v
+def job_view(jid):
+    """Copia estable del job para serializar (T7): `json.dumps` sobre la lista viva que crece es la misma
+    clase de crash que iterar el estado en el SSE. Las claves que lee index.html (`pasos`, `estado`,
+    `error`, `ws`) se conservan tal cual.
+    """
+    with JLOCK:
+        j = JOBS.get(jid)
+        return {k: (list(v) if isinstance(v, list) else v) for k, v in j.items()} if j else None
 def meta():
+    with MFLOCK: return _meta()
+def meta_edit(fn):
+    """Read-modify-write de `oficinas.json` bajo MFLOCK y con una sola escritura atomica (T7).
+
+    `meta()` y `save_meta()` por separado no sirven: dos hilos que crean y borran a la vez se pierden
+    oficinas. `fn` muta el dict y el resultado se publica entero.
+    """
+    with MFLOCK:
+        m = _meta(); fn(m); _publica_meta(m)
+def save_meta(m):
+    with MFLOCK: _publica_meta(m)   # publicar un dict completo, atomico y bajo el lock
+def _meta():
     try: return json.loads(read(OFIMETA) or "{}")
     except Exception: return {}
-def save_meta(m):
+def _publica_meta(m):
     os.makedirs(os.path.dirname(OFIMETA), exist_ok=True)
-    with open(OFIMETA, "w") as f: json.dump(m, f, ensure_ascii=False)
+    _atomic(OFIMETA, json.dumps(m, ensure_ascii=False))
 def hj(args, timeout=15, mach=None):
     r = herdr_cmd(args, timeout, mach)
     return r["res"] if isinstance(r["res"], dict) else None
@@ -269,30 +327,33 @@ def hj(args, timeout=15, mach=None):
 # `SNAP` guarda el snapshot por maquina con la TTL del intervalo del ciclo: el snapshot que construyo el
 # estado es el mismo que leen `api_offices`, `agmap` y `strata_ws`, asi cada target se sondea una sola vez
 # por ciclo. Se cachea tambien la respuesta vacia (herdr no responde) para no repetir un subproceso que ya
-# se sabe muerto; el estado envejece igual que hoy. Sin lock: los locks y el rebuild atomico son T7.
+# se sabe muerto; el estado envejece igual que hoy. T7: `SNAP` vive bajo `STLOCK`, el mismo lock del
+# rebuild, asi el snapshot que construyo el estado es el que se publica con el estado.
 SNAP = {"data": {}, "ttl": 5}
 def fld(snap, k):
     """Campo del snapshot como lista; [] si herdr no lo trajo. Nunca un crash por un campo ausente."""
     v = snap.get(k) if isinstance(snap, dict) else None
     return v if isinstance(v, list) else []
 def snapshot(mach=None, timeout=15):
-    c = SNAP["data"].get(mach)
-    if c and time.monotonic() - c[0] < SNAP["ttl"]: return c[1]
-    r = hj(["api", "snapshot"], timeout, mach)
-    s = r.get("snapshot") if isinstance(r, dict) else None
-    s = s if isinstance(s, dict) else {}
-    SNAP["data"][mach] = (time.monotonic(), s)
-    return s
+    with STLOCK:   # T7: leer y escribir `SNAP` es una sola operacion bajo el lock del rebuild
+        c = SNAP["data"].get(mach)
+        if c and time.monotonic() - c[0] < SNAP["ttl"]: return c[1]
+        r = hj(["api", "snapshot"], timeout, mach)
+        s = r.get("snapshot") if isinstance(r, dict) else None
+        s = s if isinstance(s, dict) else {}
+        SNAP["data"][mach] = (time.monotonic(), s)   # se publica la pareja entera, de una
+        return s
 def raw_agents(mach=None, timeout=15):
     """Agentes del snapshot de la maquina: la misma lista que daba `agent list`, en la misma forma."""
     return fld(snapshot(mach, timeout), "agents")
 MCACHE = {"at": 0, "data": []}; HOMES = {}; AGCACHE = {"at": 0, "data": {}}
 def machines():
     """Máquinas remotas guardadas en herdr (las habilitadas). bazzite es la local."""
-    if time.time() - MCACHE["at"] < 300: return MCACHE["data"]
-    try: ms = [m for m in json.loads(herdr_out(["machine", "list", "--json"], 10)) if m.get("enabled")]
-    except Exception: ms = []
-    MCACHE.update(at=time.time(), data=[{"label": m["label"], "target": m["target"]} for m in ms]); return MCACHE["data"]
+    with MLOCK:   # T7: `MCACHE` se publica entero (`data` se reasocia, nunca se muta en sitio)
+        if time.time() - MCACHE["at"] < 300: return MCACHE["data"]
+        try: ms = [m for m in json.loads(herdr_out(["machine", "list", "--json"], 10)) if m.get("enabled")]
+        except Exception: ms = []
+        MCACHE.update(at=time.time(), data=[{"label": m["label"], "target": m["target"]} for m in ms]); return MCACHE["data"]
 def target(mach): return next((m["target"] for m in machines() if m["label"] == mach), None)
 def ssh_run(mach, cmd, t=30, inp=None):
     tg = target(mach)
@@ -301,17 +362,19 @@ def ssh_run(mach, cmd, t=30, inp=None):
     try: return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", tg, full], capture_output=True, text=True, timeout=t, input=inp).stdout
     except Exception: return ""
 def rhome(mach):
-    if mach not in HOMES: HOMES[mach] = ssh_run(mach, "echo $HOME", 15).strip()
-    return HOMES[mach]
+    with MLOCK:   # T7: `HOMES` por maquina; RLock porque `ssh_run` -> `target` -> `machines` reentra
+        if mach not in HOMES: HOMES[mach] = ssh_run(mach, "echo $HOME", 15).strip()
+        return HOMES[mach]
 def split_id(oid): return tuple(oid.split(":", 1)) if ":" in oid else (None, oid)
 def agmap():
     """nombre de agente -> máquina (None = bazzite)."""
-    if time.time() - AGCACHE["at"] < 20: return AGCACHE["data"]
-    d = {a.get("name"): None for a in raw_agents() if a.get("name")}
-    for m in machines():
-        for a in raw_agents(m["label"]):
-            if a.get("name") and a["name"] not in d: d[a["name"]] = m["label"]
-    AGCACHE.update(at=time.time(), data=d); return d
+    with MLOCK:   # T7: `AGCACHE` bajo `MLOCK`; `raw_agents` toma `STLOCK` dentro (MLOCK -> STLOCK)
+        if time.time() - AGCACHE["at"] < 20: return AGCACHE["data"]
+        d = {a.get("name"): None for a in raw_agents() if a.get("name")}
+        for m in machines():
+            for a in raw_agents(m["label"]):
+                if a.get("name") and a["name"] not in d: d[a["name"]] = m["label"]
+        AGCACHE.update(at=time.time(), data=d); return d
 def strata_ws(ws, raw=None):
     for w in ws:
         if w.get("label") == "Strata3060": return w.get("workspace_id")
@@ -373,22 +436,23 @@ def _table(out):
         if len(c) >= 2 and c[0] not in ("provider",) and not ln.startswith("["): res.append(c[0] + "/" + c[1])
     return res
 def kinds(mach=None):
-    c = KCACHE.get(mach)
-    if c and time.time() - c[0] < 600: return c[1]
-    if not mach:
-        d = {"claude": ["opus", "sonnet", "haiku", "fable"],
-             "opencode": [l.strip() for l in _cmd(["opencode", "models"]).splitlines() if "/" in l],
-             "pi": _table(_cmd(["pi", "--list-models"])), "ada-cli": _table(_cmd(["ada-cli", "--list-models"])),
-             "agy": [l.split()[0] for l in _cmd(["agy", "models"]).splitlines() if l and not l.startswith("Fetching")]}
-    else:   # remoto: solo los tipos instalados allí; ada-cli queda fuera (herdr no lo detecta fuera del home)
-        have = set(ssh_run(mach, "for c in claude opencode pi agy; do command -v $c >/dev/null && echo $c; done", 20).split())
-        d = {}
-        if "claude" in have: d["claude"] = ["opus", "sonnet", "haiku", "fable"]
-        if "opencode" in have: d["opencode"] = [l.strip() for l in ssh_run(mach, "cd ~ && opencode models", 40).splitlines() if "/" in l]
-        if "pi" in have: d["pi"] = _table(ssh_run(mach, "pi --list-models 2>&1", 40))
-        if "agy" in have: d["agy"] = [l.split()[0] for l in ssh_run(mach, "agy models 2>&1", 40).splitlines() if l and not l.startswith("Fetching")]
-    data = {k: {"nombre": KINDS[k], "modelos": v} for k, v in d.items()}
-    KCACHE[mach] = (time.time(), data); return data
+    with KLOCK:   # T7: `KCACHE` por maquina; la pareja (time, data) se publica entera
+        c = KCACHE.get(mach)
+        if c and time.time() - c[0] < 600: return c[1]
+        if not mach:
+            d = {"claude": ["opus", "sonnet", "haiku", "fable"],
+                 "opencode": [l.strip() for l in _cmd(["opencode", "models"]).splitlines() if "/" in l],
+                 "pi": _table(_cmd(["pi", "--list-models"])), "ada-cli": _table(_cmd(["ada-cli", "--list-models"])),
+                 "agy": [l.split()[0] for l in _cmd(["agy", "models"]).splitlines() if l and not l.startswith("Fetching")]}
+        else:   # remoto: solo los tipos instalados allí; ada-cli queda fuera (herdr no lo detecta fuera del home)
+            have = set(ssh_run(mach, "for c in claude opencode pi agy; do command -v $c >/dev/null && echo $c; done", 20).split())
+            d = {}
+            if "claude" in have: d["claude"] = ["opus", "sonnet", "haiku", "fable"]
+            if "opencode" in have: d["opencode"] = [l.strip() for l in ssh_run(mach, "cd ~ && opencode models", 40).splitlines() if "/" in l]
+            if "pi" in have: d["pi"] = _table(ssh_run(mach, "pi --list-models 2>&1", 40))
+            if "agy" in have: d["agy"] = [l.split()[0] for l in ssh_run(mach, "agy models 2>&1", 40).splitlines() if l and not l.startswith("Fetching")]
+        data = {k: {"nombre": KINDS[k], "modelos": v} for k, v in d.items()}
+        KCACHE[mach] = (time.time(), data); return data
 def _start(nombre, kind, model, pid, cwd, auto, mach=None):
     if kind == "ada-cli":   # en su panel, `pi` es un enlace a ada-cli (ADA_PATH), así herdr lo reconoce como pi
         extra = ["--model", model] if model else []
@@ -418,15 +482,15 @@ def oc_config(nombre, model, mach=None):
     with open(f, "w") as fh: json.dump({"$schema": "https://opencode.ai/config.json", "model": model}, fh)
     return f
 def _crear(jid, name, cwd, filas, auto, mach=None):
-    J = JOBS[jid]; log = J["pasos"].append
+    log = lambda s: job_step(jid, s)   # T7: `JOBS[jid]["pasos"]` se escribe bajo `JLOCK`
     try:
         env = "PATH=" + ((rhome(mach) + "/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin") if mach else (H("~/.local/bin") + ":/snap/bin:/usr/local/bin:/usr/bin:/bin"))
         r = hj(["workspace", "create", "--cwd", cwd, "--label", name, "--no-focus", "--env", env], 30, mach)
         if not r: raise RuntimeError("herdr no pudo crear el workspace en " + (mach or "bazzite"))
-        wid = r["workspace"]["workspace_id"]; pane = r["root_pane"]["pane_id"]; oid = (mach + ":" + wid) if mach else wid; J["ws"] = oid
+        wid = r["workspace"]["workspace_id"]; pane = r["root_pane"]["pane_id"]; oid = (mach + ":" + wid) if mach else wid; job_set(jid, "ws", oid)
         log("Workspace %s creado en %s:%s" % (wid, mach or "bazzite", cwd))
-        m = meta(); m[oid] = {"nombre": name, "cwd": cwd, "maquina": mach or "bazzite", "agentes": []}; save_meta(m); wid = oid
-        SNAP["data"].pop(mach, None)   # T6: la oficina creada tiene que aparecer en la siguiente lectura, no cacheada hasta el proximo ciclo
+        meta_edit(lambda m: m.update({oid: {"nombre": name, "cwd": cwd, "maquina": mach or "bazzite", "agentes": []}}))   # T7: read-modify-write bajo `MFLOCK`
+        with STLOCK: SNAP["data"].pop(mach, None)   # T6: la oficina creada tiene que aparecer en la siguiente lectura, no cacheada hasta el proximo ciclo
         lista = [(f, n + 1, ("%s-%s%d" % (slug(name)[:10], slug(f["perfil"])[:8], n + 1))[:32]) for f in filas for n in range(f["n"])]
         log("Panel %s: consola de la oficina" % pane)
         allp = [pane]; panes = []
@@ -441,10 +505,10 @@ def _crear(jid, name, cwd, filas, auto, mach=None):
         for (f, n, nombre), pid in zip(lista, panes):
             res = _start(nombre, f["kind"], f["model"], pid, cwd, auto, mach)
             log("%s · %s · %s%s: %s" % (nombre, f["perfil"], f["kind"], (" · " + f["model"]) if f["model"] else "", res))
-            m = meta(); m[wid]["agentes"].append({"name": nombre, "rol": f["perfil"], "kind": f["kind"], "model": f["model"]}); save_meta(m)
-        J["estado"] = "hecho"
+            meta_edit(lambda m, ag={"name": nombre, "rol": f["perfil"], "kind": f["kind"], "model": f["model"]}: m[wid]["agentes"].append(ag))
+        job_set(jid, "estado", "hecho")
     except Exception as e:
-        J["estado"] = "error"; J["error"] = str(e)[:300]
+        job_set(jid, "estado", "error"); job_set(jid, "error", str(e)[:300])
 def api_office(body):
     try: d = json.loads(body[:4096])
     except Exception: return 400, {"ok": False, "error": "JSON invalido"}
@@ -479,7 +543,8 @@ def api_office(body):
     if total > 8: return 400, {"ok": False, "error": "maximo 8 agentes por oficina"}
     if mach: ssh_run(mach, "mkdir -p " + shlex.quote(cwd), 15)
     else: os.makedirs(cwd, exist_ok=True)
-    jid = secrets.token_hex(6); JOBS[jid] = {"estado": "en curso", "pasos": [], "ws": None, "total": total}
+    jid = secrets.token_hex(6)
+    with JLOCK: JOBS[jid] = {"estado": "en curso", "pasos": [], "ws": None, "total": total}   # T7: publicar el job bajo el lock
     threading.Thread(target=_crear, args=(jid, name, cwd, filas, bool(d.get("auto")), mach), daemon=True).start()
     return 200, {"ok": True, "job": jid}
 def api_send(body):
@@ -533,8 +598,9 @@ def api_office_delete(body):
     r = herdr_cmd(["workspace", "close", wid], 20, mach)
     e = herdr_error(r)
     if e: return 502, {"ok": False, "error": e, "code": r["code"] or "no_response"}   # la meta solo se quita si herdr cerró de verdad
-    m = meta(); m.pop(oid, None); save_meta(m); AGCACHE["at"] = 0
-    SNAP["data"].pop(mach, None)   # T6: la oficina borrada no puede seguir saliendo del snapshot cacheado
+    meta_edit(lambda m: m.pop(oid, None))   # T7: quitar la oficina bajo `MFLOCK`, con publicacion atomica
+    with MLOCK: AGCACHE["at"] = 0   # el mapa de agentes envejece: el agente borrado no puede seguir siendo valido
+    with STLOCK: SNAP["data"].pop(mach, None)   # T6: la oficina borrada no puede seguir saliendo del snapshot cacheado
     return 200, {"ok": True, "output": r["out"][-200:]}
 with open(os.path.join(HERE, "index.html"), "rb") as f:
     INDEX = f.read()
@@ -573,7 +639,7 @@ class Handler(BaseHTTPRequestHandler):
             mq = parse_qs(u.query).get("m", ["bazzite"])[0]
             self._json(200, kinds(None if mq == "bazzite" else mq) if mq == "bazzite" or target(mq) else {})
         elif u.path == "/api/office/job":
-            j = JOBS.get(parse_qs(u.query).get("id", [""])[0]); self._json(200 if j else 404, j or {"error": "no existe"})
+            j = job_view(parse_qs(u.query).get("id", [""])[0]); self._json(200 if j else 404, j or {"error": "no existe"})   # T7: copia estable, no la estructura viva
         elif u.path == "/api/log": self._json(200, api_log(q))
         elif u.path == "/api/hilo": self._json(200, api_hilo(q))
         elif u.path == "/api/offices":
@@ -607,13 +673,13 @@ class Handler(BaseHTTPRequestHandler):
             if limited(ip):
                 self._json(429, {"ok": False, "error": "demasiados intentos"})
             elif pw_ok(d.get("password")):
-                FAILS.pop(ip, None)
+                with FLOCK: FAILS.pop(ip, None)   # T7: un acierto limpia la IP bajo el lock de `FAILS`
                 sid = secrets.token_urlsafe(32)
                 with SELOCK: SESS[sid] = time.time() + 2592000; save_sess()
                 self._send(200, b'{"ok": true}', "application/json",
                             "sid=" + sid + "; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict")
             else:
-                FAILS.setdefault(ip, []).append(time.time())
+                with FLOCK: FAILS.setdefault(ip, []).append(time.time())   # T7: registrar el fallo y el limite comparten lock
                 self._json(403, {"ok": False, "error": "password"})
         elif p.startswith("/api/") and not sess_ok(self.headers): self._json(401, {"ok": False, "error": "login"})
         elif p == "/api/send": self._json(*api_send(body))

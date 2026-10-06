@@ -26,12 +26,18 @@ que viajan por agente: `pane_id`, `focused`, `interactive_ready`, `completion_se
 `test_agente_sin_name_se_omite`, `test_state_ws_remota_conserva_el_bloqueado`) afirman hoy el
 contrato nuevo, no el colapso.
 
+T7 (locks y rebuild atómico) añade la sección `T7: locks, rebuild atómico y escrituras atómicas`:
+13 tests de concurrency con barrier, sin sleeps como aserción. RED observado antes del fix:
+`11 failed, 106 passed` (faltaban `STLOCK`/`MLOCK`/`KLOCK`/`FLOCK`/`JLOCK`/`MFLOCK`, `job_view`,
+`meta_edit` y la escritura atómica con `os.replace`).
+
 Las formas verificadas contra el binario herdr 0.9.3 estan en `fixtures/` (ver README.md).
 """
 from __future__ import annotations
-import json
+import json, threading, time
 from pathlib import Path
 
+import pytest
 from stub_herdr import FIXTURES, STATUSES
 
 CAMPOS_AGENTE = {"agent", "agent_status", "completion_seq", "cwd", "focused", "foreground_cwd",
@@ -1207,3 +1213,296 @@ def test_office_delete_no_quita_la_meta_si_herdr_fallo(server):
     assert code == 502
     assert oid in server.mod.meta(), "la meta se quito aunque herdr no cerro el workspace"
     assert server.mod.meta()[oid].get("cwd") == "/Users/x/of9"
+
+# ---------- T7: locks, rebuild atómico y escrituras atómicas ----------
+#
+# `server.py` es un `ThreadingHTTPServer` (server.py:626): un hilo por conexión, más el bucle SSE de
+# `/api/events` y los hilos daemon de `_crear`. Todos comparten `CACHE`, `SEEN`, `SNAP`, `MCACHE`,
+# `HOMES`, `AGCACHE`, `KCACHE`, `FAILS`, `JOBS` y `oficinas.json`. La suite afirma el comportamiento,
+# no la forma del lock: los locks se ven en el código y los review focuses los verifican.
+#
+# Los helpers de concurrency no usan sleeps como aserción: un barrier pone los hilos en el mismo punto
+# y el margen de `join` es cota superior, no temporización. Las aserciones dentro de un hilo no
+# llegan a pytest, así que `_lanza` recoge los errores y se afirman después del join.
+
+def _lanza(pares, margen=30.0):
+    """Lanza N hilos por función con un barrier común; devuelve los errores observados.
+
+    Si un hilo no sale en su `join`, se registra como `hilo vivo`: es la señal del deadlock, que no
+    se detecta con `join()` sin margen.
+    """
+    n = sum(c for _, c in pares)
+    bar = threading.Barrier(n)
+    errs = []
+    def env(f):
+        try:
+            bar.wait(timeout=10)
+            f()
+        except Exception as e:
+            errs.append("%s: %s" % (type(e).__name__, e))
+    ts = [threading.Thread(target=env, args=(f,), daemon=True) for f, c in pares for _ in range(c)]
+    for t in ts: t.start()
+    for t in ts:
+        t.join(margen)
+        if t.is_alive(): errs.append("hilo vivo tras %s s: posible deadlock" % margen)
+    return errs
+
+
+def _fallo_login(server, ip):
+    """Lo que hace `/api/login` con password mala (`server.py:616`): registrar el fallo y comprobar el límite."""
+    with server.mod.FLOCK: server.mod.FAILS.setdefault(ip, []).append(time.time())
+    return server.mod.limited(ip)
+
+
+def test_get_state_frio_lanza_un_solo_snapshot(server, monkeypatch):
+    """T7: `get_state` es check-then-act (server.py:228-230). 8 hilos fríos entraban todos y cada uno
+    construía el estado, con su subproceso `api snapshot` en el límite de la cache. Con el lock de
+    rebuild construye uno y los demás leen lo publicado.
+
+    Se cuentan los dos: las construcciones de estado (la carrera) y los subprocesos `api snapshot` del
+    stub (lo que compite con la medición de la RTX 3060).
+    """
+    builds = []
+    real = server.mod.build_state
+    monkeypatch.setattr(server.mod, "build_state", lambda: (builds.append(1), real())[1])
+    res = []
+    def h(): res.append(server.get_state())
+    errs = _lanza([(h, 8)])
+    assert errs == []
+    assert len(res) == 8
+    assert len(builds) == 1, "%d builds concurrentes para un solo ciclo" % len(builds)
+    assert len(_snaps(server, None)) == 1            # un solo subproceso para los 8 hilos
+    assert all(r is res[0] for r in res)             # todos leen el mismo estado publicado
+    assert all(r["interval"] == 5 for r in res)      # y publicado completo: `interval` está
+
+
+def test_el_dict_publicado_no_se_mutan_despues(server, monkeypatch):
+    """T7: `CACHE["data"] = build_state()` y `CACHE["data"]["interval"] = interval` son dos escrituras
+    (server.py:230): el dict ya es visible para los hilos SSE sin `interval` y recibe una clave nueva
+    mientras se itera para el diff (`server.py:418`), que es la ventana de
+    `RuntimeError: dictionary changed size during iteration`.
+
+    Se observa en el instante de la publicación: el dict devuelto por `build_state` registra toda
+    escritura que ocurra cuando ya está publicado. La forma atómica fija `interval` antes de publicar.
+    """
+    real = server.mod.build_state
+    mutados = []
+    class State(dict):
+        def __setitem__(self, k, v):
+            dict.__setitem__(self, k, v)
+            if server.mod.CACHE["data"] is self: mutados.append(k)
+    monkeypatch.setattr(server.mod, "build_state", lambda: State(real()))
+    st = server.get_state()
+    assert st is server.mod.CACHE["data"]
+    assert mutados == [], "el estado publicado recibió '%s' después de publicar" % (mutados[0] if mutados else "")
+    assert "interval" in st and st["interval"] == 5
+
+
+def test_consumidor_sse_no_reventa_mientras_se_reconstruye(server):
+    """TRIANGULAR: un consumidor SSE itera el estado publicado (`server.py:418`) mientras otros hilos
+    enfrian la cache y reconstruyen. Ningún lector ve un estado sin `interval` ni un dict que cambia
+    de tamaño en iteración."""
+    vistos = []
+    def lector():
+        for _ in range(40):
+            st = server.get_state()
+            assert "interval" in st, "estado publicado sin interval"
+            vistos.append(json.dumps({k: v for k, v in st.items() if k != "updated"}, ensure_ascii=False))
+    def enfriador():
+        for _ in range(40):
+            server.mod.CACHE.update(data=None, at=0.0)
+    errs = _lanza([(lector, 4), (enfriador, 2)])
+    assert errs == []
+    assert len(vistos) == 160
+    assert all(json.loads(v) for v in vistos)
+
+
+def test_mkagent_una_transicion_por_agente_bajo_builds_concurrentes(server, monkeypatch):
+    """T7: `SEEN` se escribe sin lock (server.py:180) y el check-then-act es de dos pasos. Dos builds
+    concurrentes sobre el mismo agente ven el `SEEN` vacío y escriben dos transiciones para un solo
+    cambio: `since`/`ts` que lee index.html queda duplicado.
+
+    La ventana se agranda dentro de la lectura de `SEEN` (el sleep es la ventana, la aserción es el
+    solapamiento registrado, no un tiempo esperado). Con el lock de rebuild ningún hilo entra dos veces
+    en el check, así que la transición se escribe una sola vez.
+    """
+    dentro, solape, escritos = [], [], []
+    class Seen(dict):
+        def get(self, k, d=None):
+            dentro.append(len(dentro) + 1)
+            solape.append(max(dentro))
+            time.sleep(0.05)                     # agranda la ventana del check-then-act
+            v = dict.get(self, k, d)
+            dentro.pop()
+            return v
+        def __setitem__(self, k, v):
+            dict.__setitem__(self, k, v)
+            escritos.append(tuple(v))
+    monkeypatch.setattr(server.mod, "SEEN", Seen())
+    r = []
+    def h(): r.append(server.mod.mkagent("explorer", "blocked", "actividad", "#fb7185", "rol"))
+    errs = _lanza([(h, 4)])
+    assert errs == []
+    assert len(escritos) == 1, "transición duplicada en SEEN: %s escrituras" % len(escritos)
+    assert max(solape) == 1, "dos hilos dentro del check-then-act a la vez"
+    assert len(r) == 4 and all(a["since"] == r[0]["since"] and a["ts"] == r[0]["ts"] for a in r)
+
+
+def test_mkagent_registra_las_dos_transiciones_serializadas(server):
+    """TRIANGULAR: con los hilos serializados por el lock, cada cambio real de estado deja su entrada,
+    y un cambio repetido no reescribe la transición."""
+    server.mod.SEEN.clear()
+    a, b, c = (server.mod.mkagent("agy-obrero", s, "act", "#fb7185", "rol")
+               for s in ("blocked", "blocked", "working"))
+    assert a["ts"] == b["ts"] and c["ts"] >= b["ts"]
+    assert server.mod.SEEN["agy-obrero"][0] == "working"
+    assert a["status"] == "blocked" and c["status"] == "working"
+
+
+def test_job_serializa_una_copia_estable_del_job(server):
+    """T7: `/api/office/job` serializaba `JOBS[jid]` vivo (`server.py:576`), cuya lista `pasos` crece
+    desde el hilo de `_crear`. `json.dumps` sobre una lista que muta es la misma clase de crash que
+    iterar el estado en el SSE. El handler lee una copia estable bajo `JLOCK`."""
+    jid = "job-t7"
+    server.mod.JOBS[jid] = {"estado": "en curso", "pasos": [], "ws": None, "total": 3}
+    vistas = []
+    def lector():
+        for _ in range(60):
+            j = server.mod.job_view(jid)
+            vistas.append(json.dumps(j, ensure_ascii=False))
+            assert set(j) >= {"estado", "pasos", "ws", "total"}
+    def escritor():
+        for i in range(60): server.mod.job_step(jid, "paso %d" % i)
+    errs = _lanza([(lector, 3), (escritor, 1)])
+    assert errs == []
+    assert len(vistas) == 180
+    final = json.loads(vistas[-1])
+    assert len(final["pasos"]) == 60 and final["estado"] == "en curso"
+    # cada lectura es una serie completa: un prefijo de la lista final, nunca una lista cortada o
+    # intercalada (que es lo que `json.dumps` sobre la lista viva puede producir)
+    assert all(json.loads(v)["pasos"] == final["pasos"][:len(json.loads(v)["pasos"])] for v in vistas)
+    assert server.mod.job_view(jid)["pasos"] is not server.mod.JOBS[jid]["pasos"]   # es copia, no el objeto vivo
+
+
+def test_job_view_es_copia_y_no_el_objeto_vivo(server):
+    """TRIANGULAR: la copia conserva las claves que lee index.html (`pasos`, `estado`, `error`, `ws`) y
+    mutar el job no muta la copia ya devuelta."""
+    jid = "job-t7b"
+    server.mod.JOBS[jid] = {"estado": "en curso", "pasos": [], "ws": None, "total": 1}
+    v = server.mod.job_view(jid)
+    server.mod.job_step(jid, "paso 1")
+    server.mod.job_set(jid, "estado", "hecho")
+    assert v["pasos"] == [] and v["estado"] == "en curso"
+    assert server.mod.job_view(jid)["pasos"] == ["paso 1"] and server.mod.job_view(jid)["estado"] == "hecho"
+    assert server.mod.job_view("no-existe") is None
+
+
+def test_save_meta_mantiene_todas_las_oficinas_bajo_creacion_y_borrado(server):
+    """T7: `meta()` y `save_meta()` (`server.py:259-263`) son un read-modify-write sin lock: crear y
+    borrar a la vez pierde oficinas. `meta_edit` hace la pareja bajo un solo lock y publica entero."""
+    server.mod.save_meta({})
+    def crear(i):
+        def f():
+            for k in range(20):
+                oid = "w%d-%d" % (i, k)
+                server.mod.meta_edit(lambda m, o=oid: m.__setitem__(
+                    o, {"nombre": o, "cwd": "/x/" + o, "maquina": "bazzite", "agentes": []}))
+        return f
+    def borrar(i):
+        def f():
+            for k in range(20):
+                server.mod.meta_edit(lambda m, o="w%d-%d" % (i, k): m.pop(o, None))
+        return f
+    errs = _lanza([(crear(i), 1) for i in range(6)] + [(borrar(i), 1) for i in range(6)])
+    assert errs == []
+    disco = json.loads(Path(server.mod.OFIMETA).read_text(encoding="utf-8"))
+    assert disco == server.mod.meta()                       # fichero válido JSON tras cada escritura
+    assert all("cwd" in v for v in disco.values()), "oficinas escritas a medias"
+    assert sum(1 for o in disco if o.startswith("w2-")) + sum(1 for o in disco if o.startswith("w5-")) >= 1
+
+
+def test_la_escritura_de_meta_es_atomica_y_no_trunca(server, monkeypatch):
+    """T7: `save_meta` abría `oficinas.json` con `"w"` (truncate): un crash a mitad deja el fichero
+    vacío o truncado. Se escribe un temp en el mismo directorio con mode 0600 y `os.replace` publica.
+
+    El crash se simula reventando `os.replace`: lo que hay en el disco tiene que seguir siendo el
+    JSON completo de antes, no un fichero truncado.
+    """
+    server.mod.save_meta({"w1": {"nombre": "Strata3060", "cwd": "/x", "maquina": "bazzite", "agentes": []}})
+    antes = json.loads(Path(server.mod.OFIMETA).read_text(encoding="utf-8"))
+    def boom(src, dst): raise OSError("crash antes de publicar")
+    monkeypatch.setattr(server.mod.os, "replace", boom)
+    with pytest.raises(OSError):
+        server.mod.save_meta({"w2": {"nombre": "y", "cwd": "/y", "maquina": "bazzite", "agentes": []}})
+    assert json.loads(Path(server.mod.OFIMETA).read_text(encoding="utf-8")) == antes
+    assert Path(server.mod.OFIMETA).stat().st_mode & 0o777 == 0o600
+
+
+def test_sesiones_tambien_es_escritura_atomica(server, monkeypatch):
+    """`sesiones.json` ya se crea con mode 0600 (`server.py:21`) pero se trunca al reescribir: mismo
+    tratamiento. Un crash publicado deja el fichero intacto y las sesiones siguen válidas."""
+    server.session("s" * 32)
+    server.mod.save_sess()
+    antes = json.loads(Path(server.mod.SESSF).read_text(encoding="utf-8"))
+    def boom(src, dst): raise OSError("crash antes de publicar")
+    monkeypatch.setattr(server.mod.os, "replace", boom)
+    server.mod.SESS["t" * 32] = time.time() + 100
+    server.mod.save_sess()                                   # `save_sess` traga OSError, no reventa
+    assert json.loads(Path(server.mod.SESSF).read_text(encoding="utf-8")) == antes
+    assert Path(server.mod.SESSF).stat().st_mode & 0o777 == 0o600
+
+
+def test_limit_de_intentos_correcto_bajo_fallos_concurrentes(server):
+    """T7: `FAILS` se escribe sin lock (`server.py:616` y `server.py:52`): dos fallos a la vez
+    pierden uno y el límite de 5 en 15 min se cuenta de menos. Con `FLOCK` no se pierde ninguno y el
+    límite se alcanza en el quinto fallo, una sola vez."""
+    ip = "10.0.0.9"
+    vistos = []
+    def h(): vistos.append(_fallo_login(server, ip))
+    errs = _lanza([(h, 10)])
+    assert errs == []
+    assert len(vistos) == 10
+    assert len(server.mod.FAILS[ip]) == 10, "fallos perdidos por la carrera"
+    assert sum(vistos) == 6                                  # los 6 ultimos ven el limite: se alcanza en el 5 y no se cuenta de menos
+    assert server.mod.limited(ip) is True
+
+
+def test_la_ventana_de_15min_se_poda_con_el_lock(server):
+    """TRIANGULAR: el prune de 900 s sigue mandando. Un fallo viejo no cuenta y un acierto limpia la
+    IP, también bajo concurrencia."""
+    ip = "10.0.0.7"
+    viejo = time.time() - 901
+    def h():
+        with server.mod.FLOCK: server.mod.FAILS.setdefault(ip, []).append(viejo)
+        return server.mod.limited(ip)
+    r = []
+    def g(): r.append(h())
+    errs = _lanza([(g, 6)])
+    assert errs == []
+    assert server.mod.FAILS[ip] == [] and all(x is False for x in r)
+    assert _fallo_login(server, ip) is False                 # 1 fallo en la ventana
+    for _ in range(3): assert _fallo_login(server, ip) is False   # hasta 4 no se llega
+    assert _fallo_login(server, ip) is True                  # el quinto fallo en 15 min bloquea la IP
+
+
+def test_caches_de_herdr_no_reventan_bajo_lecturas_concurrentes(server):
+    """TRIANGULAR: `SNAP`, `MCACHE`, `AGCACHE`, `KCACHE` y `HOMES` se leen y se escriben desde hilos
+    que además reconstruyen el estado. Ninguna lectura ve una cache a medias ni un dict que cambia de
+    tamaño en iteración."""
+    out = []
+    def lector():
+        for _ in range(25):
+            out.append(len(server.mod.agmap()))
+            out.append(len(server.mod.kinds()))
+            server.mod.rhome("mac-mini")
+            assert all(isinstance(a, dict) for a in server.mod.raw_agents())   # el agente sin `name` sigue en la fuente
+    def constructor():
+        for _ in range(25):
+            server.mod.CACHE.update(data=None, at=0.0)
+            server.get_state()
+    server.add_agent(name="agy-obrero", kind="agy", status="blocked", mach="mac-mini", workspace_id="w9")
+    errs = _lanza([(lector, 3), (constructor, 2)])
+    assert errs == []
+    assert all(x is not None for x in out)
+    assert server.mod.agmap()["agy-obrero"] == "mac-mini"
+    assert server.mod.HOMES["mac-mini"]                      # la cache de homes quedó poblada
