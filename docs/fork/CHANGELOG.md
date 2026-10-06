@@ -3,7 +3,7 @@
 Una entrada por orden o mensaje de Claude: fecha, nº de orden, qué se hizo, resultado (cifras), commit y estado.
 Commit + push en cada entrada.
 
-ESTADO: PAUSA (decisión de Adrián) | v0.1.40 desplegada | 2026-10-06 08:40 UTC
+ESTADO: PAUSA (decisión de Adrián) | v0.1.40 + C17-ventana | 2026-10-06 08:55 UTC
 | Fecha | Orden | Qué | Resultado | Commit | Estado |
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-04 | 1 | Desplegar v0.1.39 + A/B vs 0.1.38 + 4 vars | B1 +7,1 % (p 0,013), P2 +9,0 % (p 0,008); vars sin efecto | 82c9640 | VALIDADA |
@@ -104,3 +104,4 @@ ESTADO: PAUSA (decisión de Adrián) | v0.1.40 desplegada | 2026-10-06 08:40 UTC
 | 2026-10-06 | CUP | Tag v0.1.40 (307 commits, +30K/-2K, 274 fich): perf(iq/moe/gr/rope/mtp/verify/quantize), fix, setup-HIP; 6 conflictos (nuestras zonas) a wt-CUP | - | - | Fusionando |
 | 2026-10-06 | CUP-ab | Bit-bit OK (ruido); B1/B2/P3/P4 nulos; frío −0,5/−0,7%; aceptación igual; prod intacta | sin motivo perf para desplegar; a tu OK | - | ESPERA OK |
 | 2026-10-06 | CUP-dep | Deploy v0.1.40 (01856e5a): rollback da9a7a9b+config en bench/; flags+FETCH_ADMIT+C34+precarga OK; humo corta+30K por litellm | RESUMEN_FINAL §6, ESTADO_DESPLIEGUE | - | Desplegado+PAUSA |
+| 2026-10-06 | C17-ven | Ventana B4 spec 2/4/8: T≈2,5 siempre (no crece con spec); ~22 ms/token plano; 60-61 tok/s | árbol sin ventanas anchas que lo paguen; MTP-DRAFT en duda | - | Medido |
