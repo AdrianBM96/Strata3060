@@ -40,7 +40,9 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - [x] **T1** — Stub de Herdr a nivel argv + suite pytest (sin GPU ni Herdr vivo). Commit `0b1f224`.
 - [x] **T2** — Contrato de estado real (`agent_status` + `pane_id`, `focused`, `interactive_ready`, `completion_seq`, `state_change_seq`, `agent`) en el payload. Commit: *(hash en el próximo commit)*
 - [x] **T3** — `statusOf` es función pura del estado real; se elimina el regex. Commit: *(hash en el próximo commit)*
-- [ ] **T22** — Las clases `.st.done`/`.st.unknown` y el badge rojo no se consumen en el DOM: ningún elemento usa la clase `st`. Superficie: `index.html`. Verificado por navegador en T3.
+- [x] **T23** — Formas de Herdr **verificadas en vivo** y fijadas como fixtures verbatim (`workspace create`, `pane split`, `workspace close`, `agent start`/`agent prompt` y sus errores).
+- [ ] **T22** — Las clases `.st.done`/`.st.unknown` y el badge rojo no se consumen en el DOM: ningún elemento usa la clase `st`. Superficie: `index.html`. Verificado por navegador en T3 y en la prueba viva.
+- [ ] **T24** — Ruta multi-máquina en `/api/offices` sin verificar en vivo: bajo HOME aislado `machines()` devuelve `[]` (no hay `~/.config/herdr/config.toml` en el scratch), así que `maquinas` quedó solo `['bazzite']` y cero llamadas remotas. En producción el servicio vivo ve `mac-mini` y `macbook-air`.
 - [x] **T4** — `herdr_out` captura `stderr` y parsea `{error:{code,message}}`; se eliminan los checks de substring muertos. Commit: *(hash en el próximo commit)*
 - [ ] **T5** — `agent prompt --wait --timeout` + manejo real de `agent_blocked` / `agent_prompt_stalled` con mensaje humano.
 - [ ] **T6** — Un solo `api snapshot` por ciclo de estado.
@@ -73,6 +75,25 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - **Puertas sin sesión**: `/api/*` → 401, `/` → 302, `/login` → 200.
 - **Reposo**: `nvidia-smi` (dGPU %) y `ps -o %cpu` del servicio tras 60 s sin cambios.
 - **Viva**: un agente `agy` en un panel de prueba, transición `idle → working → blocked`, y `notification.show`.
+
+## Verificación viva autorizada (2026-10-06)
+Adrián autorizó una prueba viva en Herdr con **un solo workspace descratch y un solo agente `agy`**, para convertir en verificado lo inferido. Ejecutada y **cerrada**: `wJ` (`probe-v5`) creado, sondeado, y `herdr workspace close wJ` ejecutado; `workspace list` queda solo con `w1`.
+
+Formas capturadas verbatim del binario 0.9.3 (copiadas a `tests/fixtures/`):
+- `workspace create` → `result` = `{root_pane, tab, type:"workspace_created", workspace}`. `server.py` lee `result.workspace.workspace_id` y `result.root_pane.pane_id` → **coincide**. El `type` inventado era `workspace_create`; el real es `workspace_created`.
+- `pane split` → `result` = `{pane, type:"pane_info"}`. `server.py` lee `result.pane.pane_id` → **coincide**. El fixture inventaba `type:"pane_split"` y un pane con `name`/`agent`; un pane nuevo real trae `agent_status:"unknown"` y **sin** `name`.
+- `workspace close` → `result` = `{type:"ok"}`. El fixture inventaba `{type:"workspace_close", workspace_id, closed}`.
+- `agent start` (fracaso) → **stderr**, rc=1: `{"error":{"code":"timeout","message":"timed out waiting for agent startup"},"id":"cli:agent:start"}` y `{"error":{"code":"agent_not_ready","message":"agent probeagy is blocked during startup and is not ready for prompts"},"id":"cli:agent:start"}`.
+- `agent prompt --wait` sobre agente bloqueado → **stderr**, rc=1: `{"error":{"code":"agent_blocked","message":"agent probeagy is blocked and requires interactive input"},"id":"cli:agent:prompt"}`, stdout **vacío**. Confirma T4.
+- `pane read --source recent-unwrapped` devuelve **texto plano**, no JSON → `api_log` (`splitlines()[-30:]`) está bien.
+
+Prueba end-to-end viva (Chromium headless 1187 + Herdr real, puerto 8099, 0 comandos mutantes):
+- `/api/offices` lista `probe-v5` con `probeagy`; `/api/state?ws=wJ` → `status:"blocked"`, `activity:"esperando confirmación"`, `pane_id:"wJ:p3"`, `agent:"agy"`.
+- **LED del escritorio rojo**: 34 px rojos en radio 14, centroide a **4.2 px** del punto proyectado, núcleo `(224,52,49)`. Control en `w1` con 5 agentes `idle`: **0 px rojos**.
+- **En su escritorio**: pill a **12.9 px** del asiento proyectado; la mesa de café más cercana a **186.8 px**.
+- **Render bajo demanda en vivo**: 18 rAF en 90.002 s (0.2 fps), gaps **4999.7–4999.9 ms constantes** → cero frames de caminata.
+- 5/5 agentes de `w1` coinciden con Herdr; el agente sin `name` (`w1:pR`) se omite. 0 errores de consola, 0 requests externos, leyenda de 5 estados.
+- 379 llamadas herdr del servidor scratch: 355 `agent list`, 18 `workspace list`, 6 `machine list --json`; **0 mutantes**. Servicio vivo 8095 intacto (`MainPID` 1645893 y `ActiveEnterTimestamp` sin cambio).
 
 ## Progreso
 - 2026-10-06: **T4 completada.** Writer delegado: `server.py` +71/-13 (`herdr_cmd`, `_env`, `HERDR_MSG`, `SIN_RESPUESTA`, `herdr_msg`, `herdr_error`; call sites `build_state`, `api_log`, `hj`, `_start`, `api_send`, `api_office_delete`), `test_herdr_stub.py` +251/-32 con 21 tests nuevos. RED observado por el writer: `14 failed, 57 passed`. Tabla `code→mensaje`: `agent_blocked` → "el agente está esperando una aprobación en su panel: aprueba y vuelve a enviar"; `agent_not_ready` → "espera confirmación en su panel"; `agent_prompt_stalled` → "el mensaje no se entregó"; `agent_name_not_found`, `timeout`, `usage`; default muestra el código y conserva el texto original de Herdr.

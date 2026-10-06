@@ -1,1 +1,1 @@
-{"id":"cli:agent:start","error":{"code":"agent_not_ready","message":"pane is not at an interactive shell prompt"}}
+{"error":{"code":"agent_not_ready","message":"agent probeagy is blocked during startup and is not ready for prompts"},"id":"cli:agent:start"}

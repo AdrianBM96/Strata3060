@@ -1,1 +1,1 @@
-{"id":"cli:workspace:close","result":{"type":"workspace_close","workspace_id":"w1","closed":true}}
+{"id":"cli:workspace:close","result":{"type":"ok"}}

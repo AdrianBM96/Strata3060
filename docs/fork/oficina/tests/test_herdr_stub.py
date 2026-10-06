@@ -323,7 +323,7 @@ def test_herdr_cmd_captura_los_tres_canales(server):
     server.script_response(["agent", "prompt"], "", raw, 1)
     r = server.mod.herdr_cmd(["agent", "prompt", "explorer", "hola"], 30)
     assert r["out"] == "" and r["rc"] == 1
-    assert r["code"] == "agent_blocked" and r["msg"].startswith("agent is blocked")
+    assert r["code"] == "agent_blocked" and r["msg"] == json.loads(raw)["error"]["message"]
     assert r["dead"] is False
     assert json.loads(r["err"]) == json.loads(raw)   # la captura verbatim del binario, en stderr
     assert json.loads(raw)["id"] == "cli:agent:prompt"
