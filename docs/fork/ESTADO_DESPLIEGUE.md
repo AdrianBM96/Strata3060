@@ -127,3 +127,7 @@ Desde herdr se controlan sus panes/agentes igual que en local.
   llegado por 5 s: mandan los 21 s de expertos a RAM); primera petición 1,35 s (sin penalización perezosa).
 - Incidencia: el primer arranque tras el cambio falló (BrokenPipeError, exit 1) y systemd rearrancó solo;
   vigilar si se repite. Los scripts de A/B deben llamar a `precarga.sh` en su paso 'restaurar producción'.
+
+## Motor 2026-10-06: v0.1.40 (CUP)
+- `engine/strata` md5 **01856e5a** (01856e5a); rollback **da9a7a9b** en `bench/`.
+- Flags en /proc: FETCH_ADMIT=1, PF_FUSED=1 (+ resto producción); C34 12/12288/4096; precarga C32.

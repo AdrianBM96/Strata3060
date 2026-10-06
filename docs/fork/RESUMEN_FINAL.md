@@ -111,3 +111,9 @@ Partimos de Strata 0.1.38 tal cual y le hemos añadido **una cabeza de decisión
 (System One)**, un **kernel de CPU más rápido y bit-idéntico**, **+5,2% de prefill** gratis, **512K de
 contexto**, **visión integrada** y una **operación que se recupera sola**; y hemos medido y **descartado** con
 evidencia todo lo que no aportaba. El hardware y la configuración quedan **cerrados**.
+
+## 6. v0.1.40 desplegado (2026-10-06, CUP)
+- Binario `engine/strata` **01856e5a** (merge v0.1.40 + ports: System One, suffix-stats, FETCH_ADMIT, visión);
+  rollback: `bench/engine-rollback-0139-da9a7a9b.bak` (**da9a7a9b**) + `bench/config-rollback-0139.json.bak`.
+- Medido antes: bit-bit OK (ΔNLL en ruido), B1/B2/P3/P4 y prefill frío nulos, aceptación igual.
+- Humo: corta + 30K por litellm sin errores. FETCH_ADMIT activo (log), C34 parcial y precarga intactos.
