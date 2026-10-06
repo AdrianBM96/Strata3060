@@ -4,12 +4,14 @@ El proposito es doble:
   1. Probar que el stub reproduce las formas que `server.py` parsea. Un run verde es la linea base
      que cada tarea tiene que mantener verde.
   2. Dejar anclas visibles para el RED->GREEN de las tareas T2..T6: despues de T2 quedan
-     `test_herdr_out_solo_stdout` (linea base de T4: `herdr_out` sigue viendo solo stdout),
-     `test_send_no_observa_la_entrega` y `test_build_state_no_pide_snapshot` (lineas base).
+     `test_herdr_out_solo_stdout` (linea base de T4: `herdr_out` sigue viendo solo stdout) y
+     `test_build_state_no_pide_snapshot` (linea base).
      T4 volvio verdes sus tres anclas (`test_start_parsea_el_error_de_stderr`,
      `test_api_log_sin_respuesta_es_el_error_actual`, `test_send_a_bloqueado_es_legible`) y anadio
      la seccion `T4: el error de herdr vive en stderr`.
-     Quedan anclas de T5 (`test_send_no_observa_la_entrega`) y T6
+     T5 volvio verde su ancla (`test_send_no_observa_la_entrega` ->
+     `test_send_observa_la_entrega_con_wait`) y anadio la seccion `T5: la entrega se observa`.
+     Quedan anclas de T6
      (`test_snapshot_emulado_tiene_la_forma_de_la_captura`, `test_build_state_no_pide_snapshot`,
      `test_api_offices_linea_base`).
 
@@ -48,6 +50,29 @@ def _script_error(server, code, message, match, mach=None, cid="cli:agent:prompt
 
 def _agentes(state):
     return {a["name"]: a for a in state["agents"]}
+
+
+def _send(server, text="hola", agent="claude", mode="direct"):
+    """`api_send` con el limite de 3 s reseteado: el limite es por envio humano, no por test."""
+    server.mod.LAST_SEND = 0.0
+    return server.mod.api_send(json.dumps({"agent": agent, "mode": mode, "text": text}))
+
+
+def _log(server):
+    """Lineas de `envios.log` como dicts (el audit trail del resultado, no de la intencion)."""
+    p = Path(server.mod.ENVLOG)
+    if not p.exists():
+        return []
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()]
+
+
+def _prompts(server):
+    """Llamadas `agent prompt` reales, con su argv completo."""
+    return [c for c in server.calls() if c[:2] == ("agent", "prompt")]
+
+
+def _ms(argv):
+    return int(argv[argv.index("--timeout") + 1])
 
 
 # ---------- formas del binario, verificadas en vivo ----------
@@ -306,13 +331,14 @@ def test_start_listo_cuando_el_stub_devuelve_agent_started(server):
     assert json.loads((FIXTURES / "agent_start.json").read_text(encoding="utf-8"))["type"] == "agent_started"
 
 
-def test_send_no_observa_la_entrega(server):
-    """ANCLA T5: sin `--wait` la entrega se confirma por texto en stdout, no por estado observado."""
-    code, r = server.mod.api_send(json.dumps({"agent": "claude", "mode": "direct", "text": "hola"}))
-    assert code == 200 and r["confirmed"] is True
-    prompt = server.calls()[-1]
-    assert prompt == ("agent", "prompt", "claude", "adrian: hola")
-    assert "--wait" not in prompt   # server.py:346 lanza el prompt sin esperar
+def test_send_observa_la_entrega_con_wait(server):
+    """T5 (ancla de T1 vuelta verde): el prompt se lanza con `--wait` y la entrega se confirma por
+    el estado observado en el sobre, no por texto en stdout."""
+    code, r = _send(server)
+    prompt = _prompts(server)[0]
+    assert prompt[:3] == ("agent", "prompt", "claude")
+    assert "--wait" in prompt
+    assert r["confirmed"] is True and r["state"] == "working"   # el estado observado, no el texto
 
 
 # ---------- T4: stdout, stderr y exit status ----------
@@ -355,11 +381,15 @@ def test_tabla_de_codigos_cubre_los_fixtures(server):
         assert "herdr no responde" not in server.mod.HERDR_MSG[err["code"]]
         server.script_response(["agent", "prompt"], "", raw, 1)   # stdout vacio, JSON en stderr, exit 1
         server.mod.LAST_SEND = 0.0   # el limite de 3 s es por envio, no por test
-        code, r = server.mod.api_send(json.dumps({"agent": "explorer", "mode": "direct", "text": "sigue"}))
+        code, r = _send(server, text="sigue", agent="explorer")
         assert code == 502 and r["code"] == err["code"]
         assert server.mod.HERDR_MSG[err["code"]] in r["error"] and err["message"] in r["error"]
         assert r["error"] != "herdr no responde"
+        assert r["ok"] is False and r["confirmed"] is False   # T5: nada se afirma sin entrega observada
+        panel = err["code"] in ("agent_blocked", "agent_not_ready")   # accion: aprobar en el panel
+        assert r["stalled"] != panel                       # `stalled` = no se observo un turno
         assert server.api_hilo("explorer")["envios"] == []   # ninguno queda registrado como enviado
+        assert all(d["confirmed"] is False for d in _log(server))   # el log dice lo que paso, no lo intentado
 
 
 def test_codigo_desconocido_muestra_el_codigo(server):
@@ -371,8 +401,10 @@ def test_codigo_desconocido_muestra_el_codigo(server):
 
 def test_socket_muerto_se_distingue_de_un_error_de_agente(server):
     server.script_response(["agent", "prompt"], "", "", 1)
-    code, r = server.mod.api_send(json.dumps({"agent": "explorer", "mode": "direct", "text": "sigue"}))
+    code, r = _send(server, text="sigue", agent="explorer")
     assert code == 502 and r["code"] == "no_response"
+    assert r["ok"] is False and r["confirmed"] is False   # T5: sin entrega observada no hay ok
+    assert r["stalled"] is True                          # y la UI no puede decir "enviado"
     assert "herdr no responde" in r["error"] and "aprobación" not in r["error"]
 
 
@@ -408,30 +440,36 @@ def test_start_parsea_la_captura_agent_started(server):
 
 def test_send_parsea_la_captura_agent_prompted(server):
     server.script_response(["agent", "prompt"], (FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"), "", 0)
-    code, r = server.mod.api_send(json.dumps({"agent": "claude", "mode": "direct", "text": "hola"}))
-    assert code == 200 and r["confirmed"] is True
+    code, r = _send(server)
+    assert code == 200 and r["ok"] is True and r["confirmed"] is True
     assert json.loads(r["output"])["type"] == "agent_prompted"
+    assert r["state"] == "working" and r["pane_id"] == "w1:pH"   # T5: el estado observado en el sobre
 
 
 def test_exit0_sin_sobre_no_confirma_el_envio(server):
+    """T5: `ok` solo cuando la entrega esta observada. Un exit 0 sin sobre no es entrega."""
     server.script_response(["agent", "prompt"], "", "", 0)
-    code, r = server.mod.api_send(json.dumps({"agent": "explorer", "mode": "direct", "text": "x"}))
+    code, r = _send(server, text="x", agent="explorer")
     assert code == 502 and r["code"] == "no_response"
+    assert r["ok"] is False and r["confirmed"] is False and r["stalled"] is True
     assert Path(server.mod.ENVLOG).exists() is False   # nada se registra como enviado
 
 
-def test_envio_exitoso_deja_la_huella_en_envios_log(server):
-    code, r = server.mod.api_send(json.dumps({"agent": "claude", "mode": "direct", "text": "revisa la cola"}))
+def test_envio_exitoso_deja_el_resultado_en_envios_log(server):
+    code, r = _send(server, text="revisa la cola")
     assert code == 200 and r["confirmed"] is True
-    d = json.loads(Path(server.mod.ENVLOG).read_text(encoding="utf-8").strip())
+    d = _log(server)[0]
     assert d["agent"] == "claude" and d["mode"] == "direct" and d["text"] == "revisa la cola"
+    assert d["outcome"] == "working" and d["confirmed"] is True   # el resultado, no la intencion
+    assert d["code"] is None and d["timeout_ms"] == r["timeout_ms"]
 
 
-def test_limite_de_3s_y_huella_se_mantienen(server):
-    code, r = server.mod.api_send(json.dumps({"agent": "claude", "mode": "direct", "text": "primero"}))
+def test_limite_de_3s_rechaza_antes_de_llamar_a_herdr(server):
+    code, r = _send(server, text="primero")
     assert code == 200 and r["confirmed"] is True
     code2, r2 = server.mod.api_send(json.dumps({"agent": "claude", "mode": "direct", "text": "segundo"}))
     assert code2 == 429 and r2["error"] == "limite 1 envio/3s"
+    assert len(_prompts(server)) == 1                     # el segundo ni llega a herdr
     assert len(Path(server.mod.ENVLOG).read_text(encoding="utf-8").splitlines()) == 1
 
 
@@ -498,12 +536,237 @@ def test_send_a_bloqueado_es_legible(server):
     """T4 (ancla de T5 vuelta verde): `agent_blocked` dice lo que hay que hacer, no "herdr no responde"."""
     _script_error(server, "agent_blocked", "agent is blocked: a pending approval is waiting in its pane",
                     ["agent", "prompt"])
-    code, r = server.mod.api_send(json.dumps({"agent": "explorer", "mode": "direct", "text": "sigue"}))
+    code, r = _send(server, text="sigue", agent="explorer")
     assert code == 502
     assert r["code"] == "agent_blocked"                       # el codigo real, para el log
+    assert r["ok"] is False and r["confirmed"] is False       # T5: no se afirma una entrega no observada
     assert "aprobación" in r["error"] and "agent is blocked" in r["error"]
     assert r["error"] != "herdr no responde"
     assert server.api_hilo("explorer")["envios"] == []        # no queda como enviado
+
+
+# ---------- T5: la entrega se observa (`agent prompt --wait --timeout`) ----------
+
+def test_el_set_de_stalled_es_el_de_la_tabla(server):
+    """`stalled` es la familia de "no se observó un turno": `agent_prompt_stalled` y `timeout`.
+
+    `agent_blocked` y `agent_not_ready` no son stall: su accion es aprobar en el panel, y decir
+    "no se entregó" a un agente que esta esperando una aprobacion mandaria al humano al camino equivocado.
+    """
+    assert server.mod.STALLED == ("agent_prompt_stalled", "timeout")
+    assert server.mod.PANEL == {"agent_blocked": "blocked", "agent_not_ready": "not_ready"}
+    assert server.mod.HERDR_MSG["agent_not_ready"] == "espera confirmación en su panel"
+
+
+def test_argv_lleva_wait_y_timeout_en_ms(server):
+    """T5: el argv observa la entrega. `--timeout` en ms: el binario informa su plazo en el mensaje
+    de stall (`no working or blocked state observed within 5000 ms`), lo que fija la unidad y una base
+    verificada."""
+    code, r = _send(server, text="hola")
+    argv = _prompts(server)[0]
+    assert argv[:3] == ("agent", "prompt", "claude") and argv[3] == "adrian: hola"
+    assert "--wait" in argv
+    ms = _ms(argv)
+    assert ms == server.mod.send_timeout(len("adrian: hola"), True) == 5300
+    assert r["timeout_ms"] == ms
+    assert server.mod.WAIT_BASE <= ms < server.mod.WAIT_MAX
+
+
+def test_el_plazo_crece_con_el_texto_y_topea(server):
+    """El plazo depende del texto (herdr escribe el mensaje en el panel) y del agente."""
+    corto, largo, enorme = (server.mod.send_timeout(n, True) for n in (1, 400, 4000))
+    assert corto < largo < enorme
+    assert enorme == server.mod.WAIT_MAX                      # tope: el humano no espera mas
+    sin_prompt = server.mod.send_timeout(1, False)            # `interactive_ready` False -> mas plazo
+    assert corto < sin_prompt <= server.mod.WAIT_MAX
+
+
+def test_el_plazo_de_subprocess_deja_que_herdr_devuelva_su_sobre(server, monkeypatch):
+    """El timeout del subprocess es mayor que `--timeout`: gana herdr y trae su sobre (`timeout` /
+    `agent_prompt_stalled`). Un `TimeoutExpired` de Python dejaria stdout y stderr vacios, que el
+    servidor lee como socket muerto: el resultado observable se perderia."""
+    vistos = []
+
+    def fake(args, timeout=8, mach=None):
+        vistos.append((list(args), timeout))
+        return {"out": "", "err": "", "rc": 1, "env": None, "code": None, "msg": None,
+                "res": None, "type": None, "dead": True}
+    monkeypatch.setattr(server.mod, "herdr_cmd", fake)
+    code, r = _send(server, text="x" * 4000)
+    argv, t = next((a, tt) for a, tt in vistos if a[:2] == ["agent", "prompt"])
+    assert code == 502 and r["ok"] is False and r["stalled"] is True
+    assert t > _ms(argv) / 1000
+
+
+def test_bloqueado_dice_aprobar_en_el_panel_y_no_se_registra_como_enviado(server):
+    """Forma VERIFICADA en el binario 2026-10-06: stdout vacio, JSON en stderr, exit 1."""
+    raw = (FIXTURES / "error_agent_blocked.json").read_text(encoding="utf-8")
+    server.script_response(["agent", "prompt"], "", raw, 1)
+    code, r = _send(server, text="sigue", agent="explorer")
+    assert code == 502 and r["ok"] is False and r["confirmed"] is False
+    assert r["code"] == "agent_blocked" and r["stalled"] is False
+    assert "aprueba" in r["error"] and "panel" in r["error"]          # accion para el humano
+    assert "agent probeagy is blocked and requires interactive input" in r["error"]
+    assert server.api_hilo("explorer")["envios"] == []                # nada aparece como enviado
+    d = _log(server)[0]
+    assert d["outcome"] == "blocked" and d["confirmed"] is False and d["text"] == "sigue"
+
+
+def test_stalled_no_afirma_que_el_mensaje_fue_enviado(server):
+    raw = (FIXTURES / "error_agent_prompt_stalled.json").read_text(encoding="utf-8")
+    server.script_response(["agent", "prompt"], "", raw, 1)
+    code, r = _send(server, text="sigue", agent="explorer")
+    assert code == 502 and r["ok"] is False and r["confirmed"] is False
+    assert r["code"] == "agent_prompt_stalled" and r["stalled"] is True
+    assert "el mensaje no se entregó" in r["error"]
+    assert server.api_hilo("explorer")["envios"] == []
+    d = _log(server)[0]
+    assert d["outcome"] == "stalled" and d["confirmed"] is False
+
+
+def test_timeout_de_wait_es_stalled_y_no_enviado(server):
+    """`timeout` en `agent prompt` es el mismo caso: la entrega no se observó."""
+    err = json.loads((FIXTURES / "error_timeout.json").read_text(encoding="utf-8"))["error"]
+    payload = json.dumps({"id": "cli:agent:prompt", "error": err}, separators=(",", ":")) + "\n"
+    server.script_response(["agent", "prompt"], "", payload, 1)
+    code, r = _send(server, text="sigue", agent="explorer")
+    assert code == 502 and r["ok"] is False and r["confirmed"] is False
+    assert r["code"] == "timeout" and r["stalled"] is True
+    assert "tiempo límite" in r["error"]
+    assert server.api_hilo("explorer")["envios"] == []
+
+
+def test_entrega_observada_como_working_confirma_y_se_registra(server):
+    server.script_response(["agent", "prompt"], (FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"), "", 0)
+    code, r = _send(server, text="revisa la cola")
+    assert code == 200 and r["ok"] is True and r["confirmed"] is True
+    assert r["state"] == "working" and r["pane_id"] == "w1:pH" and r["stalled"] is False
+    d = _log(server)[0]
+    assert d["outcome"] == "working" and d["confirmed"] is True and d["pane_id"] == "w1:pH"
+    assert d["timeout_ms"] == r["timeout_ms"]
+    assert server.api_hilo("claude")["envios"][0].endswith("[direct] revisa la cola")
+
+
+def test_entrega_que_vuelve_a_idle_es_entregada(server):
+    """Entregado y el agente volvió a `idle`/`done`: aceptó el prompt, no es un stall."""
+    env = json.loads((FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"))
+    env["agent"]["agent_status"] = "idle"
+    env["agent"]["completion_seq"] = 900
+    server.script_response(["agent", "prompt"], json.dumps(env, separators=(",", ":")) + "\n", "", 0)
+    code, r = _send(server, text="sigue", agent="explorer")
+    assert code == 200 and r["ok"] is True and r["confirmed"] is True
+    assert r["state"] == "idle" and r["stalled"] is False
+    assert _log(server)[0]["outcome"] == "idle"
+
+
+def test_bloqueado_al_aceptar_el_prompt_no_es_stalled(server):
+    """El prompt se entregó y el agente quedó esperando una aprobación: hay que decirlo, no callarlo."""
+    env = json.loads((FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"))
+    env["agent"]["agent_status"] = "blocked"
+    server.script_response(["agent", "prompt"], json.dumps(env, separators=(",", ":")) + "\n", "", 0)
+    code, r = _send(server, text="sigue", agent="explorer")
+    assert code == 200 and r["ok"] is True and r["confirmed"] is True
+    assert r["state"] == "blocked" and r["stalled"] is False
+    assert "aprueba" in r["msg"]
+
+
+def test_sobre_sin_agente_no_reventa_y_no_afirma(server):
+    """Defensivo: un `agent_prompted` sin `agent` (forma no capturada) no reventa y no afirma entrega."""
+    server.script_response(["agent", "prompt"], '{"type":"agent_prompted"}\n', "", 0)
+    code, r = _send(server, text="x", agent="explorer")
+    assert code == 502 and r["ok"] is False and r["confirmed"] is False and r["stalled"] is True
+    assert Path(server.mod.ENVLOG).exists() is False
+
+
+def test_socket_inalcanzable_no_afirma_la_entrega(server):
+    server.script_response(["agent", "prompt"], "", "herdr: connect: No such file or directory\n", 1)
+    code, r = _send(server, text="x", agent="explorer")
+    assert code == 502 and r["ok"] is False and r["confirmed"] is False
+    assert r["code"] == "no_response" and r["stalled"] is True
+    assert "No such file" in r["error"]
+    assert server.api_hilo("explorer")["envios"] == []
+    assert Path(server.mod.ENVLOG).exists() is False   # sin sobre no hay resultado que registrar
+
+
+def test_un_stalled_no_se_reintenta_solo(server):
+    """No hay reintento: un stall deja una sola llamada y la respuesta no promete nada."""
+    raw = (FIXTURES / "error_agent_prompt_stalled.json").read_text(encoding="utf-8")
+    server.script_response(["agent", "prompt"], "", raw, 1)
+    code, r = _send(server, text="sigue", agent="explorer")
+    assert len(_prompts(server)) == 1
+    assert "reenvi" not in r["error"] and "se reenvía" not in r["error"]
+    assert r["stalled"] is True
+
+
+def test_envios_log_registra_el_resultado_de_cada_envio(server):
+    """El audit trail dice lo que pasó: blocked, stalled y entregado quedan con su outcome."""
+    server.script_response(["agent", "prompt"], "", (FIXTURES / "error_agent_blocked.json").read_text(encoding="utf-8"), 1)
+    _send(server, text="uno", agent="explorer")
+    server.script_response(["agent", "prompt"], "", (FIXTURES / "error_agent_prompt_stalled.json").read_text(encoding="utf-8"), 1)
+    _send(server, text="dos", agent="explorer")
+    server.script_response(["agent", "prompt"], (FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"), "", 0)
+    _send(server, text="tres", agent="explorer")
+    assert [d["outcome"] for d in _log(server)] == ["blocked", "stalled", "working"]
+    assert [d["confirmed"] for d in _log(server)] == [False, False, True]
+    assert [d["text"] for d in _log(server)] == ["uno", "dos", "tres"]
+    assert [d["code"] for d in _log(server)] == ["agent_blocked", "agent_prompt_stalled", None]
+    env = server.api_hilo("explorer")["envios"]
+    assert len(env) == 1 and env[0].endswith("[direct] tres")
+
+
+def test_el_sobre_de_start_se_parsea_defensivo_con_wait(server):
+    """T5: `agent start` sigue con su `--timeout`; si el sobre trajera un campo de `--wait`, `_start`
+    lee con `.get()` y un campo extra no rompe el `listo`. Ningun campo inventado."""
+    env = json.loads((FIXTURES / "agent_start.json").read_text(encoding="utf-8"))
+    env["matched_status"] = "idle"
+    server.script_response(["agent", "start"], json.dumps(env, separators=(",", ":")) + "\n", "", 0)
+    assert server.mod._start("tester", "pi", "", "w1:pH", "/tmp", False) == "listo"
+    assert server.mod._start("otro", "pi", "", "w1:pH", "/tmp", False) == "listo"
+    server.script_response(["agent", "start"], "", "", 0)
+    assert server.mod._start("otro2", "pi", "", "w1:pH", "/tmp", False).startswith("ERROR")
+
+
+def test_start_pide_su_propio_timeout_y_se_mantiene(server):
+    """`agent start` sigue pidiendo `--timeout` en ms y su sobre verificado."""
+    server.mod._start("tester", "pi", "", "w1:pH", "/tmp", False)
+    argv = [c for c in server.calls() if c[:2] == ("agent", "start")][0]
+    assert argv[argv.index("--timeout") + 1] == "60000"
+    assert "--pane" in argv and "--kind" in argv
+
+
+def test_claves_del_frontend_de_send_siguen_vivas(server):
+    """`index.html` lee `ok`, `confirmed`, `output` y `error`: ninguna se renombra; las nuevas se añaden."""
+    code, r = _send(server, text="hola")
+    assert {"ok", "confirmed", "output"} <= set(r)
+    assert isinstance(r["output"], str)
+    raw = (FIXTURES / "error_agent_blocked.json").read_text(encoding="utf-8")
+    server.script_response(["agent", "prompt"], "", raw, 1)
+    code2, r2 = _send(server, text="sigue", agent="explorer")
+    assert {"ok", "confirmed", "error"} <= set(r2) and isinstance(r2["error"], str)
+
+
+def test_envio_remoto_lleva_machine_y_wait(server):
+    """TRIANGULAR: un envio a un agente de maquina remota sigue la ruta multi-máquina y observa la entrega."""
+    server.add_agent(name="agy-obrero", kind="agy", status="idle", mach="mac-mini", workspace_id="w9")
+    code, r = _send(server, text="sigue", agent="agy-obrero")
+    argv = [c for c in server.calls("mac-mini") if c[:2] == ("agent", "prompt")]
+    assert len(argv) == 1 and "--wait" in argv[0] and "--timeout" in argv[0]
+    assert code == 200 and r["ok"] is True and r["confirmed"] is True
+    d = _log(server)[0]
+    assert d["outcome"] == "working" and d["agent"] == "agy-obrero" and d["mode"] == "direct"
+
+
+def test_viaclaude_apunta_a_claude_y_deja_la_huella_del_autor(server):
+    """TRIANGULAR: `viaclaude` escribe a claude, pero el log dice quien lo mando y el hilo de claude lo ve."""
+    code, r = _send(server, text="OK a B1", agent="explorer", mode="viaclaude")
+    argv = _prompts(server)[0]
+    assert argv[2] == "claude" and argv[3] == "adrian (oficina): OK a B1"
+    assert "--wait" in argv
+    d = _log(server)[0]
+    assert d["agent"] == "explorer" and d["mode"] == "viaclaude" and d["target"] == "claude"
+    assert d["outcome"] == "working" and d["confirmed"] is True
+    assert server.api_hilo("claude")["envios"][0].endswith("[viaclaude] OK a B1")
+    assert server.api_hilo("explorer")["envios"][0].endswith("[viaclaude] OK a B1")
 
 
 def test_api_offices_linea_base(server):

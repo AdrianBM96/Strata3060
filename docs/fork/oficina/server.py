@@ -115,6 +115,48 @@ def herdr_error(r):
     if r["dead"]: return SIN_RESPUESTA
     if not r["out"]: return herdr_msg(None, r["err"].strip()[:120])
     return None
+SIN_ENTREGA = "herdr respondió un sobre que no confirma la entrega"
+# ---------- T5: la entrega se observa (`agent prompt --wait --timeout`) ----------
+# `--timeout` va en ms. La unidad y una base estan verificadas en la captura viva del binario 0.9.3:
+# su stall informa el plazo en el mensaje ("no working or blocked state observed within 5000 ms").
+# 25 ms por caracter: herdr escribe el texto en el panel y el mensaje de la oficina es de hasta 4000
+# chars, asi que el plazo tiene que crecer con el texto. 4000 ms extra cuando el agente no esta en un
+# prompt interactivo (`interactive_ready`, campo opcional por agente en la captura real). Tope 20000
+# ms: mas alla, el humano se queda mirando y la peticion del navegador se cuelga. El timeout del
+# subprocess es `ms/1000 + 10` s: herdr tiene que ganar la carrera y devolver su sobre (`timeout` o
+# `agent_prompt_stalled`); un `TimeoutExpired` de Python dejaria stdout y stderr vacios, que se lee
+# como socket muerto, y se perderia el resultado observado. 5000 ms y la unidad son verificadas; 25
+# ms/caracter, 4000 de margen y el tope 20000 son eleccion de la oficina, no una medida del binario.
+WAIT_BASE = 5000; WAIT_CHAR = 25; WAIT_NOT_READY = 4000; WAIT_MAX = 20000; WAIT_SLACK = 10
+def send_timeout(chars, ready):
+    ms = WAIT_BASE + WAIT_CHAR * chars + (0 if ready else WAIT_NOT_READY)
+    return max(WAIT_BASE, min(ms, WAIT_MAX))
+# `stalled` = la entrega no se observo (ni `working`, ni `blocked`, ni `idle` tras el prompt): la UI no
+# puede decir "enviado". `timeout` en `agent prompt` es el mismo caso que `agent_prompt_stalled`.
+# Los codigos de panel (`agent_blocked`, `agent_not_ready`) no son stall: el agente esta vivo y espera
+# una aprobacion; decir "no se entregó" mandaria al humano a reenviar en vez de aprobar.
+# No hay reintento automatico: un stall lo decide el humano, porque reenviar a un panel que puede
+# estar a medias es la unica forma de duplicar un mensaje.
+STALLED = ("agent_prompt_stalled", "timeout")
+PANEL = {"agent_blocked": "blocked", "agent_not_ready": "not_ready"}
+# El sobre de `agent prompt --wait` trae el agente despues de aceptar el prompt. `matched_status` es
+# INFERIDO (el stub lo emite, la captura viva no lo trae): no se usa para decidir, solo el estado del
+# agente, que si esta verificado. Lo que no esta en el dominio `idle|working|blocked|done|unknown`, y
+# un sobre sin `agent`, no confirman nada.
+def send_outcome(r):
+    """(outcome, entregado, stalled, estado observado, pane_id) a partir del sobre observado."""
+    ag = (r["env"] or {}).get("agent") if isinstance(r["env"], dict) else None
+    ag = ag if isinstance(ag, dict) else {}
+    st = estado_real(ag["agent_status"]) if ag.get("agent_status") in ESTADOS else None
+    pane = ag.get("pane_id")
+    if r["code"] in PANEL: return PANEL[r["code"]], False, False, st, pane
+    if r["code"] in STALLED: return "stalled", False, True, st, pane
+    if r["type"] == "agent_prompted" and st: return st, True, False, st, pane
+    return "no_response", False, True, st, pane
+ENTREGA = {"working": "entregado: el agente pasó a working",
+           "idle": "entregado: el agente aceptó el mensaje y volvió a idle",
+           "done": "entregado: el agente aceptó el mensaje y quedó done",
+           "blocked": "entregado: el agente aceptó el mensaje y quedó esperando una aprobación en su panel: aprueba"}
 # El dominio de `agent_status`, verificado en el binario herdr 0.9.3 (tests/README.md). Lo que no esta
 # en el dominio (clave ausente, None, un string de un Herdr futuro) es `unknown`, nunca `idle`.
 ESTADOS = ("idle", "working", "blocked", "done", "unknown")
@@ -190,6 +232,7 @@ def api_hilo(agent):
     for line in read(ENVLOG).strip().splitlines()[-40:]:
         try: d = json.loads(line)
         except Exception: continue
+        if d.get("confirmed") is False: continue   # T5: el hilo muestra lo entregado, no lo intentado
         if d.get("agent") == agent or (d.get("mode") == "viaclaude" and agent == "claude"):
             env.append("%s [%s] %s" % (d.get("ts", ""), d.get("mode", ""), (d.get("text") or "")[:120]))
     men = [short_row(r) for r in table_rows(60) if agent.lower() in r.lower()][-8:]
@@ -321,7 +364,9 @@ def _start(nombre, kind, model, pid, cwd, auto, mach=None):
         if auto and kind == "opencode": extra.append("--auto")
         r = herdr_cmd(["agent", "start", nombre, "--kind", kind, "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 90, mach)
     # antes: substringes sobre stdout (`"interactive_ready":true`, `"agent_started"`, `agent_not_ready`), que
-    # no veian el error: ese vive en stderr. Ahora se parsea el sobre.
+    # no veian el error: ese vive en stderr. Ahora se parsea el sobre. `--wait` no se añade a `start`: la
+    # salida verificada es `agent_started` y el sobre se lee con `.get()`, asi que un campo extra de un
+    # herdr futuro (p. ej. `matched_status`) no rompe el `listo` y no se inventa nada.
     if r["type"] == "agent_started": return "listo"
     if r["code"] == "agent_not_ready": return HERDR_MSG["agent_not_ready"]
     e = herdr_error(r)
@@ -410,23 +455,35 @@ def api_send(body):
     if mode not in ("direct", "viaclaude"): return 400, {"ok": False, "error": "modo invalido"}
     if not 1 <= len(text) <= 4000: return 400, {"ok": False, "error": "texto 1..4000 chars"}
     with SEND_LOCK:
-        if time.monotonic() - LAST_SEND < 3.0:
+        if time.monotonic() - LAST_SEND < 3.0:   # el limite se aplica antes de llamar a herdr
             return 429, {"ok": False, "error": "limite 1 envio/3s"}
         LAST_SEND = time.monotonic()
     tgt, pre = (agent, "adrian: ") if mode == "direct" else ("claude", "adrian (oficina): ")
-    r = herdr_cmd(["agent", "prompt", tgt, pre + text], 30, agmap().get(tgt))
-    e = herdr_error(r)
-    if e: return 502, {"ok": False, "error": e, "code": r["code"] or "no_response"}
-    ok = r["type"] == "agent_prompted"   # el sobre verificado, no un substring sobre stdout
-    if ok:
+    prompt = pre + text
+    # `interactive_ready` es opcional por agente: ausente = no lo observamos, y no penaliza el plazo.
+    ready = next((a.get("interactive_ready") for a in get_state()["agents"] if a["name"] == tgt), None) is not False
+    ms = send_timeout(len(prompt), ready)
+    r = herdr_cmd(["agent", "prompt", tgt, prompt, "--wait", "--timeout", str(ms)],
+                  ms // 1000 + WAIT_SLACK, agmap().get(tgt))
+    outcome, entregado, stalled, st, pane = send_outcome(r)
+    code = r["code"] or (None if entregado else "no_response")
+    if r["code"] or entregado:   # hay sobre: `envios.log` registra el resultado, no la intencion
         try:
             os.makedirs(os.path.dirname(ENVLOG), exist_ok=True)
             with open(ENVLOG, "a", encoding="utf-8") as f:
                 f.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                    "agent": agent, "mode": mode, "text": text}, ensure_ascii=False) + "\n")
+                                    "agent": agent, "mode": mode, "text": text, "target": tgt,
+                                    "outcome": outcome, "confirmed": entregado, "code": code,
+                                    "state": st, "pane_id": pane, "timeout_ms": ms}, ensure_ascii=False) + "\n")
         except OSError:
             pass
-    return 200, {"ok": True, "confirmed": ok, "output": r["out"][-500:]}
+    if not entregado:   # `ok` solo con entrega observada: la UI no puede decir "enviado" (stalled, bloqueado, socket)
+        return 502, {"ok": False, "confirmed": False, "error": herdr_error(r) or SIN_ENTREGA,
+                     "code": code, "stalled": stalled, "state": st, "pane_id": pane,
+                     "timeout_ms": ms, "output": (r["out"] + r["err"])[-500:]}
+    return 200, {"ok": True, "confirmed": True, "output": r["out"][-500:], "state": st,
+                 "pane_id": pane, "code": None, "stalled": False, "timeout_ms": ms,
+                 "msg": ENTREGA.get(outcome, "entregado")}
 def api_office_delete(body):
     try: d = json.loads(body[:1024])
     except Exception: return 400, {"ok": False, "error": "JSON invalido"}
