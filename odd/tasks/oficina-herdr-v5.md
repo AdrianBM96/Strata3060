@@ -32,7 +32,7 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 1. **Cero dependencia externa** en `server.py`: solo stdlib de Python 3.12. Los tests pueden usar `pytest` (ya instalado, 9.1.1).
 2. **No robar cómputo a la medición**: render bajo demanda intacto, ~0 % dGPU en reposo. Cada fase se verifica midiendo reposo.
 3. **Seguridad intacta**: scrypt + cookie `sid` HttpOnly/SameSite=Strict + fail-closed + `shell=False` + cap 8192 B. No exponer fuera de localhost/tailnet.
-4. **Verificación viva solo con agentes `agy`** (decisión de Adrián, 2026-10-06): no usar `claude`, `pi`, `opencode2` como sujetos de prueba en Herdr vivo.
+4. **Verificación viva solo con agentes `agy`** (decisión de Adrián, 2026-10-06): no usar `claude`, `pi`, `opencode2` como sujetos de prueba en Herdr vivo. **Autorización permanente concedida por Adrián el 2026-10-06: "no me pidas más permiso, siempre hazlo solo con agy".** No se pide autorización por probe; se registran el workspace creado y su cierre en el documento. Sigue siendo prohibido tocar `claude`, `pi`, `opencode2` y la oficina `w1`.
 5. Idioma: UI y docs de la oficina en español (convención del repo); identificadores siguiendo el estilo existente (`herdr_out`, `mkagent`, `build_state`).
 6. Cerrar cada tarea con un commit de unidad de trabajo en la rama de feature. Push/PR/merge quedan en Adrián.
 
@@ -41,6 +41,7 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - [x] **T2** — Contrato de estado real (`agent_status` + `pane_id`, `focused`, `interactive_ready`, `completion_seq`, `state_change_seq`, `agent`) en el payload. Commit: *(hash en el próximo commit)*
 - [x] **T3** — `statusOf` es función pura del estado real; se elimina el regex. Commit: *(hash en el próximo commit)*
 - [x] **T23** — Formas de Herdr **verificadas en vivo** y fijadas como fixtures verbatim (`workspace create`, `pane split`, `workspace close`, `agent start`/`agent prompt` y sus errores).
+- [ ] **T26** — `pane split --cwd` / `workspace create --cwd` no se honran: los paneles caen en `$HOME`. La oficina pasa `--cwd` y su meta reporta ese cwd, pero Herdr pone `/home/bazzite`. Verificado con `pane run pwd` → `/home/bazzite`. Superficie: `server.py`.
 - [ ] **T22** — Las clases `.st.done`/`.st.unknown` y el badge rojo no se consumen en el DOM: ningún elemento usa la clase `st`. Superficie: `index.html`. Verificado por navegador en T3 y en la prueba viva.
 - [ ] **T24** — Ruta multi-máquina en `/api/offices` sin verificar en vivo: bajo HOME aislado `machines()` devuelve `[]` (no hay `~/.config/herdr/config.toml` en el scratch), así que `maquinas` quedó solo `['bazzite']` y cero llamadas remotas. En producción el servicio vivo ve `mac-mini` y `macbook-air`.
 - [x] **T25** — Forma de éxito de `agent prompt --wait` capturada en vivo; `herdr_cmd` lee `result` primero y `send_outcome` usa ese `agent`.
@@ -76,6 +77,21 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - **Puertas sin sesión**: `/api/*` → 401, `/` → 302, `/login` → 200.
 - **Reposo**: `nvidia-smi` (dGPU %) y `ps -o %cpu` del servicio tras 60 s sin cambios.
 - **Viva**: un agente `agy` en un panel de prueba, transición `idle → working → blocked`, y `notification.show`.
+
+## Sondeos de eventos (autorización permanente, solo `agy`)
+Adrián autorizó el 2026-10-06: **«no me pidas más permiso, siempre hazlo solo con agy»**. Se registran los workspaces creados y cerrados; `w1` (Strata3060) y los agentes `claude`/`pi`/`opencode2` nunca se tocan. Workspaces usados: `wJ` (probe-v5), `wK` (probe-v5b), `wM`, `wN`, `wP`, `wQ`, `wR` — **todos cerrados**; `workspace list` queda solo con `w1`.
+
+Protocolo del socket verbatim (`~/.config/herdr/herdr.sock`, JSON newline-delimited):
+- Requiere campo `id`; `ping` → `{"id":"p1","result":{"type":"pong","version":"0.9.3","protocol":22,"capabilities":{...}}}`.
+- `events.subscribe` con `{"subscriptions":[...]}` → ack `{"id":..,"result":{"type":"subscription_started"}}`. Los eventos llegan por la misma conexión, newline-delimited, forma `{"data":{...},"event":"..."}`.
+- **Suscripciones globales (solo `type`)**: `pane.agent_detected`, `pane.created`, `pane.closed`, `pane.exited`, `pane.updated`, `pane.focused`, `pane.moved`, y todos los `workspace.*`. `pane.agent_status_changed` y `pane.scroll_changed` **requieren `pane_id`**; `pane.output_matched` requiere `pane_id + source + match`.
+- `OutputMatch` es `{type: substring|regex, value: string}` — **`value`**, no `text`.
+- El evento de estado **no trae el nombre del agente**: trae `pane_id` y `workspace_id`. Por eso T2 (propagar `pane_id`) era prerrequisito de T9. `pane_agent_detected` emite `event` con guiones (`pane_agent_detected`), `pane.agent_status_changed` con punto — hay que manejar ambos.
+- Eventos capturados: `{"data":{"agent":"agy","pane_id":"wR:p2","type":"pane_agent_detected","workspace_id":"wR"},"event":"pane_agent_detected"}`, `{"data":{"agent":"agy","agent_status":"idle","pane_id":"wR:p2","workspace_id":"wR"},"event":"pane.agent_status_changed"}`, luego `working`, luego `blocked`. Y `workspace_created` / `workspace_closed` (el de cierre incluye `workspace_id` duplicado en `data`).
+- `agent start` éxito verbatim: `{"id":"cli:agent:start","result":{"agent":{...,"agent_status":"idle","interactive_ready":true},"argv":["agy"],"type":"agent_started"}}`.
+- `agent prompt --timeout` **requiere** `--wait`: sin `--wait` es **rc=2** (`--timeout requires --wait`). `--wait` puede asentarse en `blocked` (observado), no solo `working`/`done`.
+
+**Defecto real descubierto (entra en el alcance, T26):** `pane split --cwd` **no se honra**. En el pane dividido, `pane run pwd` imprimió `/home/bazzite`, no el `cwd` pedido; y `workspace create --cwd` también responde `cwd: "/home/bazzite"`. La oficina crea la oficina en `~/nombre`, pasa `--cwd`, y **los agentes terminan en la home**. El `cwd` que `/api/offices` reporta viene de su propia meta, no de Herdr: la confinación es cosmética.
 
 ## Verificación viva autorizada (2026-10-06)
 Adrián autorizó una prueba viva en Herdr con **un solo workspace descratch y un solo agente `agy`**, para convertir en verificado lo inferido. Ejecutada y **cerrada**: `wJ` (`probe-v5`) creado, sondeado, y `herdr workspace close wJ` ejecutado; `workspace list` queda solo con `w1`.
