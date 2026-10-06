@@ -70,6 +70,7 @@ ni calidad.
 
 ## Cola (por orden)
 
+- [ ] **CUP** (PRIMERO: tag v0.1.40 upstream, 307 commits; obrero fusiona en wt-CUP; luego compilar+tests+bit-bit+A/B+logpos; NADA se despliega sin OK).
 - [x] **C19** hecha (batería 2× HUMO + 2× CARGA, todo PASA) · [x] **C22** hecha (techo v2: precarga ≤1 ms, manda CPU).
 - [ ] **C23** (cierre) · **C27** (palanca 1 a obrero, PRIORIDAD) · **C26** (CERRADO: P08 archivado en
   `patches/p08-interleave.patch`, se reabre sin round-trip; C26a cancelado) · **C28** (prototipo a obrero)
