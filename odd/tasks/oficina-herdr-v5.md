@@ -46,7 +46,7 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - [x] **T25** — Forma de éxito de `agent prompt --wait` capturada en vivo; `herdr_cmd` lee `result` primero y `send_outcome` usa ese `agent`.
 - [x] **T4** — `herdr_out` captura `stderr` y parsea `{error:{code,message}}`; se eliminan los checks de substring muertos. Commit: *(hash en el próximo commit)*
 - [x] **T5** — `agent prompt --wait --timeout` + manejo real de `agent_blocked` / `agent_prompt_stalled` con mensaje humano. Commit: *(hash en el próximo commit)*
-- [ ] **T6** — Un solo `api snapshot` por ciclo de estado.
+- [x] **T6** — Un solo `api snapshot` por ciclo. Commit: *(hash en el próximo commit)*
 - [ ] **T7** — Locks + rebuild atómico de `CACHE`/`SEEN`/`FAILS`/`MCACHE`/`KCACHE`/`JOBS`/`meta`; `interval` no muta el dict en iteración.
 - [ ] **T8** — Baches multi-máquina: `mach` en `agent start` de ada-cli, `rhome` no cachea `""`, regex `ws` acepta labels reales.
 - [ ] **T9** — `events.subscribe` en un hilo; SSE alimentado por eventos; cero subprocesos en reposo.
@@ -97,6 +97,11 @@ Prueba end-to-end viva (Chromium headless 1187 + Herdr real, puerto 8099, 0 coma
 - 379 llamadas herdr del servidor scratch: 355 `agent list`, 18 `workspace list`, 6 `machine list --json`; **0 mutantes**. Servicio vivo 8095 intacto (`MainPID` 1645893 y `ActiveEnterTimestamp` sin cambio).
 
 ## Progreso
+- 2026-10-06: **T6 completada.** Writer delegado: `server.py` +50/-8, `test_herdr_stub.py` +230/-26, 12 tests netos. Fuente de `build_state` y `raw_agents` pasa a `api snapshot` (verificado rc=0, 6.6 KB, y `--machine mac-mini api snapshot` funciona igual); `api_offices` toma `workspaces` del mismo snapshot por máquina; `SNAP` cachea por máquina con la TTL del intervalo, así el snapshot que construyó el estado es el que leen `api_offices`, `agmap`, `strata_ws` y `state_ws`. `machine list --json` sigue con parseo de lista desnuda vía `herdr_out`. Se invalida `SNAP` al crear y al borrar oficina.
+  - **Llamadas herdr por ciclo, medido con el stub:** `/api/offices` en estado caliente **7 → 3**; `/api/state?ws=w1` **1 → 0** (lee el snapshot cacheado); `/api/offices` frío **8 → 4**; carga completa de página **9 → 4**. Ciclo de estado: 1 subproceso (snapshot en vez de `agent list`).
+  - RED observado: `14 failed, 88 passed`; segunda RED al comentar las dos invalidaciones de `SNAP` → `2 failed, 102 passed` (la oficina creada quedaba oculta por la cache). Evidencia del padre: **104 passed in 9.89 s**.
+  - Riesgo aceptado: `SNAP` es un cache global **sin lock** (documentado en el código, es T7). Un cambio remoto aparece en el límite del ciclo (≤ 5 s) en vez de instantáneo.
+  - `api_office_delete` conserva `workspace list` (una llamada por acción del usuario, no por ciclo).
 - 2026-10-06: **T25: la forma de éxito de `--wait` se captura y rompe T5.** Adrián autorizó un segundo probe (`wK`/`probe-v5b`, un solo `agy`). `agy` no arranca si el pane no lleva `PATH` con `/snap/bin`; el `--env` del `workspace create` **no** se propaga a los paneles de `pane split` (la oficina pasa `--env` en el split para opencode y ada-cli). El agente quedó **blocked** en el prompt de confianza; con autorización de Adrián se envió `Enter` (`agent send-keys probeagy2 enter` → `{"type":"ok"}`), luego `agent wait --until idle` → `interactive_ready:true`, y `agent prompt --wait --timeout 30000` devolvió:
   ```
   {"id":"cli:agent:prompt","result":{"agent":{...,"agent_status":"done","completion_seq":1091,"pane_id":"wK:p3"},"type":"agent_prompted"}}

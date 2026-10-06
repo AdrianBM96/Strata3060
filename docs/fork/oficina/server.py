@@ -187,8 +187,9 @@ def tasks_list():
 def build_state():
     try:
         # el agente sin `name` no es un agente de la oficina: se omite, no se convierte en "?"
-        ags = (hj(["agent", "list"], 8) or {}).get("agents") or []
-        statuses = {a["name"]: a for a in ags if a.get("name")}
+        # T6: la fuente es `api snapshot` (ver `snapshot`), no `agent list`: un subproceso por maquina y
+        # por ciclo. Las `agents` del snapshot traen las mismas claves que `agent list` (captura verbatim).
+        statuses = {a["name"]: a for a in raw_agents(None, 8) if a.get("name")}
     except Exception:
         statuses = {}
     segs = estado_segments()
@@ -225,6 +226,7 @@ def build_state():
 def get_state():
     interval = 30 if os.path.exists(BENCH) else 5
     if CACHE["data"] is None or time.monotonic() - CACHE["at"] >= interval:
+        SNAP["ttl"] = interval   # T6: el snapshot envejece igual que el estado que construye
         CACHE["data"] = build_state(); CACHE["at"] = time.monotonic(); CACHE["data"]["interval"] = interval
     return CACHE["data"]
 def valid_agent(agent): get_state(); return bool(re.match(r"^[\w][\w.\-]{0,31}$", agent or "")) and (agent in LAST_AGENTS or agent in agmap())
@@ -259,8 +261,31 @@ def save_meta(m):
 def hj(args, timeout=15, mach=None):
     r = herdr_cmd(args, timeout, mach)
     return r["res"] if isinstance(r["res"], dict) else None
-def raw_agents(mach=None):
-    r = hj(["agent", "list"], 15, mach); return r["agents"] if r else []
+# T6: `herdr api snapshot`, verificado en el binario 0.9.3 (2026-10-06): rc=0, 6.6 KB, una sola llamada
+# que trae `agents`, `workspaces`, `tabs`, `panes`, `layouts` y el foco. `herdr --machine mac-mini api
+# snapshot` funciona igual (protocol 22, version 0.9.3) y trae la misma forma. Los `agents` del snapshot
+# traen las mismas claves que `agent list` (`name`, `agent_status`, `pane_id`, `workspace_id`, `focused`,
+# `interactive_ready` opcional, ...), asi que la fuente cambia y el payload no.
+# `SNAP` guarda el snapshot por maquina con la TTL del intervalo del ciclo: el snapshot que construyo el
+# estado es el mismo que leen `api_offices`, `agmap` y `strata_ws`, asi cada target se sondea una sola vez
+# por ciclo. Se cachea tambien la respuesta vacia (herdr no responde) para no repetir un subproceso que ya
+# se sabe muerto; el estado envejece igual que hoy. Sin lock: los locks y el rebuild atomico son T7.
+SNAP = {"data": {}, "ttl": 5}
+def fld(snap, k):
+    """Campo del snapshot como lista; [] si herdr no lo trajo. Nunca un crash por un campo ausente."""
+    v = snap.get(k) if isinstance(snap, dict) else None
+    return v if isinstance(v, list) else []
+def snapshot(mach=None, timeout=15):
+    c = SNAP["data"].get(mach)
+    if c and time.monotonic() - c[0] < SNAP["ttl"]: return c[1]
+    r = hj(["api", "snapshot"], timeout, mach)
+    s = r.get("snapshot") if isinstance(r, dict) else None
+    s = s if isinstance(s, dict) else {}
+    SNAP["data"][mach] = (time.monotonic(), s)
+    return s
+def raw_agents(mach=None, timeout=15):
+    """Agentes del snapshot de la maquina: la misma lista que daba `agent list`, en la misma forma."""
+    return fld(snapshot(mach, timeout), "agents")
 MCACHE = {"at": 0, "data": []}; HOMES = {}; AGCACHE = {"at": 0, "data": {}}
 def machines():
     """Máquinas remotas guardadas en herdr (las habilitadas). bazzite es la local."""
@@ -287,18 +312,19 @@ def agmap():
         for a in raw_agents(m["label"]):
             if a.get("name") and a["name"] not in d: d[a["name"]] = m["label"]
     AGCACHE.update(at=time.time(), data=d); return d
-def strata_ws(ws):
+def strata_ws(ws, raw=None):
     for w in ws:
         if w.get("label") == "Strata3060": return w.get("workspace_id")
-    names = {a.get("name"): a.get("workspace_id") for a in raw_agents()}
+    names = {a.get("name"): a.get("workspace_id") for a in (raw if raw is not None else raw_agents())}
     return names.get("opencode2", "w1")
 def api_offices():
-    st = get_state(); r = hj(["workspace", "list"]); ws = r["workspaces"] if r else []
-    sid = strata_ws(ws); m = meta(); offs = []
+    st = get_state()
+    loc = snapshot()   # T6: la maquina local: una sola llamada, la misma que construyo el estado
+    sid = strata_ws(fld(loc, "workspaces"), fld(loc, "agents"))
+    m = meta(); offs = []
     for mach in [None] + [x["label"] for x in machines()]:
-        if mach:
-            r = hj(["workspace", "list"], 20, mach); ws = r["workspaces"] if r else []
-        raw = raw_agents(mach)
+        snap = loc if mach is None else snapshot(mach, 20)
+        ws = fld(snap, "workspaces"); raw = fld(snap, "agents")
         for w in ws:
             wid = w.get("workspace_id"); oid = (mach + ":" + wid) if mach else wid; es = (mach is None and wid == sid)
             ags = [a.get("name") for a in raw if a.get("workspace_id") == wid and a.get("name")]
@@ -400,6 +426,7 @@ def _crear(jid, name, cwd, filas, auto, mach=None):
         wid = r["workspace"]["workspace_id"]; pane = r["root_pane"]["pane_id"]; oid = (mach + ":" + wid) if mach else wid; J["ws"] = oid
         log("Workspace %s creado en %s:%s" % (wid, mach or "bazzite", cwd))
         m = meta(); m[oid] = {"nombre": name, "cwd": cwd, "maquina": mach or "bazzite", "agentes": []}; save_meta(m); wid = oid
+        SNAP["data"].pop(mach, None)   # T6: la oficina creada tiene que aparecer en la siguiente lectura, no cacheada hasta el proximo ciclo
         lista = [(f, n + 1, ("%s-%s%d" % (slug(name)[:10], slug(f["perfil"])[:8], n + 1))[:32]) for f in filas for n in range(f["n"])]
         log("Panel %s: consola de la oficina" % pane)
         allp = [pane]; panes = []
@@ -507,6 +534,7 @@ def api_office_delete(body):
     e = herdr_error(r)
     if e: return 502, {"ok": False, "error": e, "code": r["code"] or "no_response"}   # la meta solo se quita si herdr cerró de verdad
     m = meta(); m.pop(oid, None); save_meta(m); AGCACHE["at"] = 0
+    SNAP["data"].pop(mach, None)   # T6: la oficina borrada no puede seguir saliendo del snapshot cacheado
     return 200, {"ok": True, "output": r["out"][-200:]}
 with open(os.path.join(HERE, "index.html"), "rb") as f:
     INDEX = f.read()

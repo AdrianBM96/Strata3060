@@ -4,16 +4,20 @@ El proposito es doble:
   1. Probar que el stub reproduce las formas que `server.py` parsea. Un run verde es la linea base
      que cada tarea tiene que mantener verde.
   2. Dejar anclas visibles para el RED->GREEN de las tareas T2..T6: despues de T2 quedan
-     `test_herdr_out_solo_stdout` (linea base de T4: `herdr_out` sigue viendo solo stdout) y
-     `test_build_state_no_pide_snapshot` (linea base).
+     `test_herdr_out_solo_stdout` (linea base de T4: `herdr_out` sigue viendo solo stdout) y la linea
+     base del regimen de herdr, hoy `test_build_state_pide_un_snapshot` (antes
+     `test_build_state_no_pide_snapshot`).
      T4 volvio verdes sus tres anclas (`test_start_parsea_el_error_de_stderr`,
      `test_api_log_sin_respuesta_es_el_error_actual`, `test_send_a_bloqueado_es_legible`) y anadio
      la seccion `T4: el error de herdr vive en stderr`.
      T5 volvio verde su ancla (`test_send_no_observa_la_entrega` ->
      `test_send_observa_la_entrega_con_wait`) y anadio la seccion `T5: la entrega se observa`.
-     Quedan anclas de T6
-     (`test_snapshot_emulado_tiene_la_forma_de_la_captura`, `test_build_state_no_pide_snapshot`,
-     `test_api_offices_linea_base`).
+     T6 volvio verdes sus anclas (`test_build_state_no_pide_snapshot` ->
+     `test_build_state_pide_un_snapshot`, `test_api_offices_linea_base`,
+     `test_api_offices_con_oficina_remota`, `test_api_offices_remota_vacia`, y las dos anclas que
+     scripteaban `agent list`: `test_herdr_no_responde_no_reventa` y
+     `test_json_malformado_en_stdout_no_reventa_el_estado`) y anadio la seccion
+     `T6: un solo `api snapshot` por ciclo de estado`.
 
 T2 (contrato de estado) fija el dominio `idle | working | blocked | done | unknown` y los campos
 que viajan por agente: `pane_id`, `focused`, `interactive_ready`, `completion_seq`,
@@ -69,6 +73,23 @@ def _log(server):
 def _prompts(server):
     """Llamadas `agent prompt` reales, con su argv completo."""
     return [c for c in server.calls() if c[:2] == ("agent", "prompt")]
+
+
+def _herdr(server):
+    """Todas las llamadas herdr registradas por el stub: (maquina, args). `server.calls(mach)` filtra por
+    maquina (None = local), asi que el regimen total se cuenta aqui."""
+    return [(m, tuple(a)) for m, a in server.stub.calls]
+
+
+def _snaps(server, mach="__todos__"):
+    """Llamadas `api snapshot`: `mach=None` solo la maquina local, `"__todos__"` todos los targets."""
+    return [c for c in _herdr(server) if c[1][:2] == ("api", "snapshot") and (mach == "__todos__" or c[0] == mach)]
+
+
+def _solo_mac_mini(server):
+    """Deja un solo target remoto: la prueba de regimen es local + 1 remota, no local + 2."""
+    server.stub.machines = [m for m in server.stub.machines if m["label"] == "mac-mini"]
+    return server.stub.machines
 
 
 def _ms(argv):
@@ -160,10 +181,16 @@ def test_build_state_linea_base(server):
     assert st["tareas"] and st["ticker"][-1] == "COLA 3/9"
 
 
-def test_build_state_no_pide_snapshot(server):
+def test_build_state_pide_un_snapshot(server):
+    """T6 (ancla de T1 vuelta verde): un ciclo de estado lanza UNA sola llamada herdr para el target
+    local, y es `api snapshot`, no `agent list`.
+
+    La medida que se reduce esta en la verificacion viva de T23: 379 llamadas del servicio scratch, 355
+    `agent list` y 18 `workspace list`, 6 `machine list --json`, 0 mutantes. Cada `agent list` es un
+    subproceso que compite con las mediciones de la RTX 3060."""
     server.build_state()
-    assert server.calls() == [("agent", "list")]
-    assert ("api", "snapshot") not in server.calls()
+    assert server.calls() == [("api", "snapshot")]
+    assert ("agent", "list") not in server.calls()
 
 
 def test_mkagent_conserva_el_estado_real(server):
@@ -433,7 +460,7 @@ def test_json_malformado_en_stderr_no_reventa(server):
 
 
 def test_json_malformado_en_stdout_no_reventa_el_estado(server):
-    server.script_response(["agent", "list"], "herdr: socket closed\n", "", 1)
+    server.script_response(["api", "snapshot"], "herdr: socket closed\n", "", 1)   # T6: la fuente es el snapshot
     st = server.build_state()
     assert st["herdr"] is False and all(a["status"] == "idle" for a in st["agents"])
 
@@ -786,8 +813,10 @@ def test_api_offices_linea_base(server):
     assert w["id"] == "w1" and w["nombre"] == "Strata3060" and w["strata"] and w["foco"]
     assert w["needs"] is True and w["tareas"] == 4
     assert w["agentes"] == ["claude", "opencode2", "tester", "explorer", "suplente"]
-    calls = server.calls()
-    assert ("agent", "list") in calls and ("workspace", "list") in calls   # dos llamadas separadas
+    calls = [tuple(c[:2]) for c in server.calls()]
+    # T6: la fuente es un solo `api snapshot` por maquina, no `workspace list` + `agent list`
+    assert ("api", "snapshot") in calls
+    assert ("agent", "list") not in calls and ("workspace", "list") not in calls
 
 
 def test_snapshot_emulado_tiene_la_forma_de_la_captura(server):
@@ -809,7 +838,8 @@ def test_api_offices_con_oficina_remota(server):
     assert len(rem) == 1
     assert rem[0]["id"] == "mac-mini:w9" and rem[0]["agentes"] == ["agy-obrero"]
     assert rem[0]["strata"] is False and rem[0]["needs"] is False
-    assert ("workspace", "list") in [tuple(c[:2]) for c in server.calls("mac-mini")]
+    assert ("api", "snapshot") in [tuple(c[:2]) for c in server.calls("mac-mini")]   # T6: una sola llamada
+    assert ("workspace", "list") not in [tuple(c[:2]) for c in server.calls("mac-mini")]
 
 
 def test_api_office_validaciones(server):
@@ -879,9 +909,9 @@ def test_tester_sin_herdr_usa_el_lock(server):
 
 
 def test_herdr_no_responde_no_reventa(server):
-    """T2 con `agent list` vacio (herdr_out == ""): los cinco de siempre siguen en reposo y los
+    """T2 con la fuente vacia (el snapshot no responde): los cinco de siempre siguen en reposo y los
     campos de Herdr son `None`. El estado ausente no es un estado desconocido: no hay agente."""
-    _script_error(server, "usage", "stub sin respuesta", ["agent", "list"], cid="cli:agent:list")
+    _script_error(server, "usage", "stub sin respuesta", ["api", "snapshot"], cid="cli:api:snapshot")
     st = server.build_state()
     assert st["herdr"] is False
     ag = _agentes(st)
@@ -944,7 +974,177 @@ def test_api_offices_remota_vacia(server):
     server.set_remote_agents("mac-mini", [])
     r = server.api_offices()
     assert [o["maquina"] for o in r["offices"]] == ["bazzite"]
-    assert ("workspace", "list") in [tuple(c[:2]) for c in server.calls("mac-mini")]
+    assert len(_snaps(server, "mac-mini")) == 1          # T6: la remota se sondea una sola vez
+    assert ("workspace", "list") not in [tuple(c[:2]) for c in server.calls("mac-mini")]
+
+
+# ---------- T6: un solo `api snapshot` por ciclo de estado ----------
+
+def test_snapshot_trae_las_mismas_agentes_que_agent_list(server):
+    """La captura verbatim de `api snapshot` (2026-10-06, 6.6 KB, rc=0) trae `agents` IDENTICAS a las de
+    `agent list`: la oficina cambia la fuente sin cambiar el payload."""
+    ags = json.loads((FIXTURES / "agent_list.json").read_text(encoding="utf-8"))["result"]["agents"]
+    snap = json.loads((FIXTURES / "api_snapshot.json").read_text(encoding="utf-8"))["result"]["snapshot"]
+    assert snap["agents"] == ags
+    assert snap["workspaces"] == json.loads(
+        (FIXTURES / "workspace_list.json").read_text(encoding="utf-8"))["result"]["workspaces"]
+    r = server.mod.hj(["api", "snapshot"])
+    assert r["snapshot"]["agents"] == server.stub.agents[None]
+    assert [a.get("name") for a in r["snapshot"]["agents"]] == [a.get("name") for a in ags]
+
+
+def test_el_payload_de_state_es_el_mismo_con_snapshot(server):
+    """T6: el payload de `build_state` sale del snapshot y conserva las anclas de T2/T3: mismas claves,
+    los mismos 5 estados, los mismos campos de Herdr por agente."""
+    ags = json.loads((FIXTURES / "agent_list.json").read_text(encoding="utf-8"))["result"]["agents"]
+    by = {a["name"]: a for a in ags if a.get("name")}
+    st = server.build_state()
+    assert [a["name"] for a in st["agents"]] == ["claude", "opencode2", "tester", "explorer", "suplente"]
+    assert st["herdr"] is True
+    for a in st["agents"]:
+        src = by[a["name"]]
+        assert a["status"] == server.mod.estado_real(src["agent_status"])
+        assert all(a[k] == src.get(k) for k in CAMPOS_T2 | {"agent"})
+        assert {"name", "status", "activity", "color", "role", "since", "ts"} <= set(a)
+    assert server.calls() == [("api", "snapshot")]   # una sola llamada, la nueva fuente
+
+
+def test_snapshot_bloqueado_llega_al_payload(server):
+    """T23 fijó `api_snapshot_blocked.json` (agy `explorer` blocked): la fuente snapshot sostiene el
+    contrato de T2 sin tocar `mkagent`, y el ciclo sigue siendo una sola llamada."""
+    server.load("api_snapshot_blocked.json")
+    ag = _agentes(server.build_state())
+    assert ag["explorer"]["status"] == "blocked" and ag["explorer"]["activity"] == "investigando"
+    assert ag["explorer"]["pane_id"] == "w1:pM" and ag["explorer"]["agent"] == "agy"
+    assert ag["explorer"]["interactive_ready"] is True and ag["explorer"]["completion_seq"] == 1100
+    assert server.calls() == [("api", "snapshot")]
+
+
+def test_el_snapshot_del_ciclo_se_reutiliza_en_offices(server):
+    """`api_offices` lee el MISMO snapshot que construyó el estado: no vuelve a lanzar un subproceso local."""
+    st = server.get_state()
+    r = server.api_offices()
+    assert st["interval"] == 5 and r["strata"] == "w1" and len(r["offices"]) == 1
+    assert len(_snaps(server, None)) == 1                              # un solo subproceso local
+    prefijos = [c[1][:2] for c in _herdr(server)]
+    assert ("agent", "list") not in prefijos and ("workspace", "list") not in prefijos
+
+
+def test_api_offices_local_y_una_remota_dos_snapshots(server):
+    """T6: local + 1 target remoto = 2 snapshots (uno por target), no `workspace list` + `agent list` por
+    target. El regimen por ciclo es lo que T9 necesita para pasar a eventos."""
+    _solo_mac_mini(server)
+    server.add_agent(name="agy-obrero", kind="agy", status="blocked", mach="mac-mini", workspace_id="w9")
+    r = server.api_offices()
+    snaps = _snaps(server)
+    assert len(snaps) == 2
+    assert [m for m, a in server.stub.calls if tuple(a[:2]) == ("api", "snapshot")] == [None, "mac-mini"]
+    prefijos = [c[1][:2] for c in _herdr(server)]
+    assert ("workspace", "list") not in prefijos and ("agent", "list") not in prefijos
+    assert r["maquinas"] == ["bazzite", "mac-mini"]
+    assert [(o["id"], o["agentes"]) for o in r["offices"]] == [
+        ("w1", ["claude", "opencode2", "tester", "explorer", "suplente"]), ("mac-mini:w9", ["agy-obrero"])]
+    assert r["offices"][1]["strata"] is False and r["offices"][1]["foco"] is False
+
+
+def test_oficina_remota_sin_agentes_y_un_workspace(server):
+    """Forma capturada en vivo para mac-mini (2026-10-06): 1 workspace `w8` label `~`, 1 pane, 0 agentes.
+    La oficina se renderia vacia, igual que hoy con `workspace list`."""
+    _solo_mac_mini(server)
+    server.set_remote_agents("mac-mini", [])
+    server.stub.workspaces["mac-mini"] = [{"active_tab_id": "w8:t1", "agent_status": "idle", "focused": False,
+                                           "label": "~", "number": 8, "pane_count": 1, "tab_count": 1,
+                                           "workspace_id": "w8"}]
+    r = server.api_offices()
+    assert len(_snaps(server, None)) == 1 and len(_snaps(server, "mac-mini")) == 1
+    rem = [o for o in r["offices"] if o["maquina"] == "mac-mini"]
+    assert len(rem) == 1
+    assert rem[0]["id"] == "mac-mini:w8" and rem[0]["nombre"] == "~"
+    assert rem[0]["agentes"] == [] and rem[0]["tareas"] == 0 and rem[0]["needs"] is False
+    assert rem[0]["strata"] is False and rem[0]["foco"] is False
+
+
+def test_snapshot_vacio_degrada_como_herdr_no_responde(server):
+    """Snapshot con 0 agentes y 0 workspaces: `herdr` False, los cinco en reposo, `api_offices` sin oficinas.
+    No reventa: los campos de Herdr son `None` y no hay crash."""
+    server.stub.agents[None] = []; server.stub.workspaces[None] = []
+    st = server.build_state()
+    assert st["herdr"] is False
+    assert [a["name"] for a in st["agents"]] == ["claude", "opencode2", "tester", "explorer", "suplente"]
+    assert all(a["status"] == "idle" for a in st["agents"])
+    assert all(all(a[k] is None for k in CAMPOS_T2 | {"agent"}) for a in st["agents"])
+    r = server.api_offices()
+    assert r["offices"] == [] and r["strata"] == "w1"
+    assert len(_snaps(server, None)) == 1     # la degradacion no repite el subproceso
+
+
+def test_snapshot_con_campos_ausentes_se_lee_defensivo(server):
+    """Un snapshot cuyo agente no trae `name`, no trae `interactive_ready`, y otro con estado fuera de
+    dominio: el comportamiento es el de T2/T5, sin crash y sin inventar campos."""
+    a = server.add_agent(name="agy-sin-flags", kind="agy", status="idle", workspace_id="w1")
+    del a["interactive_ready"]
+    b = server.add_agent(name="agy-futuro", kind="agy", status="idle", workspace_id="w1")
+    b["agent_status"] = "waiting"
+    c = server.add_agent(name="agy-sin-name", kind="agy", status="idle", workspace_id="w1")
+    del c["name"]
+    ag = _agentes(server.build_state())
+    assert ag["agy-futuro"]["status"] == "unknown"   # actividad: la del CHANGELOG (T2), no la del estado
+    assert ag["agy-sin-flags"]["interactive_ready"] is None and ag["agy-sin-flags"]["status"] == "idle"
+    assert all(x.get("name") for x in ag.values()) and "agy-sin-name" not in ag
+    assert "agy-sin-name" not in server.mod.LAST_AGENTS
+    # T5: `interactive_ready` ausente es `None` (no observamos), no `False`: no penaliza el plazo
+    code, r = _send(server, text="hola", agent="agy-sin-flags")
+    argv = _prompts(server)[-1]
+    assert argv[2] == "agy-sin-flags" and "--wait" in argv
+    assert _ms(argv) == server.mod.send_timeout(len("adrian: hola"), True) == 5300
+    assert code == 200 and r["confirmed"] is True
+
+
+def test_snapshot_con_ready_false_pide_mas_plazo(server):
+    """El campo opcional llega del snapshot y sigue mandando el plazo de `agent prompt --wait` (T5)."""
+    a = server.add_agent(name="agy-panel", kind="agy", status="blocked", workspace_id="w1")
+    a["interactive_ready"] = False
+    code, r = _send(server, text="hola", agent="agy-panel")
+    assert _ms(_prompts(server)[-1]) == server.mod.send_timeout(len("adrian: hola"), False) == 9300
+    assert code == 200 and r["confirmed"] is True
+
+
+def test_raw_agents_y_agmap_salen_del_snapshot(server):
+    """`raw_agents`, `agmap` y `state_ws` leen la misma fuente: el snapshot por maquina."""
+    server.add_agent(name="agy-obrero", kind="agy", status="blocked", mach="mac-mini", workspace_id="w9")
+    assert [a.get("name") for a in server.mod.raw_agents()] == [a.get("name") for a in server.stub.agents[None]]
+    assert server.mod.agmap()["agy-obrero"] == "mac-mini"
+    assert server.mod.agmap()["explorer"] is None
+    prefijos = [c[1][:2] for c in _herdr(server)]
+    assert prefijos.count(("api", "snapshot")) == 3          # local, mac-mini, macbook-air: una por target
+    assert ("agent", "list") not in prefijos
+    assert _agentes(server.state_ws("mac-mini:w9"))["agy-obrero"]["status"] == "blocked"
+
+
+def test_office_create_invalida_el_snapshot(server):
+    """T6: la oficina creada por la propia oficina tiene que aparecer en la siguiente lectura de
+    `/api/offices`, no quedar cacheada hasta el proximo ciclo (el cache nuevo no puede robar una lectura)."""
+    server.get_state()                                   # ciclo 1: snapshot local cacheado
+    assert len(_snaps(server, None)) == 1
+    code, r = server.mod.api_office(json.dumps(
+        {"name": "prueba agy", "equipo": [{"perfil": "obrero", "kind": "agy", "model": "gemini-pro", "n": 1}]}))
+    j = server.job(r["job"])
+    offs = [o["id"] for o in server.api_offices()["offices"]]
+    assert j["estado"] == "hecho" and j["ws"] in offs
+    assert len(_snaps(server, None)) == 2                # se volvio a sondear: el cache se invalido al crear
+
+
+def test_office_delete_invalida_el_snapshot(server):
+    """T6: una oficina borrada desaparece de `/api/offices` en la siguiente lectura, no 5 s despues.
+    El snapshot remoto queda cacheado por la primera lectura, asi que el borrado tiene que invalidarlo."""
+    server.add_agent(name="agy-obrero", kind="agy", status="idle", mach="mac-mini", workspace_id="w9")
+    assert [o["id"] for o in server.api_offices()["offices"]] == ["w1", "mac-mini:w9"]
+    code, r = server.mod.api_office_delete(json.dumps({"id": "mac-mini:w9", "confirm": "w9"}))
+    assert code == 200 and r["ok"] is True
+    offs = [o["id"] for o in server.api_offices()["offices"]]
+    assert "mac-mini:w9" not in offs
+    assert len(_snaps(server, "mac-mini")) == 2          # la remota se sondeo de nuevo tras borrar
+    assert len(_snaps(server, None)) == 1                # y el ciclo local sigue siendo una sola llamada
 
 
 def test_kinds_local_no_lanza_binarios(server):
