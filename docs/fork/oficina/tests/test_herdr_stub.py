@@ -31,6 +31,18 @@ T7 (locks y rebuild atómico) añade la sección `T7: locks, rebuild atómico y 
 `11 failed, 106 passed` (faltaban `STLOCK`/`MLOCK`/`KLOCK`/`FLOCK`/`JLOCK`/`MFLOCK`, `job_view`,
 `meta_edit` y la escritura atómica con `os.replace`).
 
+T8 (ruta multi-máquina) añade la sección `T8: la ruta multi-máquina (defectos 1..6)`: 16 tests.
+Los seis defectos están enumerados en la cabecera de la sección. RED observado antes del fix:
+`10 failed, 120 passed` (faltaban `state_for`, el rechazo de `ada-cli` remoto, el `--machine` en la rama
+`ada-cli` de `_start`, la TTL negativa de `rhome`, el ámbito de `api_hilo` y la invalidación de `AGCACHE`
+al crear). El RED destapo un septimo bache multi-máquina, fijado por
+`test_agmap_invalida_al_crearse_una_oficina`: `_crear` indexaba la meta de los agentes por `wid` (`w2`),
+pero la meta remota vive bajo `oid` (`mac-mini:w2`), así que toda creación remota terminaba con
+`estado: error` (`KeyError: 'w2'`) y los agentes no quedaban registrados en `oficinas.json`.
+Tres de los 16 tests son guardas de la línea base (pasan también antes del fix): el argv remoto de
+`--machine` en los cuatro kinds locales a la rama no-ada, el `ada-cli` local y la invalidación al borrar.
+Las anclas de T7 siguen verdes con la nueva forma de `HOMES` (`(home, marca)`).
+
 Las formas verificadas contra el binario herdr 0.9.3 estan en `fixtures/` (ver README.md).
 """
 from __future__ import annotations
@@ -1506,3 +1518,305 @@ def test_caches_de_herdr_no_reventan_bajo_lecturas_concurrentes(server):
     assert all(x is not None for x in out)
     assert server.mod.agmap()["agy-obrero"] == "mac-mini"
     assert server.mod.HOMES["mac-mini"]                      # la cache de homes quedó poblada
+
+# ---------- T8: la ruta multi-máquina (defectos 1..6) ----------
+#
+# Los seis defectos y la prueba que los fija:
+#   1. `_start` de `ada-cli` descarta `mach` y el shim de ada es una ruta de la home de bazzite: un
+#      ada-cli remoto se lanza en bazzite. Se rechaza y `--machine` llega en el argv de todos los kinds.
+#   2. `rhome` cachea `""` para siempre: una sola sondadura SSH fallida hace fallar cada creación remota
+#      sin recuperación. No se cachea el fallo; se re-sondea con una TTL negativa acotada.
+#   3. La regex de `/api/state?ws` rechaza labels con `_` o mayúsculas y cae en silencio a `get_state()`:
+#      una petición de la oficina remota renderiza la oficina de Strata.
+#   4. La confinación de `cwd` remoto depende de `rhome`, que puede ser `""`.
+#   5. `api_hilo` lee solo `envios.log` (local). El ámbito se declara en el payload, no se finge.
+#   6. `AGCACHE` (TTL 20 s) esconde un agente recién creado. Se invalida al crear, como `SNAP` (T6).
+#
+# Los helpers emulan `ssh_run` sustituyendo el módulo, no el stub: la superficie de edición no incluye
+# `stub_herdr.py`, y el stub emula a propósito una máquina remota SIN agentes instalados
+# (`test_kinds_remota_sin_agentes` afirma `kinds("mac-mini") == {}`).
+
+def _starts(server):
+    """Llamadas `agent start` con la máquina que el stub vio en `--machine` (el stub la separa del argv).
+
+    `herdr --machine mac-mini agent start ...` llega al stub como `("mac-mini", ["agent","start",...])`,
+    así que la máquina registrada es la prueba de que la bandera está en el argv (`server.py:63` y
+    `herdr_cmd` la ponen delante de los argumentos).
+    """
+    return [(m, tuple(a)) for m, a in server.stub.calls if tuple(a[:2]) == ("agent", "start")]
+
+
+def _remota_viva(server, monkeypatch, home="/Users/macmini"):
+    """Emula una máquina remota con `agy` instalado y su home accesible por SSH."""
+    def ssh(mach, cmd, t=30, inp=None):
+        if "echo $HOME" in cmd: return home + "\n"
+        if "command -v" in cmd: return "agy\n"
+        if "agy models" in cmd: return "gemini-pro\nclaude-sonnet\n"
+        return ""
+    monkeypatch.setattr(server.mod, "ssh_run", ssh)
+
+
+def _expirar_rhome(server, mach):
+    """Pone la marca de la sondadura fuera de la TTL negativa: la máquina se vuelve a sondear."""
+    server.mod.HOMES[mach] = ("", time.monotonic() - server.mod.RHOME_NEG - 1)
+
+
+def test_start_remota_lleva_machine_en_todos_los_kinds(server):
+    """Defecto 1: el `agent start` remoto tiene que llevar `--machine <label>`, en todos los kinds.
+
+    Sin la bandera, herdr habla con el socket de bazzite: el agente se crea en la máquina local y la
+    oficina remota queda vacía. `agi` además solo se encuentra si el panel lleva `/snap/bin` en `PATH`
+    (observado en vivo), así que el `kind` no basta: la máquina es parte del comando."""
+    for kind in ("agy", "pi", "opencode", "claude"):
+        server.stub.calls.clear()
+        r = server.mod._start("agy-remoto-" + kind, kind, "", "w9:p1", "/tmp", False, "mac-mini")
+        assert r == "listo", kind
+        starts = _starts(server)
+        assert [m for m, a in starts] == ["mac-mini"], "kind %s: argv sin --machine" % kind
+        a = starts[0][1]
+        assert a[:2] == ("agent", "start") and a[3] == "--kind" and a[4] == kind, a
+        assert "--pane" in a and "--timeout" in a   # el comando completo, no solo la bandera
+
+
+def test_ada_cli_remota_se_rechaza_y_no_lanza_el_binario_local(server):
+    """Defecto 1: el shim de ada-cli (`ADA_PATH`) vive en la home de bazzite, así que un ada-cli remoto
+    no puede usarlo. `kinds` remoto excluye `ada-cli` por diseño; se hace explícito y nunca se lanza un
+    binario local en una máquina remota."""
+    server.stub.calls.clear()
+    r = server.mod._start("ofi-remota-obrero1", "ada-cli", "", "w9:p1", "/tmp", False, "mac-mini")
+    assert "ada-cli" in r and "remota" in r            # mensaje legible, en español
+    assert _starts(server) == []                       # ni un solo `agent start`
+    assert "ada-cli" not in server.stub.executables()  # y no se lanza el shim de bazzite
+
+
+def test_ada_cli_local_sigue_creando(server):
+    """TRIANGULAR: rechazar lo remoto no rompe el ada-cli de bazzite, que es el único caso válido."""
+    assert server.mod._start("ada-local", "ada-cli", "", "w1:p1", "/tmp", False, None) == "listo"
+    assert [m for m, a in _starts(server)] == [None]
+
+
+def test_api_office_rechaza_ada_cli_remoto_antes_de_lanzar_el_hilo(server):
+    """Defecto 1: el rechazo tiene que estar en la validación, no dentro del hilo de creación."""
+    server.stub.calls.clear()
+    code, r = server.mod.api_office(json.dumps({"name": "ofi remota", "maquina": "mac-mini",
+                                                "equipo": [{"perfil": "obrero", "kind": "ada-cli", "n": 1}]}))
+    assert code == 400 and "ada-cli" in r["error"] and "remota" in r["error"]
+    assert server.mod.JOBS == {}                       # no se lanza el hilo de creación
+    assert _starts(server) == []
+
+
+def test_rhome_no_cachea_el_fallo_para_siempre(server, monkeypatch):
+    """Defecto 2: `if mach not in HOMES` cachea también el `""` de una sondadura fallida: una sola SSH
+    que no responde convierte cada creación remota en 502 para siempre, sin recuperación sin reinicio.
+    El fallo no se cachea; se re-sondea al expirar la TTL negativa, acotada para no sondear en cada petición."""
+    probes = []
+    def muerta(mach, cmd, t=30, inp=None):
+        probes.append(cmd)
+        return ""
+    monkeypatch.setattr(server.mod, "ssh_run", muerta)
+    assert server.mod.rhome("mac-mini") == "" and len(probes) == 1
+    assert server.mod.rhome("mac-mini") == "" and len(probes) == 1   # dentro de la TTL: una sola sondadura
+    _expirar_rhome(server, "mac-mini")
+    assert server.mod.rhome("mac-mini") == "" and len(probes) == 2   # expirada: se vuelve a sondear
+    monkeypatch.setattr(server.mod, "ssh_run", lambda m, c, t=30, inp=None: "/Users/macmini\n")
+    _expirar_rhome(server, "mac-mini")
+    assert server.mod.rhome("mac-mini") == "/Users/macmini"          # recuperada sin reiniciar el servicio
+    assert server.mod.rhome("mac-mini") == "/Users/macmini"          # el éxito sí se cachea
+
+
+def test_api_office_recupera_la_maquina_que_volvio_a_responder(server, monkeypatch):
+    """Defecto 2/4: el 502 de una máquina muerta no puede ser perpetuo, y la confinación de `cwd` depende
+    de `rhome`. Cuando la máquina responde, la oficina se crea confinada en su home real."""
+    _solo_mac_mini(server)
+    vivo = [False]
+    def ssh(mach, cmd, t=30, inp=None):
+        if "echo $HOME" in cmd: return "/Users/macmini\n" if vivo[0] else ""
+        if "command -v" in cmd: return "agy\n"
+        if "agy models" in cmd: return "gemini-pro\n"
+        return ""
+    monkeypatch.setattr(server.mod, "ssh_run", ssh)
+    body = json.dumps({"name": "ofi remota", "maquina": "mac-mini",
+                       "equipo": [{"perfil": "obrero", "kind": "agy", "n": 1}]})
+    code, r = server.mod.api_office(body)
+    assert code == 502 and r["ok"] is False and "mac-mini" in r["error"] and "SSH" in r["error"]
+    assert server.mod.JOBS == {}
+    vivo[0] = True
+    _expirar_rhome(server, "mac-mini")
+    code2, r2 = server.mod.api_office(body)
+    assert code2 == 200 and r2["ok"] is True
+    j = server.job(r2["job"])
+    assert j["estado"] == "hecho" and j["ws"] == "mac-mini:w2"
+    pasos = " ".join(j["pasos"])
+    assert "mac-mini:/Users/macmini/ofi-remota" in pasos   # confinada al home remoto
+    assert "no responde" not in pasos
+
+
+def test_api_office_remota_confinada_al_home_y_sin_ocultas(server, monkeypatch):
+    """Defecto 4: la confinación al home remoto se mantiene, y `~/x` y la ruta absoluta del home remoto
+    caen en el mismo `cwd`. El rechazo de carpetas ocultas y de rutas fuera del home usa el home real,
+    no el `""` cacheado, y un rechazo no lanza el hilo de creación.
+
+    Es RED en la base por el séptimo bache: la creación remota terminaba en `KeyError: 'w2'` antes de
+    escribir la meta, así que el `cwd` remoto nunca llegaba a `oficinas.json`.
+    """
+    _solo_mac_mini(server)
+    _remota_viva(server, monkeypatch)
+    for raw, esperado in (("~/taller", "/Users/macmini/taller"),
+                          ("/Users/macmini/taller", "/Users/macmini/taller")):
+        server.mod.save_meta({})
+        code, r = server.mod.api_office(json.dumps({"name": "ofi remota", "maquina": "mac-mini", "cwd": raw,
+                                                    "equipo": [{"perfil": "obrero", "kind": "agy", "n": 1}]}))
+        j = server.job(r["job"])
+        assert code == 200 and j["estado"] == "hecho"
+        assert server.mod.meta()[j["ws"]]["cwd"] == esperado
+    antes = len(server.mod.JOBS)
+    for raw in ("~/.hidden", "/etc/ofi"):
+        code, r = server.mod.api_office(json.dumps({"name": "ofi remota", "maquina": "mac-mini", "cwd": raw,
+                                                    "equipo": [{"perfil": "obrero", "kind": "agy", "n": 1}]}))
+        assert code == 400 and "ocultas" in r["error"]
+    assert len(server.mod.JOBS) == antes   # un rechazo no lanza el hilo de creacion
+
+
+def test_state_ws_acepta_los_labels_reales_de_machine_list(server):
+    """Defecto 3: la regex `[a-z0-9][a-z0-9-]{0,31}` rechaza `_` y mayúsculas, y la caída es silenciosa a
+    `get_state()`. El dominio aceptado es el que `machine list --json` produce: letras, dígitos, `-` y `_`,
+    con mayúsculas (el target real `31017423Z@100.99.86.60` lleva mayúsculas)."""
+    for m in server.stub.machines:
+        code, st = server.mod.state_for(m["label"] + ":w1")
+        assert code == 200 and st["maquina"] == m["label"] and st["agents"] == []
+    # Los dos labels sinteticos amplian el dominio probado (la captura real no trae `_` ni mayusculas en
+    # el label, solo en el target): el dominio que la regex acepta tiene que incluirlos.
+    server.stub.machines.append({"id": "f" * 32, "label": "Office_9", "target": "user@100.1.2.3",
+                                 "session": "default", "enabled": True, "selected": False})
+    server.stub.machines.append({"id": "e" * 32, "label": "Mac_9", "target": "Z9@100.1.2.4",
+                                 "session": "default", "enabled": True, "selected": False})
+    server.mod.MCACHE.update(at=0, data=[])   # envejecer la cache: los labels nuevos tienen que verse
+    for label in ("Office_9", "Mac_9"):
+        code, st = server.mod.state_for(label + ":w1")
+        assert code == 200 and st["maquina"] == label
+
+
+def test_state_ws_label_desconocido_es_error_y_no_estado_local(server):
+    """Defecto 3: un label desconocido tiene que responder un error explícito, nunca el estado de
+    bazzite. Hoy `/api/state?ws=no-existe:w9` renderiza la oficina de Strata sin decirlo."""
+    code, r = server.mod.state_for("no-existe:w9")
+    assert code == 404 and "no-existe" in r["error"]
+    assert "agents" not in r, "el rechazo devolvió el estado local de Strata"
+    assert server.mod.state_for("w1")[1]["agents"] != []   # lo local sigue intacto
+    code, r = server.mod.state_for("no-existe:w9")
+    assert r["ws"] == "no-existe:w9"                       # y el payload dice qué se pidió
+    code, r = server.mod.state_for("Mac_9:w1")
+    assert code == 404 and "Mac_9" in r["error"]           # label con mayúsculas: forma válida, máquina desconocida
+    code, r = server.mod.state_for("w9")
+    assert code == 200 and r["ws"] == "w9"                 # sin label: la oficina local, como siempre
+    code, r = server.mod.state_for("bazzite:w1")
+    assert code == 200 and r["maquina"] == "bazzite"       # `bazzite:` es la maquina local, no un label desconocido
+    code, r = server.mod.state_for("")
+    assert code == 200 and "interval" in r                 # sin `ws`: el estado de la oficina de Strata
+    code, r = server.mod.state_for("mac-mini;w9")
+    assert code == 400 and "agents" not in r               # forma inválida: error, no fallback
+
+
+def test_api_hilo_declara_el_ambito_del_auditoria(server):
+    """Defecto 5: `envios.log` lo escribe `api_send` en bazzite, así que el historial de un agente
+    remoto NO existe en este servidor. Se dice en el payload, con un campo que la UI puede mostrar;
+    no se finge un historial remoto."""
+    server.add_agent(name="agy-obrero", kind="agy", status="idle", mach="mac-mini", workspace_id="w9")
+    server.send_log(json.dumps({"ts": "2026-10-06T08:00:00Z", "agent": "claude",
+                                "mode": "direct", "text": "revisa la cola"}))
+    r = server.api_hilo("agy-obrero")
+    assert r["audit"] == "local" and r["maquina"] == "mac-mini"
+    assert "mac-mini" in r["scope"] and "local" in r["scope"]
+    assert r["envios"] == []   # honesto: el log de bazzite no es el historial de la máquina remota
+
+
+def test_api_hilo_local_declara_su_ambito_y_sigue_mostrando(server):
+    """TRIANGULAR: un agente de bazzite declara su ámbito sin perder el historial que sí existe."""
+    server.send_log(json.dumps({"ts": "2026-10-06T08:00:00Z", "agent": "claude",
+                                "mode": "direct", "text": "revisa la cola"}))
+    r = server.api_hilo("claude")
+    assert r["audit"] == "local" and r["maquina"] == "bazzite" and r["scope"] is None
+    assert r["envios"] == ["2026-10-06T08:00:00Z [direct] revisa la cola"]
+
+
+def test_agmap_invalida_al_crearse_una_oficina(server, monkeypatch):
+    """Defecto 6: `AGCACHE` (TTL 20 s) esconde un agente creado por la propia oficina, así que
+    `valid_agent` lo rechaza y el envío a ese agente es un 400 hasta que vence la TTL. `SNAP` (T6) ya
+    se invalida al crear y al borrar: `AGCACHE` tiene que ser consistente con eso."""
+    _solo_mac_mini(server)
+    _remota_viva(server, monkeypatch)
+    server.mod.agmap()                                   # el ciclo de estado y los envíos llenan la cache
+    code, r = server.mod.api_office(json.dumps({"name": "ofi remota", "maquina": "mac-mini",
+                                                "equipo": [{"perfil": "obrero", "kind": "agy", "n": 1}]}))
+    assert code == 200
+    j = server.job(r["job"])
+    assert j.get("error") is None, "el job remoto reventó: %s" % j.get("error")
+    assert j["estado"] == "hecho", j
+    nombre = "ofi-remota-obrero1"
+    assert server.valid_agent(nombre) is True, "el agente creado queda invisible hasta que vence la TTL"
+    assert server.mod.agmap()[nombre] == "mac-mini"
+    snaps = len(_snaps(server, "mac-mini"))
+    server.valid_agent("claude")
+    server.valid_agent(nombre)
+    assert len(_snaps(server, "mac-mini")) == snaps, "la invalidación no puede sondear en cada petición"
+
+
+def test_agmap_invalida_al_borrarse_una_oficina(server):
+    """TRIANGULAR (defecto 6): el agente borrado deja de ser válido en la siguiente lectura, y la
+    invalidación se hace con la misma TTL explícita que al crear."""
+    server.add_agent(name="agy-obrero", kind="agy", status="idle", mach="mac-mini", workspace_id="w9")
+    assert server.valid_agent("agy-obrero") is True
+    code, r = server.mod.api_office_delete(json.dumps({"id": "mac-mini:w9", "confirm": "w9"}))
+    assert code == 200 and r["ok"] is True
+    assert server.valid_agent("agy-obrero") is False
+    assert "agy-obrero" not in server.mod.agmap()
+
+def test_el_agente_creado_se_puede_enviar_sin_esperar(server, monkeypatch):
+    """Defecto 6, el pago real: el agente creado por la oficina se puede usar en la siguiente petición,
+    no 20 s después. `api_send` rechaza un agente desconocido con 400, así que la cache vieja se ve por
+    el humano como "agente desconocido" sin ninguna pista de que el agente existe."""
+    _solo_mac_mini(server)
+    _remota_viva(server, monkeypatch)
+    server.mod.agmap()                                   # el ciclo de estado llena la cache
+    code, r = server.mod.api_office(json.dumps({"name": "ofi remota", "maquina": "mac-mini",
+                                                "equipo": [{"perfil": "obrero", "kind": "agy", "n": 1}]}))
+    assert server.job(r["job"])["estado"] == "hecho"
+    code, r = _send(server, text="revisa", agent="ofi-remota-obrero1")
+    assert code == 200 and r["confirmed"] is True
+    argv = [c for c in server.calls("mac-mini") if c[:2] == ("agent", "prompt")][0]
+    assert argv[2] == "ofi-remota-obrero1" and "--wait" in argv   # la entrega se observa, en la máquina remota
+    assert _log(server)[0]["agent"] == "ofi-remota-obrero1"
+    h = server.api_hilo("ofi-remota-obrero1")           # y su hilo declara el ambito del audit
+    assert h["maquina"] == "mac-mini" and h["audit"] == "local"
+    assert "mac-mini" in h["scope"] and "local" in h["scope"]
+    # lo que este servidor registro si aparece (el envio anterior): `scope` dice que el log es solo
+    # local, no que el historial de la maquina remota este completo
+    assert h["envios"][0].endswith("[direct] revisa")
+
+
+def test_el_rechazo_de_ada_cli_remoto_dice_lo_mismo_en_el_400_y_en_el_paso_del_job(server):
+    """TRIANGULAR: el rechazo de la validación y el paso del job usan las mismas palabras, para que el
+    mensaje se entienda igual en los dos sitios donde lo ve el humano."""
+    r = server.mod._start("ofi-remota-obrero1", "ada-cli", "", "w9:p1", "/tmp", False, "mac-mini")
+    code, body = server.mod.api_office(json.dumps({"name": "ofi remota", "maquina": "mac-mini",
+                                                   "equipo": [{"perfil": "obrero", "kind": "ada-cli", "n": 1}]}))
+    assert r.replace("ERROR ", "") == body["error"]
+
+
+def test_opencode_remoto_sin_home_fallas_legible_y_no_escribe_fuera_del_home(server, monkeypatch):
+    """Defecto 4: `oc_config` construye su ruta con `rhome(mach)`. Con el home sin leer, la ruta caía en
+    `/.cache/...`, fuera del home de la máquina remota. Se rechaza y no se escribe en la máquina."""
+    writes = []
+    def ssh(mach, cmd, t=30, inp=None):
+        writes.append(cmd)
+        return ""
+    monkeypatch.setattr(server.mod, "ssh_run", ssh)
+    with pytest.raises(RuntimeError) as e:
+        server.mod.oc_config("ofi-remota-obrero1", "gemini-pro", "mac-mini")
+    assert "mac-mini" in str(e.value) and "SSH" in str(e.value)
+    assert not any("cat >" in c for c in writes), "se escribió en la máquina con una ruta fuera del home"
+    # y con el home leído, la ruta queda dentro del home remoto
+    monkeypatch.setattr(server.mod, "ssh_run", lambda m, c, t=30, inp=None: "/Users/macmini\n")
+    server.mod.HOMES["mac-mini"] = ("", time.monotonic() - server.mod.RHOME_NEG - 1)
+    f = server.mod.oc_config("ofi-remota-obrero1", "gemini-pro", "mac-mini")
+    assert f == "/Users/macmini/.cache/strata-oficina/opencode/ofi-remota-obrero1.json"

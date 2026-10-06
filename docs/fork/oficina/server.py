@@ -14,6 +14,8 @@ ENVIADOS = H("~/explorer/ENVIADOS.md"); SUPLENCIA = H("~/.cache/strata-watchdog/
 LOG_UP = H("~/.cache/strata-upstream/log"); LOG_WD = H("~/.cache/strata-watchdog/log")
 PWF = os.environ.get("STRATA_OFICINA_PW", H("~/.config/strata-oficina/password.scrypt"))
 ENVLOG = H("~/.cache/strata-oficina/envios.log"); B64 = base64.b64decode
+# T8 (defecto 5): el audit log vive solo en bazzite, y el ambito se declara en la respuesta de `/api/hilo`.
+AUDIT_SCOPE = "el historial de envíos es local (bazzite): los envíos a %s no se registran aquí"
 SESSF = H("~/.cache/strata-oficina/sesiones.json"); SELOCK = threading.RLock(); FAILS = {}; FLOCK = threading.Lock()
 # T7 (locks): `SELOCK` protege `SESS` y su fichero. `FLOCK` protege `FAILS`: podar, comprobar el
 # limite y registrar un fallo son una sola lectura-modificacion-escritura; sin lock dos hilos cuentan
@@ -269,6 +271,7 @@ def api_log(agent):
     return {"agent": agent, "lines": r["out"].strip().splitlines()[-30:]}
 def api_hilo(agent):
     if not valid_agent(agent): return {"error": "agente desconocido"}
+    mach = agmap().get(agent)
     env = []
     for line in read(ENVLOG).strip().splitlines()[-40:]:
         try: d = json.loads(line)
@@ -277,7 +280,11 @@ def api_hilo(agent):
         if d.get("agent") == agent or (d.get("mode") == "viaclaude" and agent == "claude"):
             env.append("%s [%s] %s" % (d.get("ts", ""), d.get("mode", ""), (d.get("text") or "")[:120]))
     men = [short_row(r) for r in table_rows(60) if agent.lower() in r.lower()][-8:]
-    return {"agent": agent, "envios": env[-10:], "menciones": men}
+    # T8 (defecto 5): `envios.log` lo escribe `api_send` en bazzite, asi que el historial de un agente
+    # remoto no existe en este servidor. No se finge: el payload declara el ambito con un campo que la UI
+    # puede mostrar, y `envios` queda vacio porque no hay historial, no porque no se haya enviado nada.
+    return {"agent": agent, "envios": env[-10:], "menciones": men, "audit": "local",
+            "maquina": mach or "bazzite", "scope": AUDIT_SCOPE % mach if mach else None}
 OFIMETA = H("~/.cache/strata-oficina/oficinas.json")
 MFLOCK = threading.Lock()   # T7: `oficinas.json` (antes read-modify-write sin lock y truncate-and-write)
 PERFILES = {"arquitecto": ("claude", "Arquitecto"), "desarrollador": ("opencode", "Desarrollador"),
@@ -346,7 +353,15 @@ def snapshot(mach=None, timeout=15):
 def raw_agents(mach=None, timeout=15):
     """Agentes del snapshot de la maquina: la misma lista que daba `agent list`, en la misma forma."""
     return fld(snapshot(mach, timeout), "agents")
-MCACHE = {"at": 0, "data": []}; HOMES = {}; AGCACHE = {"at": 0, "data": {}}
+MCACHE = {"at": 0, "data": []}; HOMES = {}; AGCACHE = {"at": 0, "data": {}, "ttl": 20}
+# T8 (defecto 2): `HOMES` guarda la pareja `(home, marca de la ultima sondadura)`. Un `""` es un fallo,
+# no un resultado: el exito no caduca (el home de una maquina no cambia) y el fallo solo durante
+# `RHOME_NEG` segundos, para que una maquina muerta no se sondee en cada peticion y una que volvio a
+# responder se recupere sin reiniciar el servicio.
+RHOME_NEG = 60
+# T8 (defecto 6): `AGCACHE` declara su TTL (`ttl`) para que crear y borrar la invaliden igual que `SNAP`
+# (T6). Invalidar una cache es dejar su marca fuera de su TTL, sin tocar lock ni datos.
+def envejecer(c): c["at"] = 0.0
 def machines():
     """Máquinas remotas guardadas en herdr (las habilitadas). bazzite es la local."""
     with MLOCK:   # T7: `MCACHE` se publica entero (`data` se reasocia, nunca se muta en sitio)
@@ -362,14 +377,25 @@ def ssh_run(mach, cmd, t=30, inp=None):
     try: return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", tg, full], capture_output=True, text=True, timeout=t, input=inp).stdout
     except Exception: return ""
 def rhome(mach):
+    """Home de una maquina remota, sin cache de un fallo para siempre (T8, defecto 2).
+
+    Antes `if mach not in HOMES` guardaba tambien el `""` de una sondadura fallida: una sola SSH que no
+    respondia convertia cada creacion de oficina remota en 502 de forma permanente, sin recuperacion sin
+    reinicio del servicio. El exito se cachea sin caducidad; el fallo solo `RHOME_NEG` segundos, asi una
+    maquina muerta no se sondea en cada peticion y la que volvio a responder se recupera sola.
+    """
     with MLOCK:   # T7: `HOMES` por maquina; RLock porque `ssh_run` -> `target` -> `machines` reentra
-        if mach not in HOMES: HOMES[mach] = ssh_run(mach, "echo $HOME", 15).strip()
-        return HOMES[mach]
+        h = HOMES.get(mach)
+        if h and h[0]: return h[0]                              # el home conocido no caduca
+        if h and time.monotonic() - h[1] < RHOME_NEG: return ""   # muerta: una sola sondadura por ventana
+        home = ssh_run(mach, "echo $HOME", 15).strip()
+        HOMES[mach] = (home, time.monotonic())   # T7: se publica la pareja entera, de una
+        return home
 def split_id(oid): return tuple(oid.split(":", 1)) if ":" in oid else (None, oid)
 def agmap():
     """nombre de agente -> máquina (None = bazzite)."""
     with MLOCK:   # T7: `AGCACHE` bajo `MLOCK`; `raw_agents` toma `STLOCK` dentro (MLOCK -> STLOCK)
-        if time.time() - AGCACHE["at"] < 20: return AGCACHE["data"]
+        if time.time() - AGCACHE["at"] < AGCACHE["ttl"]: return AGCACHE["data"]   # T8: la TTL es explicita
         d = {a.get("name"): None for a in raw_agents() if a.get("name")}
         for m in machines():
             for a in raw_agents(m["label"]):
@@ -409,11 +435,34 @@ def state_ws(oid):
             ags.append(mkagent(a["name"], st, ACTS[st], "#fb7185", roles.get(a["name"], a.get("agent", "agente")), a))
     return {"agents": ags, "metrics": {}, "ticker": [], "queue": {"done": 0, "total": 0}, "lock": False, "bench": False,
             "suplencia": False, "herdr": True, "tareas": [], "ws": oid, "maquina": mach or "bazzite", "updated": time.strftime("%H:%M:%S UTC", time.gmtime())}
+# T8 (defecto 3): el dominio de label que `/api/state?ws=` acepta es el que `machine list --json` produce
+# de verdad (letras, digitos, `-` y `_`, con mayusculas: la captura real trae `mac-mini` y `macbook-air`,
+# y el target `31017423Z@100.99.86.60` lleva mayusculas). Antes la regex `[a-z0-9][a-z0-9-]{0,31}`
+# rechazaba `_` y mayusculas, y la peticion caia en silencio a `get_state()`: una oficina remota
+# renderiaba la oficina de Strata. Un label desconocido es un error explicito, nunca el estado local.
+WSRE = r"^([A-Za-z0-9][A-Za-z0-9_-]{0,31}:)?w[0-9A-Za-z]+$"
+def state_for(ws):
+    """(code, payload) para `/api/state?ws=...`: la maquina del label, sin fallback silencioso a lo local.
+
+    `ws` vacio es la oficina de Strata, como siempre. Con label, la maquina tiene que estar en
+    `machine list`: si no esta, se responde un error y el payload dice que se pidio, de modo que la UI
+    no puede pintar la oficina local como si fuera la remota.
+    """
+    if not ws: return 200, get_state()
+    mach, wid = split_id(ws)
+    if not re.match(WSRE, ws): return 400, {"error": "oficina inválida: usa wN o máquina:wN", "ws": ws}
+    if mach == "bazzite": return 200, state_ws(wid)   # bazzite es la maquina local: `bazzite:wN` es la misma oficina
+    if mach and not target(mach): return 404, {"error": "máquina desconocida: " + mach, "ws": ws, "maquina": mach}
+    return 200, state_ws(ws)
 def slug(t): return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")[:12] or "ofi"
 KINDS = {"claude": "Claude Code", "opencode": "opencode", "pi": "pi", "ada-cli": "ada-cli", "agy": "Antigravity (agy)"}
 KCACHE = {}
 ADA_DIR = H("~/.local/share/strata-oficina/ada")
 ADA_PATH = ADA_DIR + ":" + H("~/.nvm/versions/node/v22.23.2/bin") + ":" + H("~/.local/bin") + ":/usr/local/bin:/usr/bin:/bin"
+# T8 (defecto 1): `ADA_PATH` y el shim `pi` -> ada-cli viven en la home de bazzite, asi que un panel de
+# una maquina remota no los ve. `kinds` remoto excluye `ada-cli` por diseño; el rechazo se hace explicito
+# y nunca se lanza un binario local en una maquina remota.
+ADA_REMOTE = "ada-cli no se puede crear en una máquina remota: su shim vive en la home de bazzite"
 # En los paneles de ada-cli, `pi` es este script: herdr lo arranca como pi y HERDR_AGENT=pi (solo en este proceso)
 # mantiene la identidad aunque ada-cli se renombre a sí mismo al arrancar.
 try:
@@ -455,8 +504,11 @@ def kinds(mach=None):
         KCACHE[mach] = (time.time(), data); return data
 def _start(nombre, kind, model, pid, cwd, auto, mach=None):
     if kind == "ada-cli":   # en su panel, `pi` es un enlace a ada-cli (ADA_PATH), así herdr lo reconoce como pi
+        if mach: return "ERROR " + ADA_REMOTE   # T8, defecto 1: el shim es una ruta de la home de bazzite
         extra = ["--model", model] if model else []
-        r = herdr_cmd(["agent", "start", nombre, "--kind", "pi", "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 75)
+        # `mach` se pasa en las dos ramas: `--machine` es parte del comando, no del `kind` (sin la bandera
+        # herdr habla con el socket de bazzite y el agente se crea en la maquina local).
+        r = herdr_cmd(["agent", "start", nombre, "--kind", "pi", "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 75, mach)
     else:
         extra = (["--model", model] if model and kind != "opencode" else [])
         if auto and kind in ("claude", "agy"): extra.append("--dangerously-skip-permissions")
@@ -474,7 +526,12 @@ def _start(nombre, kind, model, pid, cwd, auto, mach=None):
 def oc_config(nombre, model, mach=None):
     """opencode no acepta --model en su interfaz: cada agente recibe su propio fichero de configuración."""
     if mach:
-        f = rhome(mach) + "/.cache/strata-oficina/opencode/" + nombre + ".json"
+        home = rhome(mach)
+        # T8, defecto 4: la ruta se construye con `rhome`. Con el home sin leer, `rhome + "/.cache/..."`
+        # cae en `/.cache/...`, fuera del home de la maquina remota. Se rechaza, y la confinacion al home
+        # remoto queda garantizada en el unico sitio donde se escribe fuera de `cwd`.
+        if not home: raise RuntimeError(mach + " no responde por SSH: no se pudo leer su home")
+        f = home + "/.cache/strata-oficina/opencode/" + nombre + ".json"
         ssh_run(mach, "mkdir -p ~/.cache/strata-oficina/opencode && cat > " + shlex.quote(f), 15, json.dumps({"$schema": "https://opencode.ai/config.json", "model": model}))
         return f
     d = H("~/.cache/strata-oficina/opencode"); os.makedirs(d, exist_ok=True)
@@ -484,6 +541,8 @@ def oc_config(nombre, model, mach=None):
 def _crear(jid, name, cwd, filas, auto, mach=None):
     log = lambda s: job_step(jid, s)   # T7: `JOBS[jid]["pasos"]` se escribe bajo `JLOCK`
     try:
+        if mach and not rhome(mach):   # T8, defecto 2/4: sin home no hay PATH de panel ni confinacion posible
+            raise RuntimeError(mach + " no responde por SSH: no se pudo leer su home")
         env = "PATH=" + ((rhome(mach) + "/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin") if mach else (H("~/.local/bin") + ":/snap/bin:/usr/local/bin:/usr/bin:/bin"))
         r = hj(["workspace", "create", "--cwd", cwd, "--label", name, "--no-focus", "--env", env], 30, mach)
         if not r: raise RuntimeError("herdr no pudo crear el workspace en " + (mach or "bazzite"))
@@ -505,7 +564,7 @@ def _crear(jid, name, cwd, filas, auto, mach=None):
         for (f, n, nombre), pid in zip(lista, panes):
             res = _start(nombre, f["kind"], f["model"], pid, cwd, auto, mach)
             log("%s · %s · %s%s: %s" % (nombre, f["perfil"], f["kind"], (" · " + f["model"]) if f["model"] else "", res))
-            meta_edit(lambda m, ag={"name": nombre, "rol": f["perfil"], "kind": f["kind"], "model": f["model"]}: m[wid]["agentes"].append(ag))
+            meta_edit(lambda m, ag={"name": nombre, "rol": f["perfil"], "kind": f["kind"], "model": f["model"]}: m[oid]["agentes"].append(ag))   # T8: la meta se indexa por `oid` (`mac-mini:w2`), no por `wid`: con `wid` una oficina remota reventa y los agentes no quedan registrados
         job_set(jid, "estado", "hecho")
     except Exception as e:
         job_set(jid, "estado", "error"); job_set(jid, "error", str(e)[:300])
@@ -520,7 +579,9 @@ def api_office(body):
     rel = raw[2:] if raw.startswith("~/") else raw
     if mach:
         home = rhome(mach)
-        if not home: return 502, {"ok": False, "error": mach + " no responde por SSH"}
+        # T8, defecto 2/4: el fallo ya no queda cacheado para siempre, y el 502 dice lo que hace la
+        # oficina despues, no solo que la maquina no respondio.
+        if not home: return 502, {"ok": False, "error": mach + " no responde por SSH: no se pudo leer su home (se vuelve a sondear en " + str(RHOME_NEG) + " s)"}
         rel = rel[len(home) + 1:] if rel.startswith(home + "/") else rel
         if rel.startswith("/") or not rel or any(p in ("", ".", "..") or p.startswith(".") for p in rel.split("/")): return 400, {"ok": False, "error": "carpeta inválida: usa ~/nombre, sin ocultas"}
         cwd = home + "/" + rel
@@ -535,6 +596,7 @@ def api_office(body):
         try: n = int(f.get("n", 1))
         except Exception: n = 0
         if not re.match(r"^[\w][\w .\-]{0,23}$", perfil): return 400, {"ok": False, "error": "perfil invalido: " + perfil}
+        if kind == "ada-cli" and mach: return 400, {"ok": False, "error": ADA_REMOTE}   # T8, defecto 1
         if kind not in K: return 400, {"ok": False, "error": "tipo de agente no permitido"}
         if model and model not in K[kind]["modelos"]: return 400, {"ok": False, "error": "modelo no disponible para " + kind}
         if not 1 <= n <= 4: return 400, {"ok": False, "error": "de 1 a 4 por perfil"}
@@ -545,6 +607,8 @@ def api_office(body):
     else: os.makedirs(cwd, exist_ok=True)
     jid = secrets.token_hex(6)
     with JLOCK: JOBS[jid] = {"estado": "en curso", "pasos": [], "ws": None, "total": total}   # T7: publicar el job bajo el lock
+    with MLOCK: envejecer(AGCACHE)   # T8, defecto 6: el agente creado tiene que ser valido al terminar
+                                     # el job, no cuando venza la TTL de 20 s (consistente con `SNAP`, T6)
     threading.Thread(target=_crear, args=(jid, name, cwd, filas, bool(d.get("auto")), mach), daemon=True).start()
     return 200, {"ok": True, "job": jid}
 def api_send(body):
@@ -599,7 +663,7 @@ def api_office_delete(body):
     e = herdr_error(r)
     if e: return 502, {"ok": False, "error": e, "code": r["code"] or "no_response"}   # la meta solo se quita si herdr cerró de verdad
     meta_edit(lambda m: m.pop(oid, None))   # T7: quitar la oficina bajo `MFLOCK`, con publicacion atomica
-    with MLOCK: AGCACHE["at"] = 0   # el mapa de agentes envejece: el agente borrado no puede seguir siendo valido
+    with MLOCK: envejecer(AGCACHE)   # el mapa de agentes envejece: el agente borrado no puede seguir siendo valido
     with STLOCK: SNAP["data"].pop(mach, None)   # T6: la oficina borrada no puede seguir saliendo del snapshot cacheado
     return 200, {"ok": True, "output": r["out"][-200:]}
 with open(os.path.join(HERE, "index.html"), "rb") as f:
@@ -634,7 +698,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, THREE, "text/javascript; charset=utf-8")
         elif u.path == "/api/state":
             ws = parse_qs(u.query).get("ws", [""])[0]
-            self._json(200, state_ws(ws) if ws and re.match(r"^([a-z0-9][a-z0-9-]{0,31}:)?w[0-9A-Za-z]+$", ws) else get_state())
+            code, payload = state_for(ws)   # T8, defecto 3: nunca un fallback silencioso al estado local
+            self._json(code, payload)
         elif u.path == "/api/kinds":
             mq = parse_qs(u.query).get("m", ["bazzite"])[0]
             self._json(200, kinds(None if mq == "bazzite" else mq) if mq == "bazzite" or target(mq) else {})

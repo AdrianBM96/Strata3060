@@ -48,7 +48,7 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - [x] **T5** — `agent prompt --wait --timeout` + manejo real de `agent_blocked` / `agent_prompt_stalled` con mensaje humano. Commit: *(hash en el próximo commit)*
 - [x] **T6** — Un solo `api snapshot` por ciclo. Commit: *(hash en el próximo commit)*
 - [x] **T7** — Locks + rebuild atómico de `CACHE`/`SEEN`/`FAILS`/`MCACHE`/`KCACHE`/`JOBS`/`meta`. Commit: *(hash en el próximo commit)*
-- [ ] **T8** — Baches multi-máquina: `mach` en `agent start` de ada-cli, `rhome` no cachea `""`, regex `ws` acepta labels reales.
+- [x] **T8** — Baches multi-máquina: `mach` en `agent start`, `rhome` no cachea `""`, regex `ws` acepta labels reales. Commit: *(hash en el próximo commit)*
 - [ ] **T9** — `events.subscribe` en un hilo; SSE alimentado por eventos; cero subprocesos en reposo.
 - [ ] **T10** — `notification.show` cuando un agente pasa a `blocked`.
 - [ ] **T11** — Mapeo visual `blocked` / `done` / `unknown` (LED, pose, badge).
@@ -97,6 +97,12 @@ Prueba end-to-end viva (Chromium headless 1187 + Herdr real, puerto 8099, 0 coma
 - 379 llamadas herdr del servidor scratch: 355 `agent list`, 18 `workspace list`, 6 `machine list --json`; **0 mutantes**. Servicio vivo 8095 intacto (`MainPID` 1645893 y `ActiveEnterTimestamp` sin cambio).
 
 ## Progreso
+- 2026-10-06: **T8 completada.** Writer delegado: `server.py` +87/-11, `test_herdr_stub.py` +314/-1, 16 tests. `_start` lleva `mach` en **ambas** ramas; ada-cli remoto se **rechaza** (`ADA_REMOTE`: el shim `pi`→ada-cli vive en la home de bazzite), coherente con que `kinds(mach)` ya excluye ada-cli remoto. `rhome` cachea `(home, marca)` con TTL negativa de 60 s: el éxito no expira, el fallo se re-sondea. `state_for` + `WSRE` aceptan labels `[A-Za-z0-9][A-Za-z0-9_-]{0,31}`; label malformado → 400, label desconocido → 404, **nunca** fallback silencioso al estado local. `api_hilo` declara `audit:"local"`, `maquina`, `scope` en vez de fingir historial remoto. `AGCACHE` con TTL explícita e invalidada al crear y borrar.
+  - **7.º defecto encontrado por los tests nuevos:** `_crear` claveaba la meta de agentes por `wid` mientras las oficinas remotas viven bajo `oid` → **toda creación de oficina remota terminaba en `estado: error`** y sus agentes nunca llegaban a `oficinas.json`.
+  - RED observado: `10 failed, 120 passed` (incluido `KeyError: 'w2'`). Evidencia del padre: **133 passed in 17.92 s**. `grep shell=True` = 0, imports nuevos = 0, cap 8192, scrypt, cookie, `log_message`, orden de locks de T7 intactos.
+  - Honestidad: 3 tests son guardas que pasan en la base, no anclas RED. Registrado.
+  - **Gap grande**: la ruta remota está probada **solo contra el stub**. La captura viva tenía **0 agentes remotos** (mac-mini: 1 workspace `w8`, 1 pane, 0 agentes). Es T24. El dominio de labels con `_`/mayúsculas se probó con labels sintéticos; los labels reales son minúscula-guion.
+  - `RHOME_NEG = 60` s es elección de la oficina, no medida. Una máquina muerta cuesta una sonda ssh de 15 s cada 60 s, dentro de `MLOCK`.
 - 2026-10-06: **T7 completada.** Writer delegado: `server.py` +190/-63, `test_herdr_stub.py` +301/-1, 13 tests de concurrencia. Seis locks nuevos con orden de adquisición documentado (`server.py:44-50`): `STLOCK` (RLock, rebuild: `CACHE`, `SEEN`, `SNAP`, `LAST_AGENTS`), `MLOCK` (RLock, `MCACHE`/`HOMES`/`AGCACHE`), `KLOCK` (`KCACHE`), `FLOCK` (`FAILS`), `JLOCK` (`JOBS`), `MFLOCK` (`oficinas.json`); `SELOCK` pasa a RLock. Orden: `MLOCK`→`STLOCK` (solo `agmap`), `KLOCK`→`MLOCK` (solo `kinds` remoto); `STLOCK` nunca toma `MLOCK`/`KLOCK` → sin ciclo, sin deadlock.
   - `get_state` ya no es check-then-act: un solo hilo construye por intervalo, `interval` se fija **antes** de publicar, y se publica con una sola asignación; el dict publicado nunca se muta después. `save_meta`/`save_sess` usan `_atomic` (temp en el mismo directorio, mode 0600, `os.replace`), así un crash a mitad no trunca el fichero. `/api/office/job` serializa una **copia** estable del job.
   - RED observado: `11 failed, 106 passed` (8 hilos → 8 `build_state`; `mutados == ["interval"]`; 4 escrituras `SEEN` para 1 cambio; `AttributeError` en `job_view`/`meta_edit`/`FLOCK`; `pytest.raises(OSError)` sin `os.replace`). Base verificada: `git show HEAD:server.py` tiene **0** ocurrencias de los locks nuevos.
