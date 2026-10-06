@@ -86,11 +86,18 @@ def herdr_cmd(args, timeout=8, mach=None):
     except Exception:
         out, err, rc = "", "", 1
     env = _env(out) or _env(err)
+    # La forma verificada de todo CLI de herdr es `{"id":.., "result":{..}}`: el `type` y el `agent` del
+    # prompt viven DENTRO de `result` (captura viva 2026-10-06: agent prompt --wait exito). Leer de la
+    # raiz daba None y un envio entregado se reportaba como 502. Se lee `result` primero y la raiz
+    # como fallback, sin inventar campos.
+    res = env.get("result") if isinstance(env, dict) else None
+    body = res if isinstance(res, dict) else env
     e = env.get("error") if env else None
     code = e.get("code") if isinstance(e, dict) else None
     msg = e.get("message") if isinstance(e, dict) else None
     return {"out": out, "err": err, "rc": rc, "env": env, "code": code, "msg": msg,
-            "res": env.get("result") if env else None, "type": env.get("type") if env else None,
+            "res": res, "type": body.get("type") if body else None,
+            "agent": body.get("agent") if isinstance(body, dict) else None,
             "dead": not out and not err}
 # Codigo de error de herdr -> mensaje que un humano puede accionar. Un codigo de un herdr futuro cae en
 # el default, que muestra el codigo: no se traga.
@@ -98,6 +105,7 @@ HERDR_MSG = {"agent_blocked": "el agente está esperando una aprobación en su p
              "agent_not_ready": "espera confirmación en su panel",
              "agent_prompt_stalled": "el mensaje no se entregó: el agente no pasó a working ni a blocked",
              "agent_name_not_found": "ese agente no existe en herdr",
+             "agent_not_found": "ese agente no existe en herdr",   # codigo capturado en vivo (agent get)
              "timeout": "herdr no observó el estado antes de su tiempo límite",
              "usage": "comando no válido para herdr"}
 SIN_RESPUESTA = "herdr no responde: el socket no devolvió nada"
@@ -145,7 +153,8 @@ PANEL = {"agent_blocked": "blocked", "agent_not_ready": "not_ready"}
 # un sobre sin `agent`, no confirman nada.
 def send_outcome(r):
     """(outcome, entregado, stalled, estado observado, pane_id) a partir del sobre observado."""
-    ag = (r["env"] or {}).get("agent") if isinstance(r["env"], dict) else None
+    # `agent` viene dentro de `result` en la forma verificada; se lee del helper, con fallback a la raiz.
+    ag = r.get("agent") if isinstance(r.get("agent"), dict) else (r["res"] or {}).get("agent") if isinstance(r["res"], dict) else None
     ag = ag if isinstance(ag, dict) else {}
     st = estado_real(ag["agent_status"]) if ag.get("agent_status") in ESTADOS else None
     pane = ag.get("pane_id")

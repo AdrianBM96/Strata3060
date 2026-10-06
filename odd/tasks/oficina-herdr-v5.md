@@ -43,6 +43,7 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - [x] **T23** — Formas de Herdr **verificadas en vivo** y fijadas como fixtures verbatim (`workspace create`, `pane split`, `workspace close`, `agent start`/`agent prompt` y sus errores).
 - [ ] **T22** — Las clases `.st.done`/`.st.unknown` y el badge rojo no se consumen en el DOM: ningún elemento usa la clase `st`. Superficie: `index.html`. Verificado por navegador en T3 y en la prueba viva.
 - [ ] **T24** — Ruta multi-máquina en `/api/offices` sin verificar en vivo: bajo HOME aislado `machines()` devuelve `[]` (no hay `~/.config/herdr/config.toml` en el scratch), así que `maquinas` quedó solo `['bazzite']` y cero llamadas remotas. En producción el servicio vivo ve `mac-mini` y `macbook-air`.
+- [x] **T25** — Forma de éxito de `agent prompt --wait` capturada en vivo; `herdr_cmd` lee `result` primero y `send_outcome` usa ese `agent`.
 - [x] **T4** — `herdr_out` captura `stderr` y parsea `{error:{code,message}}`; se eliminan los checks de substring muertos. Commit: *(hash en el próximo commit)*
 - [x] **T5** — `agent prompt --wait --timeout` + manejo real de `agent_blocked` / `agent_prompt_stalled` con mensaje humano. Commit: *(hash en el próximo commit)*
 - [ ] **T6** — Un solo `api snapshot` por ciclo de estado.
@@ -96,6 +97,15 @@ Prueba end-to-end viva (Chromium headless 1187 + Herdr real, puerto 8099, 0 coma
 - 379 llamadas herdr del servidor scratch: 355 `agent list`, 18 `workspace list`, 6 `machine list --json`; **0 mutantes**. Servicio vivo 8095 intacto (`MainPID` 1645893 y `ActiveEnterTimestamp` sin cambio).
 
 ## Progreso
+- 2026-10-06: **T25: la forma de éxito de `--wait` se captura y rompe T5.** Adrián autorizó un segundo probe (`wK`/`probe-v5b`, un solo `agy`). `agy` no arranca si el pane no lleva `PATH` con `/snap/bin`; el `--env` del `workspace create` **no** se propaga a los paneles de `pane split` (la oficina pasa `--env` en el split para opencode y ada-cli). El agente quedó **blocked** en el prompt de confianza; con autorización de Adrián se envió `Enter` (`agent send-keys probeagy2 enter` → `{"type":"ok"}`), luego `agent wait --until idle` → `interactive_ready:true`, y `agent prompt --wait --timeout 30000` devolvió:
+  ```
+  {"id":"cli:agent:prompt","result":{"agent":{...,"agent_status":"done","completion_seq":1091,"pane_id":"wK:p3"},"type":"agent_prompted"}}
+  ```
+  - **`type` y `agent` viven dentro de `result`**, no en la raíz. `herdr_cmd` leía `env.get("type")` de la raíz → `None` → `send_outcome` daba `no_response` → **502 con `ok:false` ante un envío realmente entregado.** El fixture `agent_prompt.json` era la forma inventada, y por eso los tests de T5 pasaban. Arreglado: `herdr_cmd` lee `result` primero y expone `agent`; `send_outcome` usa ese `agent`. Fixture verbatim, tests actualizados con `_prompt_envelope`.
+  - `--wait` devolvió **`done`** (el agente terminó el turno), no `working`. `matched_status` **no existe** en la forma real; T5 ya lo ignoraba.
+  - Código capturado nuevo: `agent get` de un agente inexistente → `agent_not_found` (el fixture inventaba `agent_name_not_found`). Ambos en `HERDR_MSG`.
+  - El probe se **cerró**: `herdr workspace close wK` → `{"result":{"type":"ok"}}`; `workspace list` queda solo con `w1`.
+  - Evidencia del padre: **92 passed** en dos runs (8.27 s y 8.14 s).
 - 2026-10-06: **T5 completada.** Writer delegado: `server.py` +75/-9, `test_herdr_stub.py` +305/-30, 12 tests netos nuevos. argv: `herdr [--machine m] agent prompt <tgt> "<prefix+texto>" --wait --timeout <ms>`. `ms = max(5000, min(5000 + 25·len + (0 si ready else 4000), 20000))`; timeout del subprocess `ms/1000 + 10` s para que **Herdr gane la carrera** y devuelva su sobre (un `TimeoutExpired` de Python dejaría stdout y stderr vacíos → se leería como socket muerto). 5000 ms y la unidad están verificadas en la captura viva; 25 ms/caracter, 4000 de margen y el tope 20000 son **elección de la oficina, no medida** (documentado en `server.py:120-129`).
   - Contracto: `ok:true` **solo con entrega observada**. Clasificación `STALLED = (agent_prompt_stalled, timeout)` vs `PANEL = {agent_blocked: blocked, agent_not_ready: not_ready}` — los códigos de panel **no** son stall: el agente está vivo y espera aprobación; decir "no se entregó" mandaría al humano a reenviar en vez de aprobar. **Sin reintento automático**: reenviar a un panel a medias es la única forma de duplicar un mensaje.
   - `envios.log` registra el **resultado** (`outcome`, `confirmed`, `code`, `state`, `pane_id`, `timeout_ms`), no la intención. `api_hilo` muestra solo líneas `confirmed:true`.

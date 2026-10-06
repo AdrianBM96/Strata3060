@@ -75,6 +75,18 @@ def _ms(argv):
     return int(argv[argv.index("--timeout") + 1])
 
 
+def _prompt_envelope(status=None):
+    """Sobre de exito de `agent prompt --wait` en la forma VERIFICADA en vivo (2026-10-06, agente agy
+    del probe): `{"id":"cli:agent:prompt","result":{"agent":{...},"type":"agent_prompted"}}`.
+    `type` y `agent` viven DENTRO de `result`. La forma inventada del fixture T23 (`{"type":..,
+    "agent":..}` en la raiz) hizo pasar los tests de T5 y produjo 502 ante un envio realmente entregado.
+    """
+    env = json.loads((FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"))
+    if status is not None:
+        env["result"]["agent"]["agent_status"] = status
+    return json.dumps(env, separators=(",", ":")) + "\n"
+
+
 # ---------- formas del binario, verificadas en vivo ----------
 
 def test_agent_list_es_la_captura_real():
@@ -439,11 +451,12 @@ def test_start_parsea_la_captura_agent_started(server):
 
 
 def test_send_parsea_la_captura_agent_prompted(server):
-    server.script_response(["agent", "prompt"], (FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"), "", 0)
+    raw = (FIXTURES / "agent_prompt.json").read_text(encoding="utf-8")
+    assert json.loads(raw)["result"]["type"] == "agent_prompted"   # forma verbatim: type dentro de `result`
+    server.script_response(["agent", "prompt"], raw, "", 0)
     code, r = _send(server)
     assert code == 200 and r["ok"] is True and r["confirmed"] is True
-    assert json.loads(r["output"])["type"] == "agent_prompted"
-    assert r["state"] == "working" and r["pane_id"] == "w1:pH"   # T5: el estado observado en el sobre
+    assert r["state"] == "done" and r["pane_id"] == "wK:p3"   # T5: estado observado en el sobre (--wait devolvio done, captura viva)
 
 
 def test_exit0_sin_sobre_no_confirma_el_envio(server):
@@ -637,22 +650,19 @@ def test_timeout_de_wait_es_stalled_y_no_enviado(server):
 
 
 def test_entrega_observada_como_working_confirma_y_se_registra(server):
-    server.script_response(["agent", "prompt"], (FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"), "", 0)
+    server.script_response(["agent", "prompt"], _prompt_envelope("working"), "", 0)
     code, r = _send(server, text="revisa la cola")
     assert code == 200 and r["ok"] is True and r["confirmed"] is True
-    assert r["state"] == "working" and r["pane_id"] == "w1:pH" and r["stalled"] is False
+    assert r["state"] == "working" and r["pane_id"] == "wK:p3" and r["stalled"] is False
     d = _log(server)[0]
-    assert d["outcome"] == "working" and d["confirmed"] is True and d["pane_id"] == "w1:pH"
+    assert d["outcome"] == "working" and d["confirmed"] is True and d["pane_id"] == "wK:p3"
     assert d["timeout_ms"] == r["timeout_ms"]
     assert server.api_hilo("claude")["envios"][0].endswith("[direct] revisa la cola")
 
 
 def test_entrega_que_vuelve_a_idle_es_entregada(server):
     """Entregado y el agente volvió a `idle`/`done`: aceptó el prompt, no es un stall."""
-    env = json.loads((FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"))
-    env["agent"]["agent_status"] = "idle"
-    env["agent"]["completion_seq"] = 900
-    server.script_response(["agent", "prompt"], json.dumps(env, separators=(",", ":")) + "\n", "", 0)
+    server.script_response(["agent", "prompt"], _prompt_envelope("idle"), "", 0)
     code, r = _send(server, text="sigue", agent="explorer")
     assert code == 200 and r["ok"] is True and r["confirmed"] is True
     assert r["state"] == "idle" and r["stalled"] is False
@@ -661,9 +671,7 @@ def test_entrega_que_vuelve_a_idle_es_entregada(server):
 
 def test_bloqueado_al_aceptar_el_prompt_no_es_stalled(server):
     """El prompt se entregó y el agente quedó esperando una aprobación: hay que decirlo, no callarlo."""
-    env = json.loads((FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"))
-    env["agent"]["agent_status"] = "blocked"
-    server.script_response(["agent", "prompt"], json.dumps(env, separators=(",", ":")) + "\n", "", 0)
+    server.script_response(["agent", "prompt"], _prompt_envelope("blocked"), "", 0)
     code, r = _send(server, text="sigue", agent="explorer")
     assert code == 200 and r["ok"] is True and r["confirmed"] is True
     assert r["state"] == "blocked" and r["stalled"] is False
@@ -706,7 +714,7 @@ def test_envios_log_registra_el_resultado_de_cada_envio(server):
     _send(server, text="dos", agent="explorer")
     server.script_response(["agent", "prompt"], (FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"), "", 0)
     _send(server, text="tres", agent="explorer")
-    assert [d["outcome"] for d in _log(server)] == ["blocked", "stalled", "working"]
+    assert [d["outcome"] for d in _log(server)] == ["blocked", "stalled", "done"]   # `done` es la captura viva de --wait
     assert [d["confirmed"] for d in _log(server)] == [False, False, True]
     assert [d["text"] for d in _log(server)] == ["uno", "dos", "tres"]
     assert [d["code"] for d in _log(server)] == ["agent_blocked", "agent_prompt_stalled", None]
