@@ -138,8 +138,8 @@ class HerdrStub:
         """Programa una respuesta de error: stdout vacio, JSON en stderr, exit 1 (verificado en el binario)."""
         self._errors.append((tuple(match), mach, {"id": cid, "error": {"code": code, "message": message}}))
 
-    def script_response(self, match, stdout="", stderr="", rc=0, mach=None):
-        self._errors.append((tuple(match), mach, ("raw", stdout, stderr, rc)))
+    def script_response(self, match, stdout="", stderr="", rc=0, mach=None, delay=0.0):
+        self._errors.append((tuple(match), mach, ("raw", stdout, stderr, rc, delay)))
 
     # ---------- vistas derivadas (Herdr mantiene agentes y paneles sincronizados) ----------
     def find(self, name, mach=None):
@@ -201,7 +201,9 @@ class HerdrStub:
         if scripted:
             if isinstance(scripted, dict):   # script_error: JSON en stderr, exit 1 (verificado en el binario)
                 return _cp(["herdr"] + args, "", _dump(scripted), 1)
-            _, out, err, rc = scripted
+            _, out, err, rc = scripted[:4]
+            if len(scripted) > 4 and scripted[4]:
+                time.sleep(scripted[4])   # subproceso lento, para el requisito 5 de T10
             return _cp(["herdr"] + args, out, err, rc)
         key = tuple(args[:2])
         if key == ("agent", "list"):

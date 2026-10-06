@@ -406,8 +406,11 @@ RECONCILE = 30
 # `select` (stdlib) acota la espera sin imponer una reconexion periodica: el canal en reposo no se
 # corta, solo se mira la bandera cada `EV_TICK` s.
 EV_TICK = 1.0
+# `agent_names` es la correspondencia pane_id -> NOMBRE de la oficina que pone el snapshot (T10: el titulo
+# del aviso). `names` es la que ponen los eventos de deteccion y trae el `agent` (el tipo, p. ej. `agy`),
+# que no es el nombre de la oficina: las dos se mantienen separadas para no inventar nombres.
 EV = {"mode": "unavailable", "dirty": True, "subs": [], "panes": set(), "status": {}, "names": {},
-      "thread": None, "stop": threading.Event()}
+      "agent_names": {}, "thread": None, "stop": threading.Event()}
 # `ELOCK` protege `EV` (`mode`, `dirty`, `subs`, `panes`, `status`, `names`). Orden de adquisicion
 # (T7, server.py:44-50): `MLOCK` -> `STLOCK` -> `ELOCK`, que es lo que hacen `agmap` -> `raw_agents` ->
 # `ev_overlay` y `get_state` -> `build_state` -> `raw_agents`. `ELOCK` nunca toma `STLOCK` ni `MLOCK`
@@ -452,7 +455,9 @@ def ev_overlay(ags):
     with ELOCK:
         st = dict(EV["status"])
         for a in ags:
-            if a.get("pane_id"): EV["panes"].add(a["pane_id"])
+            if a.get("pane_id"):
+                EV["panes"].add(a["pane_id"])
+                if a.get("name"): EV["agent_names"][a["pane_id"]] = a["name"]   # T10: el titulo del aviso
         if not st: return ags
     out = []
     for a in ags:
@@ -482,7 +487,11 @@ def ev_event(line):
     elif kind == "pane_agent_status_changed":
         st = data.get("agent_status")
         if pane and st in ESTADOS:
-            with ELOCK: EV["status"][pane] = st
+            with ELOCK:
+                prev = EV["status"].get(pane)   # T10: el ultimo estado OBSERVADO por panel
+                EV["status"][pane] = st
+            if st == "blocked" and prev != "blocked":   # solo la TRANSICION de entrada, no cada evento
+                notif_plan(pane, data.get("workspace_id"))
         wide = bool(pane)
     elif kind in ("pane_created", "pane_closed", "pane_exited", "pane_updated", "pane_focused", "pane_moved"):
         wide = True
@@ -507,13 +516,13 @@ def _ev_ack(line):
     res = d.get("result") if isinstance(d, dict) else None
     return bool(isinstance(res, dict) and res.get("type") == EV_ACK)
 
-def ev_subscribe(s, r):
-    """Manda la suscripcion con su `id` requerido y espera el ack. Devuelve True si empezo."""
+def ev_subscribe(s, buf):
+    """Manda la suscripcion con su `id` requerido y espera el ack en la cola del cliente. Devuelve True si empezo."""
     with ELOCK:
         subs = ev_subs(EV["panes"]); EV["subs"] = subs
     _ev_send(s, {"id": "oficina:subscribe", "method": "events.subscribe",
                  "params": {"subscriptions": subs}})
-    return _ev_ack(r.readline())
+    return _ev_ack(_ev_read(buf, s, EV_TIMEOUT))
 
 def ev_seed():
     """Los `pane_id` que la oficina conoce: los del snapshot local, la misma fuente de T6.
@@ -546,18 +555,18 @@ def ev_client():
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.settimeout(EV_TIMEOUT)   # acotado: el hilo nunca se cuelga en un socket mudo
             s.connect(ev_path())
-            r = s.makefile("r")
-            live = ev_subscribe(s, r)
+            buf = bytearray()   # la cola del cliente: T10 exige que un chunk de 8 lineas se procese entero
+            live = ev_subscribe(s, buf)
             with ELOCK: EV["mode"] = "live" if live else "polling"
             if live:
                 back = EV_BACK0        # el canal funciona: el reintento vuelve a su cota minima
                 while True:
                     if EV["stop"].is_set(): break
-                    line = _ev_read(s, r, EV_TICK)   # `select`: mirar la bandera sin colgarse
+                    line = _ev_read(buf, s, EV_TICK)   # `select`: mirar la bandera sin colgarse
                     if line is None: continue        # el canal en reposo: no es un fallo
                     if not line: break               # el servidor cerro la conexion
                     if _ev_ack(line): continue       # ack de una re-suscripcion
-                    if ev_event(line) and ev_resub_needed() and not ev_subscribe(s, r): break
+                    if ev_event(line) and ev_resub_needed() and not ev_subscribe(s, buf): break
         except Exception:
             pass                                          # nunca un crash del servidor por el socket
         with ELOCK:
@@ -568,15 +577,30 @@ def ev_client():
         EV["stop"].wait(back)   # el sueno del backoff se corta al parar: el hilo sale sin esperar el tope
         back = min(back * 2, EV_BACKMAX)
 
-def _ev_read(s, r, timeout):
-    """Una linea con `select`: el bucle de la conexion larga puede mirar `EV["stop"]` sin colgarse.
+def _ev_read(buf, s, timeout):
+    """Una linea de la cola del cliente, con `select` acotado solo cuando la cola esta vacia.
 
-    Devuelve None si no hay nada que leer en `timeout` (el canal en reposo: no es un fallo, no hay que
-    reconectar). Si el peer cerro, `readline()` da la cadena vacia y el bucle sale.
+    DEFECTO encontrado por T10 (requisito 6, el bloqueado en masa): `makefile` lee 8192 B del socket y
+    deja las lineas que ya llegaron en su propio buffer, y `select` sobre el socket entonces dice "no hay
+    nada": con 3 `pane.agent_status_changed` en un solo chunk el cliente veia la primera linea y se
+    quedaba 1 s sin ver la segunda (observado en el test). La cola del cliente es la que tiene las lineas
+    pendientes, asi que se lee con `recv` y se parte por `\n`, la misma lectura que hace el stub emulado
+    (que tampoco usa `makefile`: un `readline` bloqueado sostiene el lock del socket y `close()` tarda 10 s).
+
+    Devuelve None si no hay linea en `timeout` (el canal en reposo: no es un fallo, no hay que reconectar),
+    y `""` si el peer cerro (EOF: `recv` da cadena vacia).
     """
-    rd, _, _ = select.select([s], [], [], timeout)
-    if not rd: return None
-    return r.readline()
+    if not buf:
+        rd, _, _ = select.select([s], [], [], timeout)
+        if not rd: return None
+        try: chunk = s.recv(4096)
+        except (OSError, ValueError): return ""   # `drop()` cerro la conexion: el corte del probe vivo
+        if not chunk: return ""   # EOF: el servidor cerro la conexion
+        buf.extend(chunk)
+    i = buf.find(b"\n")
+    if i < 0: return None   # media linea: se espera el resto, no se reconecta
+    line = bytes(buf[:i]); del buf[:i + 1]
+    return line.decode("utf-8", "replace")
 
 def ev_stop():
     """Parada ordenada del hilo de eventos (el cierre del servicio, y el teardown de los tests).
@@ -589,14 +613,20 @@ def ev_stop():
     with ELOCK: EV["stop"].set()
 
 def ev_start():
-    """Un solo hilo de fondo para la suscripcion. Se arranca en `__main__`, no en el import: los tests
-    lo arrancan cuando quieren un socket emulado, y la suite que no lo arranca no lanza subprocesos.
+    """Un solo hilo de fondo para la suscripcion y el worker de avisos. Se arranca en `__main__`, no en el
+    import: los tests lo arrancan cuando quieren un socket emulado, y la suite que no lo arranca no lanza
+    subprocesos (T9) ni avisos (T10).
+
+    Los dos hilos comparten `EV["stop"]`, asi `ev_stop()` apaga el canal y el worker en el mismo paso
+    (el teardown de los tests y el cierre del servicio).
     """
     with ELOCK:
         if EV["thread"] and EV["thread"].is_alive(): return EV["thread"]
         EV["stop"].clear()
         t = threading.Thread(target=ev_client, daemon=True, name="oficina-events")
-        EV["thread"] = t; t.start(); return t
+        n = threading.Thread(target=notif_client, daemon=True, name="oficina-notif")
+        EV["thread"] = t; NOTIF["thread"] = n
+        t.start(); n.start(); return t
 
 def ev_cycle(interval):
     """El sueno del bucle SSE: un quantum de `interval` segundos, cortado cuando un evento ensucia.
@@ -611,6 +641,130 @@ def ev_cycle(interval):
     while time.monotonic() < end:
         if ev_dirty(): return   # hay evento: el bucle empuja ahora
         time.sleep(min(EV_WAKE, end - time.monotonic()))
+
+# ---------- T10: `herdr notification show` cuando un agente pasa a `blocked` ----------
+# Forma VERIFICADA en el binario herdr 0.9.3 (2026-10-06, `herdr notification show --help`):
+# `notification show <TITLE> [--body <TEXT>] [--position top-left|top-right|bottom-left|bottom-right]
+# [--sound none|done|request]`. El titulo es POSICIONAL y OBLIGATORIO, asi que va primero; las banderas
+# salen en el orden `--body --position --sound`. Se lanza por CLI (no por socket: `notification` no esta
+# en los metodos suscribibles) con `subprocess.run` y `shell=False`, via `herdr_cmd`.
+#
+# Es el pago humano de T9: `blocked` significa que el agente esta parado delante de un dialogo de
+# aprobacion y NECESITA a un humano. Si solo se pinta en la pagina, el aviso llega cuando el humano ya
+# esta mirando la pagina; el sonido `request` es el que lo llama desde el otro lado de la casa.
+NOTIF_CMD = ("notification", "show")   # argv verbatim; sin `--machine`: el socket de avisos es el de bazzite
+NOTIF_POS = "top-right"
+NOTIF_SOUND = "request"
+# `NOTIF_POS` es eleccion de la oficina, no una medida: el diorama y el panel que hay que aprobar viven
+# en el centro y la izquierda de la pantalla, y la esquina inferior derecha es la que usa el sistema para
+# sus propios avisos, asi que ahi habria colision. Arriba a la derecha el aviso cae fuera del area de
+# trabajo, no tapa el panel que hay que aprobar, y es la esquina donde la mirada descansa.
+# `NOTIF_WIN` es la ventana de dedupe POR PANEL, eleccion de la oficina, no medida: un humano tarda mas
+# de 20 s en oir un aviso, caminar y aprobar, asi que dos avisos del mismo panel en menos de 20 s son
+# ruido. El caso real que hay que colapsar es `blocked -> idle -> blocked` rapido: el agente que vuelve a
+# pedir confirmacion justo despues de responder la anterior. Con ventana de 20 s sale UN aviso; el
+# bloqueado de un trabajo nuevo 30 s despues si tiene el suyo.
+# `NOTIF_BURST` en `NOTIF_BURST_WIN` acotan el SPAWN: la creacion de una oficina divide hasta 8 paneles y
+# arranca hasta 8 agentes, que pueden bloquearse en su prompt de confianza a la vez. Ocho subproceso de
+# golpe compiten con la medicion de la RTX 3060 y un humano no puede leer 8 avisos a la vez. 4 en 10 s es
+# cota de la oficina, no medida: la cota se aplica en el SPAWN (el worker cuenta lo que lanza, no lo que se
+# le pide), asi que el limite es una cota de procesos, no de intenciones. Lo que no cabe se registra como
+# omitido, no como un fallo: el panel sigue bloqueado y se ve rojo en la oficina.
+NOTIF_WIN = 20.0; NOTIF_BURST = 4; NOTIF_BURST_WIN = 10.0
+NOTIF_QUEUE = 16      # cola acotada: un pico de eventos no hace crecer la memoria; lo que no cabe se omite
+NOTIF_TIMEOUT = 5.0   # s de subproceso: un CLI local responde en <1 s; 5 s es la cota para que un herdr
+                      # colgado no tenga al worker sin consumir cola. Nunca se sostiene un lock en el spawn.
+NOTIF_IDLE = 0.5      # s de sueno del worker con la cola vacia: `ev_stop()` corta el sueno al instante
+NOTIF = {"pend": [], "last": {}, "spawns": [], "sent": 0, "skips": 0, "fails": 0,
+         "wake": threading.Event(), "thread": None}
+# `NLOCK` protege `NOTIF` (`pend`, `last`, `spawns`, contadores). Es un lock HOJA: nunca toma `ELOCK`,
+# `STLOCK` ni `MLOCK`, asi que se anade al orden de T7 (`MLOCK` -> `STLOCK` -> `ELOCK` -> `NLOCK`) sin
+# ciclo. El subproceso se lanza con `NLOCK` SUELTO: T10 exige que el spawn no sostenga `STLOCK`.
+NLOCK = threading.Lock()
+
+def notif_body(pane, ws, ts):
+    """`--body`: el panel, la oficina y la hora. La hora es la marca UTC que ya usa `SEEN` en `mkagent`."""
+    return "panel %s · oficina %s · %s" % (pane, ws or "sin workspace", ts)
+
+def notif_view():
+    """Salud de los avisos, para los tests y para una futura ruta: `sent`, `skips`, `fails`, ultimo panel.
+
+    NO entra en el payload de `/api/state`: las dos pruebas de claves exactas de T2
+    (`test_build_state_linea_base`, `test_claves_de_siempre_y_payload_serializable`) fijan el set de claves
+    del estado y viven en `test_herdr_stub.py`, fuera de la superficie de T10. La clave aditiva (`notif`) se
+    anade cuando el padre autoriza esas dos anclas; el helper ya esta aqui y no renombra nada.
+    """
+    with NLOCK:
+        l = max(NOTIF["last"].values(), key=lambda x: x["at"]) if NOTIF["last"] else None
+        return {"sent": NOTIF["sent"], "skips": NOTIF["skips"], "fails": NOTIF["fails"],
+                "last_pane": l["pane"] if l else None, "last_ts": l["ts"] if l else None,
+                "win": NOTIF_WIN, "burst": NOTIF_BURST}
+
+def notif_plan(pane, ws):
+    """Decide el aviso en la transicion a `blocked` y lo pone en la cola. NO lanza el subproceso aqui.
+
+    Tres cotas, en el orden de la lectura:
+      1. la transicion: `EV["status"]` guarda el ultimo estado OBSERVADO por panel, y solo una ENTRADA en
+         `blocked` (previo distinto de `blocked`) es aviso nuevo: un panel que sigue bloqueado no spam;
+      2. `NOTIF_WIN` POR PANEL (`NOTIF["last"]` indexado por `pane_id`), que colapsa la rafaga
+        `blocked -> idle -> blocked` de ese panel sin tapar el aviso de otro panel; la ventana global
+        convertiria el bloqueado en masa en UN solo aviso, que es el peor caso para el humano;
+      3. `NOTIF_BURST` en `NOTIF_BURST_WIN` y la cola acotada, que es el bloqueado en masa. La cota de
+         spawn se aplica en el worker (`notif_client`), sobre lo que se va a lanzar; aqui se acota la cola.
+    Se llama desde el hilo de eventos: lee la correspondencia pane->nombre bajo `ELOCK` y escribe la cola
+    bajo `NLOCK`. El titulo usa el nombre de la oficina; si no lo conocemos dice el `pane_id` a secas.
+    Devuelve True si el aviso quedo en cola.
+    """
+    with ELOCK:
+        name = EV["agent_names"].get(pane) or EV["names"].get(pane)
+    ts = time.strftime("%d %H:%M UTC", time.gmtime())
+    now = time.monotonic()
+    with NLOCK:
+        l = NOTIF["last"].get(pane)
+        if l and now - l["at"] < NOTIF_WIN:
+            NOTIF["skips"] += 1; return False   # ventana por panel: una rafaga es un solo aviso
+        if len(NOTIF["pend"]) >= NOTIF_QUEUE:
+            NOTIF["skips"] += 1; return False   # cola acotada: un pico no hace crecer la memoria
+        title = (name + " te necesita") if name else ("Panel " + pane + " te necesita")
+        NOTIF["pend"].append({"pane": pane, "title": title, "body": notif_body(pane, ws, ts), "ts": ts})
+        NOTIF["wake"].set()
+    return True
+
+def notif_client():
+    """El worker que lanza `herdr notification show`: el hilo de eventos nunca espera un subproceso.
+
+    El spawn se hace con `NLOCK` suelto y sin `STLOCK`, `MLOCK` ni `ELOCK`; el unico argv nuevo es
+    `notification show` (ningun metodo mutante). Un exit 1, salida vacia por los dos canales, socket
+    muerto o binario ausente se registra en `fails` y el bucle sigue: un aviso que no salio no puede
+    matar el canal de eventos ni el estado que se empuja al navegador. El subproceso corre en su propio
+    hilo, asi que la lectura del socket no se detiene ni 5 s.
+    """
+    while True:
+        if EV["stop"].is_set(): return
+        with NLOCK:
+            item = NOTIF["pend"].pop(0) if NOTIF["pend"] else None
+            if item is not None:
+                # La cota de spawn se aplica AQUI, sobre lo que se va a lanzar, no sobre lo que se pidio:
+                # si no, una rafaga de 8 eventos pasa el filtro de `notif_plan` y fork 8 procesos.
+                now = time.monotonic()
+                live = [t for t in NOTIF["spawns"] if now - t < NOTIF_BURST_WIN]
+                NOTIF["spawns"] = live
+                if len(live) >= NOTIF_BURST:
+                    NOTIF["skips"] += 1; item = None
+        if item is None:
+            NOTIF["wake"].clear()
+            NOTIF["wake"].wait(NOTIF_IDLE)   # sueno acotado: la parada se ve al despertar
+            continue
+        r = herdr_cmd(list(NOTIF_CMD) + [item["title"], "--body", item["body"], "--position", NOTIF_POS,
+                                          "--sound", NOTIF_SOUND], NOTIF_TIMEOUT)
+        # El exito de `notification show` no esta capturado en vivo: se exige exit 0 y ALGO de salida. Un
+        # rc=0 con los dos canales vacios es el socket muerto de T4, y ese aviso no se cuenta como enviado.
+        ok = r["rc"] == 0 and bool(r["out"] or r["err"])
+        with NLOCK:
+            NOTIF["spawns"].append(time.monotonic())
+            NOTIF["sent"] += 1
+            NOTIF["last"][item["pane"]] = {"pane": item["pane"], "ts": item["ts"], "at": time.monotonic()}
+            if not ok: NOTIF["fails"] += 1
 MCACHE = {"at": 0, "data": []}; HOMES = {}; AGCACHE = {"at": 0, "data": {}, "ttl": 20}
 # T8 (defecto 2): `HOMES` guarda la pareja `(home, marca de la ultima sondadura)`. Un `""` es un fallo,
 # no un resultado: el exito no caduca (el home de una maquina no cambia) y el fallo solo durante

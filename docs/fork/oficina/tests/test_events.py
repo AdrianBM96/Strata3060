@@ -27,10 +27,16 @@ Lo que se prueba aqui (socket emulado en el temp del test, `HerdrSocket` en `stu
   - socket refusado, ack que no es `subscription_started` y conexion cortada a mitad: degradacion a
     polling, el servidor sigue sirviendo, y el reintento esta acotado;
   - la salud de la ruta dice el modo (`live` | `polling` | `unavailable`), como clave aditiva;
-  - por el socket nunca sale un metodo mutante.
+  - por el socket nunca sale un metodo mutante;
+  - T10: un agente que ENTRA en `blocked` lanza `herdr notification show` con la forma verificada en el
+    binario (titulo posicional, `--body`, `--position`, `--sound`), con transicion por panel, dedupe con
+    ventana, cota de spawn, sin bloquear la lectura del socket, y un aviso que falla se registra y no
+    mata el canal ni el push del estado.
 
 El hilo de eventos se arranca solo en `__main__` del servidor; cada test lo arranca contra su socket
-emulado, y la suite que no lo arranca (la linea base de T1..T8) no lanza subproceso de socket.
+emulado, y la suite que no lo arranca (la linea base de T1..T8) no lanza subproceso de socket ni aviso.
+El worker de avisos vive en su propio hilo y se apaga con `ev_stop()`, asi que el spawn nunca espera el
+hilo de lectura (requisito 5 de T10).
 """
 from __future__ import annotations
 import json, socket, threading, time
@@ -51,6 +57,42 @@ def _agentes(state):
 
 def _snaps(server, mach=None):
     return [c for c in server.calls(mach) if c[:2] == ("api", "snapshot")]
+
+
+def _notifs(server):
+    """Los `notification show` lanzados por el worker, en el orden registrado por el stub."""
+    return [c for c in server.calls() if c[:2] == ("notification", "show")]
+
+
+def _own(sock):
+    """Conexiones de LA OFICINA al socket: las que mandan `oficina:subscribe`.
+
+    DEFECTO del harness, encontrado al correr la suite entera: `monkeypatch` restaura el `subprocess` del
+    modulo al terminar cada test, y un hilo de eventos de un test anterior que sobrevive al `ev_stop()` +
+    `join(2.0)` vuelve a sondear con el binario REAL (`herdr api snapshot`), heredando `HERDR_SOCKET_PATH`
+    de la variable de proceso: el CLI real se conecta al socket del test que corre ahora y manda
+    `api-client:status`, que cuenta como conexion. Medido: 24 lanzamientos reales en la suite (la base de
+    T9 tambien los tiene). Contar `sock.conns` a secas contaria esa fuga, asi que la cadencia de backoff
+    se mide sobre los pedidos de la oficina, que es lo que el test afirma.
+    """
+    return sum(1 for r in sock.requests if r.get("id") == "oficina:subscribe")
+
+
+def _aviso(server, k=1, timeout=4.0):
+    """Espera a ver `k` avisos lanzados; devuelve lo OBSERVADO (la lista de argv), no el tiempo esperado."""
+    return _espera(lambda: _notifs(server) if len(_notifs(server)) >= k else None, timeout)
+
+
+def _argv(a):
+    """El argv de un aviso partido en titulo posicional y banderas, con el orden de estas fijado.
+
+    El stub registra el argv como tuple (sin `herdr`), asi que se compara con tuple.
+    """
+    assert a[:2] == ("notification", "show"), "el argv de notificacion es `notification show ...`: %s" % (a,)
+    flags = {a[i]: a[i + 1] for i in range(3, len(a) - 1, 2)}
+    assert list(flags) == ["--body", "--position", "--sound"], "el orden de banderas es --body --position --sound: %s" % (a,)
+    assert len(a) == 9, "el argv completo es `notification show <TITLE> --body <TEXT> --position <corner> --sound request`: %s" % (a,)
+    return a[2], flags
 
 
 def _envejecer(server, s):
@@ -368,7 +410,7 @@ def test_un_cambio_de_estado_ensucia_y_el_sse_empuja_antes_del_latido(server, he
     sse = _SSE(server)
     f0, dt0 = sse.first(2.0)
     assert f0 and f0["events"] == "live" and f0["interval"] == 5
-    n = len(server.stub.calls)
+    n = len(_snaps(server))
     t0 = time.monotonic()
     sock.emit(sock.event_status("w1:pM", "blocked"))
     frame, dt = sse.first(3.0)   # se mide la llegada del frame, no el final de la ventana
@@ -377,7 +419,10 @@ def test_un_cambio_de_estado_ensucia_y_el_sse_empuja_antes_del_latido(server, he
     assert ag["status"] == "blocked" and ag["pane_id"] == "w1:pM"   # el roster fijo tiene su texto de
     # actividad propio (T2 alinea `state_ws`): el stream muestra el estado observado por el evento
     assert dt < 1.5, "el evento tardo %s s en llegar al navegador (el polling tardaria 5 s)" % round(dt, 2)
-    assert len(server.stub.calls) - n == 1, "un evento cuesta una sola construccion de estado"
+    # T10: el MISMO evento tiene un segundo efecto, el spawn de `notification show` (el aviso es un
+    # subproceso aparte, no una construccion de estado), asi que la cuenta de "una sola construccion"
+    # se mide sobre `api snapshot`, que es lo que construye el estado.
+    assert len(_snaps(server)) - n == 1, "un evento cuesta una sola construccion de estado"
     sse.close()
 
 
@@ -491,12 +536,12 @@ def test_el_reintento_esta_acotado(server, herdr_socket):
     """
     sock = herdr_socket("badack.sock", ack={"type": "invalid_request", "message": "missing field pane_id"})
     assert server.start_events(sock) == "polling"
-    c0 = sock.conns
+    c0 = _own(sock)
     t0 = time.monotonic()
     while time.monotonic() - t0 < 8.0:
         time.sleep(0.05)
-    k = sock.conns - c0
-    assert 1 <= k <= 4, "el backoff no es acotado: %d reconexiones en 8 s con la suscripcion muerta" % k
+    k = _own(sock) - c0
+    assert 1 <= k <= 4, "el backoff no es acotado: %d reconexiones de la oficina en 8 s con la suscripcion muerta" % k
     http = _HTTP(server)
     assert http.get("/api/state")[1]["events"] == "polling"
     assert server.get_state()["agents"], "con la suscripcion muerta la oficina sigue sirviendo"
@@ -508,15 +553,16 @@ def test_un_canal_que_funciona_y_se_corta_reintenta_con_la_cota_minima(server, h
     que la cadencia queda acotada por `EV_BACK0` (1 s), no crece."""
     sock = herdr_socket("kick.sock", kick=True)
     assert server.start_events(sock) in ("live", "polling")   # el corte llega justo despues del ack
-    c0 = sock.conns
+    c0 = _own(sock)
     t0 = time.monotonic()
     while time.monotonic() - t0 < 8.0:
         time.sleep(0.05)
-    k = sock.conns - c0
+    k = _own(sock) - c0
     # La cadencia es connect+subscribe+EOF+`EV_BACK0` de sueno, asi que la cota es ~1 conexion/s
     # (el backoff se resetea porque el canal si suscribe). Se admite margen de 4 por scheduling y
     # por el tiempo que el helper de salud tarda en ver el modo. La asercion es que NO hay spin:
-    # 111 conexiones en 8 s (observado con un hilo vivo de un test anterior) esta rojo.
+    # 111 conexiones en 8 s (observado con un hilo vivo de un test anterior) esta rojo. Con `_own` las
+    # conexiones del CLI real que fuga el harness no cuentan; las de la oficina si.
     assert 1 <= k <= 4 + int(8.0 / server.mod.EV_BACK0), "el reintento no esta acotado: %d en 8 s" % k
     assert server.get_state()["agents"], "con el socket cortado la oficina sigue sirviendo"
     http = _HTTP(server)
@@ -567,3 +613,246 @@ def test_sin_hilo_de_eventos_la_linea_base_de_polling_es_la_de_hoy(server):
     server.bench(True)
     server.mod.CACHE.update(data=None, at=0.0)
     assert server.get_state()["interval"] == 30
+
+
+# ---------- T10: el aviso cuando un agente pasa a `blocked` ----------
+# Forma VERIFICADA en el binario herdr 0.9.3 (2026-10-06, `herdr notification show --help`):
+# `notification show <TITLE> [--body <TEXT>] [--position top-left|top-right|bottom-left|bottom-right]
+# [--sound none|done|request]`. El titulo es POSICIONAL y OBLIGATORIO; `notification` no es un metodo
+# suscribible, asi que el aviso sale por CLI (`shell=False`) y NUNCA por el socket.
+CORNERS = ("top-left", "top-right", "bottom-left", "bottom-right")
+SONIDOS = ("none", "done", "request")
+
+
+def test_la_transicion_a_bloqueado_avisa_y_el_bloqueado_repetido_no(server, herdr_socket):
+    """Requisito 1: se avisa al ENTRAR en `blocked`, no en cada evento que dice `blocked`.
+
+    `EV["status"]` guarda el ultimo estado OBSERVADO por panel, y `notif_plan` se llama solo cuando el
+    previo es distinto de `blocked` y el nuevo es `blocked`. Tres `blocked` del mismo panel = UN
+    subproceso, y `skips` queda en 0: lo que corta la repeticion es el seguimiento de la transicion por
+    `pane_id`, no la ventana de tiempo.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()   # el snapshot siembra la correspondencia pane->nombre
+    sock.emit(sock.event_status("w1:pM", "blocked"))
+    a = _aviso(server)
+    assert a and len(a) == 1, "la transicion a blocked no lanzo un aviso"
+    assert "explorer" in _argv(a[0])[0], "el titulo debe nombrar el agente (w1:pM es explorer en el snapshot)"
+    n = len(_notifs(server))
+    for _ in range(3):
+        sock.emit(sock.event_status("w1:pM", "blocked"))
+    assert _espera(lambda: server.ev_status("w1:pM") == "blocked")
+    time.sleep(1.2)   # el worker suena `NOTIF_IDLE` s: 1.2 s es suficiente para ver un spawn si lo hubiera
+    assert len(_notifs(server)) == n, "un panel que sigue bloqueado volvio a avisar: spam"
+    assert server.mod.NOTIF["sent"] == 1 and server.mod.NOTIF["skips"] == 0, \
+        "la transicion no se sigue por panel: %s" % (server.mod.NOTIF,)
+    assert server.health() == "live", "el estado repetido no debe matar el canal"
+
+
+def test_bloqueado_idle_bloqueado_avisa_dos_y_la_ventana_colapsa_la_ragafa(server, herdr_socket):
+    """Requisito 2: `blocked -> idle -> blocked` son dos transiciones, y la ventana colapsa la rafaga.
+
+    El paso del tiempo se simula moviendo la marca `NOTIF["last"][pane]["at"]`, no durmiendo `NOTIF_WIN`
+    s: el assert es el mecanismo; dormir daria un test de 20 s. Con la ventana activa, la segunda
+    transicion rapida se colapsa y se registra como omitida.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()
+    sock.emit(sock.event_status("w1:pM", "blocked"))
+    assert len(_aviso(server)) == 1
+    assert _espera(lambda: server.mod.NOTIF["sent"] == 1)
+    server.mod.NOTIF["last"]["w1:pM"]["at"] = -1.0   # la ventana paso: es el paso del tiempo, sin dormir
+    sock.emit(sock.event_status("w1:pM", "idle"))
+    sock.emit(sock.event_status("w1:pM", "blocked"))
+    assert len(_aviso(server, 2)) == 2, "la segunda transicion a blocked no avisa"
+    n = len(_notifs(server))
+    sock.emit(sock.event_status("w1:pM", "idle"))
+    sock.emit(sock.event_status("w1:pM", "blocked"))   # rafaga: dentro de la ventana
+    time.sleep(1.2)
+    assert len(_notifs(server)) == n, "la rafaga blocked->idle->blocked produjo un segundo aviso"
+    assert server.mod.NOTIF["skips"] >= 1, "la ventana no registro el aviso colapsado"
+    assert 0 < server.mod.NOTIF_WIN <= 60, "la ventana es eleccion de la oficina, acotada"
+    assert server.health() == "live"
+
+
+def test_el_argv_del_aviso_es_la_forma_verificada_en_el_binario(server, herdr_socket):
+    """`notification show <TITLE> --body <TEXT> --position <corner> --sound request`, en ese orden.
+
+    El titulo es posicional y obligatorio (capturado del binario), y los unicos valores legales de
+    `--position` son los cuatro corners y los de `--sound` son `none|done|request`. El `--body` lleva el
+    panel, la oficina y la hora UTC (la misma marca que `SEEN` en `mkagent`).
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()
+    sock.emit(sock.event_status("w1:pM", "blocked", "w1"))
+    a = _aviso(server)
+    assert a, "no se lanzo el aviso"
+    title, flags = _argv(a[0])
+    assert title == "explorer te necesita", "el titulo debe nombrar al agente: %s" % title
+    assert flags["--body"].startswith("panel w1:pM · oficina w1 · "), flags["--body"]
+    assert flags["--body"].endswith(" UTC"), flags["--body"]
+    assert flags["--position"] == "top-right"
+    assert flags["--position"] in CORNERS
+    assert flags["--sound"] == "request" and flags["--sound"] in SONIDOS
+    assert server.mod.NOTIF_POS in CORNERS and server.mod.NOTIF_SOUND in SONIDOS
+
+
+def test_un_panel_sin_nombre_avisa_con_el_pane_id_y_no_inventa(server, herdr_socket):
+    """Requisito 3: el evento de estado NO trae el nombre. Si la correspondencia no lo tiene, el titulo
+    dice el `pane_id` a secas: nunca se fabrica un nombre.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()
+    assert server.ev_names().get("w9:pZ") is None
+    assert server.mod.EV["agent_names"].get("w9:pZ") is None
+    sock.emit(sock.event_status("w9:pZ", "blocked", "w9"))
+    a = _aviso(server)
+    assert a, "el panel desconocido no avisa"
+    title, flags = _argv(a[0])
+    assert "w9:pZ" in title, "el titulo debe decir que panel es: %s" % title
+    assert title == "Panel w9:pZ te necesita", "se fabrico un nombre: %s" % title
+    assert flags["--body"].startswith("panel w9:pZ · oficina w9 · "), flags["--body"]
+
+
+def test_un_aviso_que_falla_no_detiene_el_hilo_y_el_estado_sigue_empujando(server, herdr_socket):
+    """Requisito 5: un aviso que falla se registra y se salta, no es fatal.
+
+    El stub no emula `notification show`: responde `{"error":{"code":"usage",...}}` con exit 1 y stdout
+    vacio, que es exactamente el caso de un herdr sin el comando o con el socket muerto. Se anade el caso
+    de exit 0 con salida vacia (el socket muerto de T4). En los dos el hilo de eventos sigue vivo, el push
+    del estado sigue saliendo por el SSE, y el fallo queda contado.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    sse = _SSE(server)
+    f0, _ = sse.first(2.0)
+    assert f0 and f0["events"] == "live"
+    sock.emit(sock.event_status("w1:pM", "blocked"))
+    assert _aviso(server), "el aviso se lanzo"
+    assert _espera(lambda: server.mod.NOTIF["sent"] == 1 and server.mod.NOTIF["fails"] == 1), \
+        "el fallo del aviso no se registro"
+    assert server.health() == "live", "un aviso que fallo mato el canal de eventos"
+    f1, dt = sse.first(3.0)
+    assert f1 and _agentes(f1)["explorer"]["status"] == "blocked", "el push del estado se detuvo"
+    server.stub.script_response(("notification", "show"), "", "", 0)   # exit 0 y salida vacia
+    server.mod.NOTIF["last"]["w1:pM"]["at"] = -1.0
+    sock.emit(sock.event_status("w1:pM", "idle"))
+    sock.emit(sock.event_status("w1:pM", "blocked"))
+    n = len(_notifs(server))
+    assert _espera(lambda: len(_notifs(server)) > n), "el worker paro de consumir la cola tras el fallo"
+    assert server.mod.NOTIF["fails"] == 2, "un rc=0 con salida vacia no se conto como aviso fallido"
+    assert server.get_state()["agents"], "la oficina dejo de servir tras el aviso fallido"
+    sse.close()
+
+
+def test_el_bloqueado_en_masa_queda_bajo_la_cota_de_spawn(server, herdr_socket):
+    """Requisito 6: 8 paneles bloqueados a la vez no pueden fork 8 subproceso.
+
+    La cota se aplica en el SPAWN (`NOTIF_BURST` en `NOTIF_BURST_WIN`), no en la intencion: el worker
+    cuenta lo que lanza, asi que el limite es una cota de procesos. Lo que no cabe se registra como
+    omitido, no como fallo, y el estado de los 8 paneles sigue llegando.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()
+    panes = ["w2:p%d" % (i + 1) for i in range(8)]
+    # Se programan 4 exitos: la cota es 4 spawns en la ventana, y los 4 que salen tienen que contar como
+    # enviados. El stub no emula `notification show` (rc=1, `usage`), asi que sin estos 4 sobres los 4
+    # spawns serian fallos y la asercion de `fails` no diria nada sobre la cota.
+    for _ in range(server.mod.NOTIF_BURST):
+        server.stub.script_response(("notification", "show"), '{"type":"ok"}', "", 0)
+    for i, p in enumerate(panes):
+        server.add_agent(name="agy-masa%d" % i, kind="agy", status="idle", workspace_id="w2", pane_id=p)
+        sock.emit(sock.event_status(p, "blocked", "w2"))
+    assert _espera(lambda: server.mod.NOTIF["sent"] >= server.mod.NOTIF_BURST), "la cota no dejo lanzar nada"
+    time.sleep(2.0)   # tiempo de sobra para que el worker consuma toda la cola
+    k = len(_notifs(server))
+    assert k <= server.mod.NOTIF_BURST, "el bloqueado en masa forco %d subproceso (cota %d)" % (k, server.mod.NOTIF_BURST)
+    assert server.mod.NOTIF["skips"] >= 8 - server.mod.NOTIF_BURST, "los omitidos no se registraron"
+    assert server.mod.NOTIF["fails"] == 0, "el omitido por cota no es un fallo"
+    assert all(server.ev_status(p) == "blocked" for p in panes), "la tormenta de avisos perdio estados"
+    assert server.health() == "live", "la tormenta de avisos mato el canal"
+
+
+def test_el_aviso_no_bloquea_la_lectura_del_socket(server, herdr_socket):
+    """Requisito 5: el spawn vive en su propio hilo. Con un `notification show` de 1.2 s, los tres
+    eventos siguientes se aplican MIENTRAS el primer subproceso esta en vuelo: la lectura del socket no
+    espera al subproceso.
+
+    El stub registra la invocacion al empezar, asi que la prueba de que el spawn esta en vuelo es la cola
+    pendiente (`pend`) y `sent == 0`: los tres estados llegan con dos avisos aun en cola y ninguno
+    terminado. Si el spawn fuera en el hilo de lectura, los tres estados tardarian 3.6 s.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()
+    server.stub.script_response(("notification", "show"), '{"type":"ok"}', "", 0, None, 1.2)
+    t0 = time.monotonic()
+    for p in ("w1:pM", "w1:pD", "w1:pE"):
+        sock.emit(sock.event_status(p, "blocked"))
+    hit = _espera(lambda: all(server.ev_status(p) == "blocked" for p in ("w1:pM", "w1:pD", "w1:pE"))
+                  and len(server.mod.NOTIF["pend"]) >= 2, 1.0)
+    assert hit, "los tres eventos no se aplicaron con un spawn en vuelo"
+    dt = time.monotonic() - t0
+    assert dt < 1.0, "la lectura del socket espero %s s al subproceso de aviso" % round(dt, 2)
+    assert server.mod.NOTIF["sent"] == 0, "el worker termino el spawn antes: no hay hilo separado"
+    assert _espera(lambda: server.mod.NOTIF["sent"] >= 1, 3.0)
+    assert time.monotonic() - t0 >= 1.2, "el subproceso no tardo lo programado: la cola no se consumio"
+    assert _espera(lambda: len(_notifs(server)) == 3, 6.0), "la cola no se consumio entera"
+    assert server.health() == "live"
+
+
+def test_el_worker_solo_lanza_notification_show_y_el_socket_no_manda_mutantes(server, herdr_socket):
+    """El spawn nuevo es SOLO `notification show`; por el socket sigue sin salir un metodo mutante.
+
+    El aviso se lanza por CLI (verificado en `herdr notification show --help`), no por el socket:
+    `notification` no es un metodo suscribible. Se aserciona sobre el log de invocaciones del stub y el
+    log de pedidos del socket, no sobre una replica del codigo.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()
+    for p in ("w1:pM", "w1:pD", "w2:pZ"):
+        sock.emit(sock.event_status(p, "blocked", p.split(":")[0]))
+    assert len(_aviso(server, 3)) == 3
+    heads = {tuple(c[:2]) for c in server.calls()}
+    assert ("notification", "show") in heads
+    for c in server.calls():
+        assert tuple(c[:2]) not in [("agent", "prompt"), ("agent", "start"), ("pane", "split"),
+                                    ("pane", "run"), ("pane", "send-keys"), ("workspace", "create"),
+                                    ("workspace", "close")], "spawn mutante: %s" % (c,)
+    assert {tuple(c[:2]) for c in server.calls()} == {("api", "snapshot"), ("notification", "show")}, \
+        "el unico spawn nuevo es `notification show`: %s" % sorted(heads)
+    assert set(sock.methods()) <= {"events.subscribe", "ping"}, sock.methods()
+    for m in sock.methods():
+        assert m not in MUTANTES
+    assert server.executables() == ["herdr"], "el aviso tiene que salir por el binario herdr: %s" % server.executables()
+
+
+def test_el_aviso_es_aditivo_y_la_linea_base_de_aviso_no_lanza_subproceso(server, herdr_socket):
+    """Sin hilo de eventos (la linea base de T1..T8) no hay aviso: `unavailable` no sondea el binario.
+
+    El worker solo se arranca con `ev_start()`, y `notif_view()` es un helper de estado: no renombra
+    ninguna clave del payload. La suite de la linea base sigue sin lanzar subproceso de notificacion.
+    """
+    assert server.health() == "unavailable"
+    server.get_state()
+    sock = herdr_socket("herdr.sock")
+    sock.enqueue(sock.event_status("w1:pM", "blocked"))
+    time.sleep(0.5)
+    assert _notifs(server) == [], "la linea base de polling lanzo un aviso: no hay canal de eventos"
+    v = server.mod.notif_view()
+    assert set(v) == {"sent", "skips", "fails", "last_pane", "last_ts", "win", "burst"}
+    assert v["last_pane"] is None
+    st = server.get_state()
+    assert "notif" not in st, "la clave aditiva `notif` no esta autorizada en el payload (T10)"
+    assert set(st) == {"agents", "metrics", "ticker", "queue", "lock", "bench", "suplencia", "herdr",
+                       "tareas", "updated", "interval"}, "ninguna clave del estado se renombra ni se anade"
+    http = _HTTP(server)
+    code, r = http.get("/api/state")
+    assert code == 200 and r["events"] == "unavailable" and "notif" not in r
+    http.close()
