@@ -62,16 +62,28 @@ def short_row(row): c = [x.strip() for x in row.strip().strip("|").split("|")]; 
 def herdr_out(args, timeout=8, mach=None):
     try: return subprocess.run(["herdr"] + (["--machine", mach] if mach else []) + args, capture_output=True, text=True, timeout=timeout).stdout
     except Exception: return ""
-def mkagent(name, status, activity, color, role):
-    st = "working" if status == "working" else "idle"
+# El dominio de `agent_status`, verificado en el binario herdr 0.9.3 (tests/README.md). Lo que no esta
+# en el dominio (clave ausente, None, un string de un Herdr futuro) es `unknown`, nunca `idle`.
+ESTADOS = ("idle", "working", "blocked", "done", "unknown")
+CAMPOS_H = ("pane_id", "focused", "interactive_ready", "completion_seq", "state_change_seq", "agent")
+# `state_ws` no tiene fuentes de actividad propias: el texto se deriva del estado real, para que
+# status y actividad no se contradigan nunca.
+ACTS = {"working": "trabajando", "blocked": "esperando confirmación", "done": "terminado",
+        "idle": "en reposo", "unknown": "estado desconocido"}
+def estado_real(st): return st if st in ESTADOS else "unknown"
+def mkagent(name, status, activity, color, role, h=None):   # h: dict del agente en `agent list` (None si no esta)
+    st = estado_real(status)
     if SEEN.get(name, [None])[0] != st: SEEN[name] = [st, time.strftime("%d %H:%M UTC", time.gmtime()), time.time()]
-    return {"name": name, "status": st, "activity": activity, "color": color, "role": role, "since": SEEN[name][1], "ts": SEEN[name][2]}
+    a = {"name": name, "status": st, "activity": activity, "color": color, "role": role, "since": SEEN[name][1], "ts": SEEN[name][2]}
+    for k in CAMPOS_H: a[k] = h.get(k) if h else None   # opcionales por agente: None si Herdr no los trae
+    return a
 def tasks_list():
     try: return json.loads(read(TAREAS) or "{}").get("tareas", [])
     except Exception: return []
 def build_state():
     try:
-        statuses = {a.get("name", "?"): a for a in json.loads(herdr_out(["agent", "list"]))["result"]["agents"]}
+        # el agente sin `name` no es un agente de la oficina: se omite, no se convierte en "?"
+        statuses = {a["name"]: a for a in json.loads(herdr_out(["agent", "list"]))["result"]["agents"] if a.get("name")}
     except Exception:
         statuses = {}
     segs = estado_segments()
@@ -81,19 +93,19 @@ def build_state():
     m = re.search(r"progreso\s*=\s*([^\s]+)", lock_txt)
     tact = ("progreso=" + m.group(1)) if m else ("ocupado" if lock_txt.strip() else "libre")
     supl = os.path.exists(SUPLENCIA)
-    g = lambda n: statuses.get(n, {}).get("agent_status", "idle")
+    g = lambda n: statuses[n].get("agent_status") if n in statuses else "idle"
     C = COLORS; R = ROLES; cs = g("claude")
-    agents = [mkagent("claude", cs, "pensando" if cs == "working" else "supervisando", C["claude"], R["claude"]),
-              mkagent("opencode2", g("opencode2"), yo or "trabajando", C["opencode2"], R["opencode2"]),
-              mkagent("tester", "working" if lock_txt.strip() else "idle", tact, C["tester"], R["tester"]),
-              mkagent("explorer", g("explorer"), last_line(ENVIADOS) or "investigando", C["explorer"], R["explorer"]),
-              mkagent("suplente", "working" if supl else "idle", "SUPLENTE AL MANDO" if supl else "en reposo", C["suplente"], R["suplente"])]
+    agents = [mkagent("claude", cs, "pensando" if cs == "working" else "supervisando", C["claude"], R["claude"], statuses.get("claude")),
+              mkagent("opencode2", g("opencode2"), yo or "trabajando", C["opencode2"], R["opencode2"], statuses.get("opencode2")),
+              mkagent("tester", g("tester") if "tester" in statuses else ("working" if lock_txt.strip() else "idle"), tact, C["tester"], R["tester"], statuses.get("tester")),
+              mkagent("explorer", g("explorer"), last_line(ENVIADOS) or "investigando", C["explorer"], R["explorer"], statuses.get("explorer")),
+              mkagent("suplente", "working" if supl else "idle", "SUPLENTE AL MANDO" if supl else "en reposo", C["suplente"], R["suplente"], statuses.get("suplente"))]
     wsS = statuses.get("opencode2", {}).get("workspace_id", "w1")   # solo los obreros de la oficina de Strata
     for name, a in statuses.items():
         if name not in FIXED and a.get("workspace_id") == wsS:
-            agents.append(mkagent(name, a.get("agent_status", "idle"),
+            agents.append(mkagent(name, a.get("agent_status"),
                                   next((s for s in segs if name in s), obrs[0] if obrs else "trabajando"),
-                                  "#fb7185", "Contrato " + name))
+                                  "#fb7185", "Contrato " + name, a))
     global LAST_AGENTS
     LAST_AGENTS = set(a["name"] for a in agents)
     try: metrics = json.loads(read(METRICAS) or "{}")
@@ -194,10 +206,11 @@ def api_offices():
 def state_ws(oid):
     mach, wid = split_id(oid)
     m = meta().get(oid, {}); roles = {a["name"]: a["rol"] for a in m.get("agentes", [])}
-    ags = [mkagent(a["name"], a.get("agent_status", "idle"), "trabajando" if a.get("agent_status") == "working" else
-                   ("esperando confirmación" if a.get("agent_status") == "blocked" else "en reposo"),
-                   "#fb7185", roles.get(a["name"], a.get("agent", "agente")))
-           for a in raw_agents(mach) if a.get("workspace_id") == wid and a.get("name")]
+    ags = []
+    for a in raw_agents(mach):
+        if a.get("workspace_id") == wid and a.get("name"):
+            st = estado_real(a.get("agent_status"))
+            ags.append(mkagent(a["name"], st, ACTS[st], "#fb7185", roles.get(a["name"], a.get("agent", "agente")), a))
     return {"agents": ags, "metrics": {}, "ticker": [], "queue": {"done": 0, "total": 0}, "lock": False, "bench": False,
             "suplencia": False, "herdr": True, "tareas": [], "ws": oid, "maquina": mach or "bazzite", "updated": time.strftime("%H:%M:%S UTC", time.gmtime())}
 def slug(t): return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")[:12] or "ofi"

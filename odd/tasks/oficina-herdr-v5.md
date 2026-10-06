@@ -37,8 +37,8 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 6. Cerrar cada tarea con un commit de unidad de trabajo en la rama de feature. Push/PR/merge quedan en Adrián.
 
 ## Checklist
-- [x] **T1** — Stub de Herdr a nivel argv + suite pytest (sin GPU ni Herdr vivo). Commit: *(pendiente de registrar)*
-- [ ] **T2** — Contrato de estado: `agent_status` real + `pane_id`, `focused`, `interactive_ready`, `completion_seq`, `state_change_seq` en el payload; `mkagent` deja de colapsar; `state_ws` alinea.
+- [x] **T1** — Stub de Herdr a nivel argv + suite pytest (sin GPU ni Herdr vivo). Commit `0b1f224`.
+- [x] **T2** — Contrato de estado real (`agent_status` + `pane_id`, `focused`, `interactive_ready`, `completion_seq`, `state_change_seq`, `agent`) en el payload. Commit: *(hash en el próximo commit)*
 - [ ] **T3** — `statusOf` del frontend pasa a ser función de estado real; se elimina el regex de `index.html:341`.
 - [ ] **T4** — `herdr_out` captura `stderr` y parsea `{error:{code,message}}`; se eliminan los checks de substring muertos.
 - [ ] **T5** — `agent prompt --wait --timeout` + manejo real de `agent_blocked` / `agent_prompt_stalled` con mensaje humano.
@@ -74,6 +74,12 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - **Viva**: un agente `agy` en un panel de prueba, transición `idle → working → blocked`, y `notification.show`.
 
 ## Progreso
+- 2026-10-06: **T2 completada.** Writer delegado modificó solo `server.py` (45 líneas) y `test_herdr_stub.py` (218). `mkagent` deja de colapsar: dominio verificado `idle|working|blocked|done|unknown`, lo fuera de dominio es `unknown`, nunca `idle`; `SEEN` keyed en estado real. Campos de Herdr propagados con `.get()` → `None` si ausentes. Agente sin `name` se omite (se elimina el fantasma `"?"`). `tester` prefiere Herdr y el lock queda como texto de actividad. `state_ws` deriva actividad del estado normalizado (`ACTS`), sin contradicción.
+  - Evidencia observada por el padre: `git diff` revisado línea por línea y **`50 passed in 3.28 s`**. El writer reportó RED `16 failed, 29 passed` antes del fix. Payload +659 B sobre 5 agentes (~132 B/agente). Herdr calls por ciclo: solo `agent list` (sin cambio).
+  - Anclas renombradas: `test_mkagent_conserva_el_estado_real`, `test_build_state_conserva_el_bloqueado`, `test_state_ws_alinea_estado_y_actividad`, `test_state_ws_remota_conserva_el_bloqueado`. Dos anclas T1 adicionales (`test_build_state_linea_base`, `test_api_offices_linea_base`) se actualizaron por la omisión del agente sin `name`.
+  - Decisión registrada: agente **ausente** de `agent list` queda `idle`; agente **presente** con estado fuera de dominio queda `unknown`. Si se prefiere ausente→`unknown`, es una línea en `g`.
+  - Wording nuevo elegido por el writer: `done`→"terminado", `unknown`→"estado desconocido". Adrián puede preferir otra palabra.
+  - **Pendiente de reiniciar el servicio**: sigue corriendo el `server.py` viejo. El contrato nuevo entra en el próximo restart.
 - 2026-10-06: **T1 completada.** Writer delegado creó `docs/fork/oficina/tests/` (31 ficheros): `stub_herdr.py` (emulador argv por `(machine,args)`, errores en stderr+exit 1), `conftest.py` (import aislado de `server.py`: HOME, `STRATA_OFICINA_PW`, `FORK`+4 rutas derivadas, `MOTOR`/`BENCH`, `sys.argv`, `subprocess` shim, reset de `CACHE`/`SEEN`/`FAILS`/`MCACHE`/`AGCACHE`/`KCACHE`/`JOBS`/`LAST_AGENTS`/`LAST_SEND`), `test_herdr_stub.py` (37 tests), `README.md`, `fixtures/` (copias verbatim de capturas vivas + `blocked` sintético sobre `explorer`/agy).
   - Evidencia observada por el padre: `python3 -m pytest docs/fork/oficina/tests/ -q` → **36 passed, 1 xfailed in 2.63 s**. `git status --short` muestra solo `?? docs/fork/oficina/tests/` y `?? odd/`; `server.py`, `index.html`, `login.html`, `README.md`, `strata-oficina.service` intactos. Servicio `active` (no reiniciado).
   - Anclas que obligan a T2: `test_mkagent_colapsa` (`server.py:66`), `test_build_state_pierde_el_bloqueado`, `test_state_ws_contradice_estado_y_actividad` (`server.py:197-198`), `test_herdr_out_solo_stdout` (`server.py:63`), `test_send_no_observa_la_entrega` (`server.py:346`), `test_build_state_no_pide_snapshot`. `test_t2_objetivo_el_bloqueado_sobrevive` es `xfail(strict=True)`: cuando T2 arregle `mkagent` pasa a XPASS y pone la suite roja, forzando a quitar el marker y actualizar las anclas.
@@ -86,4 +92,4 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 Pendiente: no hay herramientas de memoria (`mem_context`/`mem_search`/`mem_get_observation`/save) disponibles en esta sesión. El espejo local `odd/oficina-herdr-v5/tasks` se mantiene como copia; se resincronizará cuando Engram esté disponible.
 
 ## Próximo paso
-T1: stub de Herdr + suite pytest, con superficies de edición acotadas a `docs/fork/oficina/tests/`.
+T2: propagar el estado real (`idle|working|blocked|done|unknown`) y los campos de Herdr (`pane_id`, `focused`, `interactive_ready`, `completion_seq`, `state_change_seq`, `agent`) al payload; `mkagent` deja de colapsar; `state_ws` alinea; se quita el `xfail(strict)` de T1. Superficies: `docs/fork/oficina/server.py` + `docs/fork/oficina/tests/test_herdr_stub.py`.

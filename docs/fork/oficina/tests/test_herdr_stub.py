@@ -1,18 +1,26 @@
 """Suite de la oficina con Herdr emulado a nivel argv: sin GPU, sin Herdr vivo, sin red.
 
 El proposito es doble:
-  1. Probar que el stub reproduce las formas que `server.py` parsea HOY. Un run verde hoy es la
-     linea base que T2 tiene que mantener verde.
-  2. Dejar anclas visibles para el RED->GREEN de las tareas T2..T6: `test_mkagent_colapsa`,
-     `test_build_state_pierde_el_bloqueado`, `test_t2_objetivo_el_bloqueado_sobrevive` (xfail strict),
-     `test_herdr_out_solo_stdout`, `test_send_no_observa_la_entrega` y
-     `test_build_state_no_pide_snapshot`.
+  1. Probar que el stub reproduce las formas que `server.py` parsea. Un run verde es la linea base
+     que cada tarea tiene que mantener verde.
+  2. Dejar anclas visibles para el RED->GREEN de las tareas T2..T6: despues de T2 quedan
+     `test_herdr_out_solo_stdout`, `test_checks_de_substring_de_start_estan_muertos`,
+     `test_api_log_sin_respuesta_es_el_error_actual` (T4), `test_send_no_observa_la_entrega` y
+     `test_send_a_bloqueado_da_el_mensaje_actual` (T5), `test_snapshot_emulado_tiene_la_forma_de_la_captura`,
+     `test_build_state_no_pide_snapshot` y `test_api_offices_linea_base` (T6).
+
+T2 (contrato de estado) fija el dominio `idle | working | blocked | done | unknown` y los campos
+que viajan por agente: `pane_id`, `focused`, `interactive_ready`, `completion_seq`,
+`state_change_seq`, `agent`. Las anclas de T2 (`test_mkagent_conserva_el_estado_real`,
+`test_build_state_conserva_el_bloqueado`, `test_state_ws_alinea_estado_y_actividad`,
+`test_agente_sin_name_se_omite`, `test_state_ws_remota_conserva_el_bloqueado`) afirman hoy el
+contrato nuevo, no el colapso.
 
 Las formas verificadas contra el binario herdr 0.9.3 estan en `fixtures/` (ver README.md).
 """
 from __future__ import annotations
 import json
-import pytest
+
 from stub_herdr import FIXTURES, STATUSES
 
 CAMPOS_AGENTE = {"agent", "agent_status", "completion_seq", "cwd", "focused", "foreground_cwd",
@@ -51,9 +59,8 @@ def test_campos_de_t2_existen_pero_no_en_todos_los_agentes():
         "claude": ["interactive_ready"], "explorer": [], "<no-name>": ["completion_seq", "interactive_ready"]}
 
 
-@pytest.mark.xfail(strict=True, reason="T2: mkagent debe dejar pasar el estado real")
 def test_t2_objetivo_el_bloqueado_sobrevive(server):
-    """Especie viva de T2: hoy falla (el xfail strict lo registra); T2 tiene que dejarlo verde."""
+    """Especie de T2: el `blocked` de un agente `agy` llega al payload intacto."""
     server.set_state("explorer", "blocked")
     assert _agentes(server.build_state())["explorer"]["status"] == "blocked"
 
@@ -94,7 +101,7 @@ def test_build_state_linea_base(server):
     assert st["herdr"] is True and st["lock"] is False and st["bench"] is False
     assert st["queue"] == {"done": 3, "total": 9}
     assert [a["name"] for a in st["agents"]] == ["claude", "opencode2", "tester", "explorer",
-                                                 "suplente", "?"]
+                                                 "suplente"]   # T2: el agente sin `name` se omite
     assert st["metrics"]["base"]["B1"] == 50.7
     assert st["tareas"] and st["ticker"][-1] == "COLA 3/9"
 
@@ -105,27 +112,92 @@ def test_build_state_no_pide_snapshot(server):
     assert ("api", "snapshot") not in server.calls()
 
 
-def test_mkagent_colapsa(server):
-    """ANCLA T2: hoy solo `working` sobrevive. T2 tiene que cambiar estas 3 filas a su estado real."""
-    for status, esperado in [("working", "working"), ("idle", "idle"), ("blocked", "idle"),
-                             ("done", "idle"), ("unknown", "idle")]:
+def test_mkagent_conserva_el_estado_real(server):
+    """T2: `mkagent` deja de colapsar. El dominio verificado en herdr 0.9.3 pasa tal cual.
+
+    Lo que esta fuera del dominio (clave ausente, `None`, un string de un Herdr futuro) cae en
+    `unknown`, nunca en `idle`.
+    """
+    for status, esperado in [("working", "working"), ("idle", "idle"), ("blocked", "blocked"),
+                             ("done", "done"), ("unknown", "unknown"), ("waiting", "unknown"),
+                             ("", "unknown"), (None, "unknown")]:
         assert server.mkagent("tester", status)["status"] == esperado
+    a = server.mkagent("agy-obrero", "done")
+    assert a["status"] == "done" and all(a[k] is None for k in CAMPOS_T2) and a["agent"] is None
 
 
-def test_build_state_pierde_el_bloqueado(server):
-    """ANCLA T2: el fixture sintetico `blocked` (agy explorer) se pinta inactivo."""
+def test_mkagent_keyed_en_el_estado_real(server):
+    """Las transiciones de `SEEN` (`since`/`ts` que lee index.html) se keyean en el estado real."""
+    server.mod.SEEN.clear()
+    a = server.mod.mkagent("explorer", "blocked", "actividad", "#fb7185", "rol")
+    assert server.mod.SEEN["explorer"][0] == "blocked" and a["since"] == server.mod.SEEN["explorer"][1]
+    b = server.mod.mkagent("explorer", "blocked", "actividad", "#fb7185", "rol")
+    assert b["since"] == a["since"] and b["ts"] == a["ts"]   # sin transicion no se reescribe
+    c = server.mod.mkagent("explorer", "working", "actividad", "#fb7185", "rol")
+    assert server.mod.SEEN["explorer"][0] == "working" and c["ts"] >= a["ts"]
+
+
+def test_build_state_conserva_el_bloqueado(server):
+    """T2: el fixture sintetico `blocked` (agy `explorer`) llega al navegador bloqueado."""
     server.set_state("explorer", "blocked")
     ag = _agentes(server.build_state())
-    assert ag["explorer"]["status"] == "idle"
-    assert ag["explorer"]["activity"] == "investigando"
+    assert ag["explorer"]["status"] == "blocked"
+    assert ag["explorer"]["activity"] == "investigando"   # la actividad sigue viniendo de ENVIADOS
+    assert ag["claude"]["status"] == "idle" and ag["opencode2"]["status"] == "idle"   # linea base
 
 
-def test_state_ws_contradice_estado_y_actividad(server):
-    """ANCLA T2: `state_ws` sabe que esta bloqueado (actividad) y lo declara inactivo (status)."""
+def test_done_sobrevive_a_build_state(server):
+    """T2: `done` no se pinta inactivo."""
+    server.set_state("explorer", "done")
+    ag = _agentes(server.build_state())
+    assert ag["explorer"]["status"] == "done" and ag["explorer"]["activity"] == "investigando"
+
+
+def test_estado_fuera_de_dominio_es_unknown(server):
+    """T2: un `agent_status` de un Herdr futuro no se traduce a `idle`."""
+    server.stub.find("explorer")["agent_status"] = "waiting"
+    ag = _agentes(server.build_state())
+    assert ag["explorer"]["status"] == "unknown"
+
+
+def test_agente_sin_clave_agent_status_es_unknown(server):
+    """T2: la clave `agent_status` puede faltar en un agente presente; el estado es `unknown`."""
+    a = server.add_agent(name="agy-misterio", kind="agy", workspace_id="w1")
+    del a["agent_status"]
+    ag = _agentes(server.state_ws("w1"))
+    assert ag["agy-misterio"]["status"] == "unknown"
+    assert ag["agy-misterio"]["activity"] == server.mod.ACTS["unknown"]
+
+
+def test_campos_de_herdr_opcionales_y_none(server):
+    """T2: los campos de Herdr llegan por agente; los que no vienen son `None`, no un default falso."""
+    ag = _agentes(server.build_state())
+    assert all(set(CAMPOS_T2) | {"agent"} <= set(a) for a in ag.values())
+    assert ag["opencode2"]["interactive_ready"] is None and ag["opencode2"]["completion_seq"] == 1083
+    assert ag["tester"]["completion_seq"] is None and ag["tester"]["interactive_ready"] is True
+    assert ag["claude"]["focused"] is False and ag["claude"]["pane_id"] == "w1:pE"
+    assert ag["tester"]["agent"] == "pi" and ag["suplente"]["agent"] == "agy"
+
+
+def test_agy_bloqueado_llega_con_sus_campos(server):
+    """La unica verificacion viva permitida es con `agy`: el stub prepara el caso con `explorer`.
+
+    Estado, tipo de agente y panel tienen que llegar juntos, para que T3/T10 puedan pintar y avisar
+    sin adivinar.
+    """
+    server.set_state("explorer", "blocked")
+    ag = _agentes(server.build_state())["explorer"]
+    assert ag["status"] == "blocked" and ag["agent"] == "agy" and ag["pane_id"] == "w1:pM"
+    assert ag["state_change_seq"] > 1077 and ag["interactive_ready"] is True
+
+
+def test_state_ws_alinea_estado_y_actividad(server):
+    """T2: `state_ws` ya no contradice su propio estado: la actividad se deriva del status real."""
     server.set_state("explorer", "blocked")
     ag = _agentes(server.state_ws("w1"))
-    assert ag["explorer"]["status"] == "idle" and ag["explorer"]["activity"] == "esperando confirmación"
-    assert all(a["status"] in ("idle", "working") for a in ag.values())
+    assert ag["explorer"]["status"] == "blocked" and ag["explorer"]["activity"] == "esperando confirmación"
+    assert all(a["activity"] == server.mod.ACTS[a["status"]] for a in ag.values())
+    assert ag["opencode2"]["status"] == "idle" and ag["opencode2"]["activity"] == "en reposo"
 
 
 def test_captura_no_tiene_bloqueados_y_el_fixture_sintetico_si(server):
@@ -134,17 +206,19 @@ def test_captura_no_tiene_bloqueados_y_el_fixture_sintetico_si(server):
     bloq = json.loads((FIXTURES / "agent_list_blocked.json").read_text(encoding="utf-8"))["result"]["agents"]
     assert [(a.get("name"), a["agent_status"]) for a in bloq if a.get("agent_status") == "blocked"] == [("explorer", "blocked")]
     server.load("agent_list_blocked.json")
-    assert _agentes(server.build_state())["explorer"]["status"] == "idle"   # sigue colapsado
+    assert _agentes(server.build_state())["explorer"]["status"] == "blocked"   # T2: sobrevive
 
 
-def test_agent_list_puede_no_tener_name(server):
-    """La captura real trae un agente SIN `name`: server.py:74 lo convierte en "?".
+def test_agente_sin_name_se_omite(server):
+    """T2: la captura real trae un agente SIN `name` y se omite, no se convierte en "?" fantasma.
 
-    `state_ws` (server.py:197) si exige `a["name"]`; `build_state` lo tolera y `valid_agent`
-    nunca aceptara "?". El stub reproduce el caso para que T2 lo trate, no para esconderlo.
+    `state_ws` (server.py:197) ya exigia `a.get("name")`; `build_state` lo toleraba y `valid_agent`
+    nunca aceptaria "?". El agente sin nombre no entra en `agents` ni en `LAST_AGENTS`.
     """
     st = server.build_state()
-    assert "?" in [a["name"] for a in st["agents"]]
+    names = [a["name"] for a in st["agents"]]
+    assert "?" not in names and names == ["claude", "opencode2", "tester", "explorer", "suplente"]
+    assert "?" not in server.mod.LAST_AGENTS
     assert server.valid_agent("?") is False
     assert "?" not in server.mod.agmap()
     assert all(a.get("name") for a in server.state_ws("w1")["agents"])
@@ -226,7 +300,7 @@ def test_api_offices_linea_base(server):
     w = r["offices"][0]
     assert w["id"] == "w1" and w["nombre"] == "Strata3060" and w["strata"] and w["foco"]
     assert w["needs"] is True and w["tareas"] == 4
-    assert w["agentes"] == ["claude", "opencode2", "tester", "explorer", "suplente", "?"]
+    assert w["agentes"] == ["claude", "opencode2", "tester", "explorer", "suplente"]
     calls = server.calls()
     assert ("agent", "list") in calls and ("workspace", "list") in calls   # dos llamadas separadas
 
@@ -293,12 +367,92 @@ def test_api_hilo_linea_base(server):
     assert r["menciones"] == ["2026-10-04 4: Tope 3072 por defecto (c41c564)"]
 
 
-def test_state_ws_remota_colapsa_igual(server):
-    """ANCLA T2/T8: el estado `blocked` de una maquina remota se pierde igual que en la local."""
+def test_state_ws_remota_conserva_el_bloqueado(server):
+    """T2/T8: el estado `blocked` de una maquina remota sobrevive igual que en la local."""
     server.add_agent(name="agy-obrero", kind="agy", status="blocked", mach="mac-mini", workspace_id="w9")
     ag = _agentes(server.state_ws("mac-mini:w9"))
-    assert ag["agy-obrero"]["status"] == "idle" and ag["agy-obrero"]["activity"] == "esperando confirmación"
+    assert ag["agy-obrero"]["status"] == "blocked" and ag["agy-obrero"]["activity"] == "esperando confirmación"
+    assert ag["agy-obrero"]["agent"] == "agy" and ag["agy-obrero"]["pane_id"] == "w9:p19"
     assert server.valid_agent("agy-obrero") is True
+
+
+def test_tester_usa_el_estado_de_herdr(server):
+    """T2: `tester` en `agent list` manda su estado real; el lock del motor queda solo como actividad."""
+    server.lock("progreso = 42%")
+    server.set_state("tester", "blocked")
+    ag = _agentes(server.build_state())
+    assert ag["tester"]["status"] == "blocked" and ag["tester"]["activity"] == "progreso=42%"
+
+
+def test_tester_sin_herdr_usa_el_lock(server):
+    """T2: si `tester` no esta en `agent list`, el lock del motor sigue mandando (comportamiento de siempre)."""
+    server.lock("progreso = 42%")
+    server.stub.agents[None] = [a for a in server.stub.agents[None] if a.get("name") != "tester"]
+    ag = _agentes(server.build_state())
+    assert ag["tester"]["status"] == "working" and ag["tester"]["activity"] == "progreso=42%"
+    assert "tester" not in server.mod.agmap()
+
+
+def test_herdr_no_responde_no_reventa(server):
+    """T2 con `agent list` vacio (herdr_out == ""): los cinco de siempre siguen en reposo y los
+    campos de Herdr son `None`. El estado ausente no es un estado desconocido: no hay agente."""
+    server.script_error("usage", "stub sin respuesta", ["agent", "list"], cid="cli:agent:list")
+    st = server.build_state()
+    assert st["herdr"] is False
+    ag = _agentes(st)
+    assert list(ag) == ["claude", "opencode2", "tester", "explorer", "suplente"]
+    assert all(a["status"] == "idle" for a in ag.values())
+    assert ag["opencode2"]["activity"] == "opencode2 (yo) espera OK de Adrián"   # viene del CHANGELOG
+    assert ag["claude"]["activity"] == "supervisando" and ag["tester"]["activity"] == "libre"
+    assert ag["explorer"]["activity"] == "investigando" and ag["suplente"]["activity"] == "en reposo"
+    assert all(all(a[k] is None for k in CAMPOS_T2 | {"agent"}) for a in ag.values())
+
+
+def test_obrero_bloqueado_sobrevive_y_es_valido(server):
+    """T2: un obrero de contrato (no FIXED) pasa igual, y `LAST_AGENTS` lo sigue viendo para enviar."""
+    server.add_agent(name="obrero-C40", kind="opencode", status="blocked", workspace_id="w1")
+    ag = _agentes(server.build_state())
+    assert ag["obrero-C40"]["status"] == "blocked" and ag["obrero-C40"]["role"] == "Contrato obrero-C40"
+    assert ag["obrero-C40"]["completion_seq"] is None and ag["obrero-C40"]["agent"] == "opencode"
+    assert "obrero-C40" in server.mod.LAST_AGENTS and server.valid_agent("obrero-C40") is True
+
+
+def test_state_ws_con_varios_estados(server):
+    """T2: en una misma oficina pueden convivir los cinco estados, y cada actividad es la de su estado."""
+    server.set_state("explorer", "blocked"); server.set_state("tester", "done")
+    server.set_state("suplente", "working"); server.stub.find("claude")["agent_status"] = "weird"
+    ag = _agentes(server.state_ws("w1"))
+    assert {n: ag[n]["status"] for n in ("explorer", "tester", "suplente", "claude", "opencode2")} == {
+        "explorer": "blocked", "tester": "done", "suplente": "working", "claude": "unknown",
+        "opencode2": "idle"}
+    assert all(a["activity"] == server.mod.ACTS[a["status"]] for a in ag.values())
+
+
+def test_claves_de_siempre_y_payload_serializable(server):
+    """T2 no renombra nada: `index.html` lee name/status/activity/role/color/since/ts y el payload sigue siendo JSON."""
+    st = server.get_state()
+    assert set(st) == {"agents", "metrics", "ticker", "queue", "lock", "bench", "suplencia", "herdr",
+                       "tareas", "updated", "interval"}
+    for a in st["agents"]:
+        assert {"name", "status", "activity", "color", "role", "since", "ts"} <= set(a)
+    d = json.loads(json.dumps(st, ensure_ascii=False))
+    assert d == st
+    ws = server.state_ws("w1")
+    assert set(ws) == {"agents", "metrics", "ticker", "queue", "lock", "bench", "suplencia", "herdr",
+                       "tareas", "ws", "maquina", "updated"}
+    assert json.loads(json.dumps(ws, ensure_ascii=False)) == ws
+
+
+def test_agente_sin_name_remota_se_omite(server):
+    """T2: el caso del agente sin `name` existe tambien en maquinas remotas y se omite igual."""
+    base = {"focused": False, "workspace_id": "w9", "tab_id": "w9:t1", "terminal_id": "t1",
+            "terminal_title": "x", "terminal_title_stripped": "x", "cwd": "/x", "foreground_cwd": "/x",
+            "revision": 1, "agent": "agy"}
+    server.set_remote_agents("mac-mini", [dict(base, name="agy-ok", agent_status="idle", pane_id="w9:p1"),
+                                          dict(base, agent_status="blocked", pane_id="w9:p2")])
+    assert [a["name"] for a in server.state_ws("mac-mini:w9")["agents"]] == ["agy-ok"]
+    rem = [o for o in server.api_offices()["offices"] if o["maquina"] == "mac-mini"][0]
+    assert rem["agentes"] == ["agy-ok"]
 
 
 def test_api_offices_remota_vacia(server):
