@@ -152,6 +152,7 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 .st{margin-left:auto;font-size:10.5px;font-weight:700;letter-spacing:.06em;padding:3px 8px;border-radius:7px;text-transform:uppercase;align-self:flex-start}
 .st.working{background:var(--okSoft);color:var(--ok)}.st.idle{background:var(--panel);color:var(--muted);border:1px solid var(--line)}
 .st.waiting{background:var(--warnSoft);color:var(--warn)}.st.blocked{background:var(--badSoft);color:var(--bad)}
+.st.done{background:var(--accentSoft);color:var(--accent)}.st.unknown{background:var(--panel2);color:var(--faint);border:1px solid var(--line)}
 .act{margin:10px 2px 0;color:var(--muted);font-size:12.5px}
 .act b{color:var(--text);font-weight:600}
 .sec{margin:20px 2px 8px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);display:flex;justify-content:space-between}
@@ -276,7 +277,7 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
       <div id="scene"></div>
       <div id="labels"></div>
       <div class="float" style="left:14px;bottom:14px"><button class="btn" data-goto="campus">← Campus</button><button class="btn" data-goto="tablero">Tablero</button></div>
-      <div class="legend" aria-label="Leyenda"><span><i class="led" style="background:#22c55e"></i>trabajando</span><span><i class="led" style="background:#f59e0b"></i>espera</span><span><i class="led" style="background:#ef4444"></i>bloqueado</span><span><i class="led" style="background:#9ca3af"></i>reposo</span></div>
+      <div class="legend" aria-label="Leyenda"><span><i class="led" style="background:#22c55e"></i>trabajando</span><span><i class="led" style="background:#ef4444"></i>bloqueado</span><span><i class="led" style="background:#3b82f6"></i>terminado</span><span><i class="led" style="background:#9ca3af"></i>en reposo</span><span><i class="led" style="background:#64748b"></i>estado desconocido</span></div>
       <div class="panelview" id="pv-metricas"></div>
       <div class="panelview" id="pv-tablero"></div>
       <div class="panelview" id="pv-campus"></div>
@@ -337,8 +338,9 @@ const LOOK={
 };
 const WORKER_LOOKS=[{shirt:'#ef3b36'},{shirt:'#14b8c4'},{shirt:'#ec4899'}];
 const lookOf=(name,i=0)=>(!OTHER()&&LOOK[name])||{...WORKER_LOOKS.concat([{shirt:'#21b35a'},{shirt:'#2f7bf6'},{shirt:'#f2b705'},{shirt:'#7c5cff'},{shirt:'#9aa4b2'}])[i%8],role:'Obrero'};
-const LED={working:'#22c55e',waiting:'#f59e0b',blocked:'#ef4444',idle:'#9ca3af'};
-function statusOf(a,S){if(a.name==='opencode2'&&/ESPERA|BLOQUEO/i.test(a.activity||''))return/BLOQUEO/i.test(a.activity)?'blocked':'waiting';return a.status==='working'?'working':'idle'}
+const LED={working:'#22c55e',waiting:'#f59e0b',blocked:'#ef4444',done:'#3b82f6',idle:'#9ca3af',unknown:'#64748b'};
+const ESTADOS=['idle','working','blocked','done','unknown'];   /* mismo dominio verificado que server.py:67; `waiting` solo vive en las clases CSS */
+function statusOf(a){return ESTADOS.includes(a&&a.status)?a.status:'unknown'}
 function avatarSVG(name,i){const L=lookOf(name,i);return`<svg class="av" viewBox="0 0 48 48" aria-hidden="true"><defs><radialGradient id="g${esc(name)}" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".55"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><circle cx="24" cy="24" r="24" fill="var(--panel)"/><path d="M11 47c0-9 5.5-14 13-14s13 5 13 14" fill="${L.shirt}"/><circle cx="24" cy="20" r="13" fill="${L.shirt}"/><circle cx="24" cy="20" r="13" fill="url(#g${esc(name)})"/><ellipse cx="19.5" cy="20" rx="3.2" ry="3.8" fill="#fff"/><ellipse cx="28.5" cy="20" rx="3.2" ry="3.8" fill="#fff"/><circle cx="20.2" cy="20.8" r="1.7" fill="#111827"/><circle cx="29.2" cy="20.8" r="1.7" fill="#111827"/>${L.glasses?'<g fill="none" stroke="#111827" stroke-width="1.3"><circle cx="19.5" cy="20" r="4.6"/><circle cx="28.5" cy="20" r="4.6"/></g>':''}</svg>`}
 
 /* ---------- estado global ---------- */
@@ -484,9 +486,11 @@ const scene3d=(()=>{
     c.fillStyle='#94a3b8';c.font='600 11px ui-monospace,monospace';c.fillText(name+' · '+String(act||'').slice(0,30),52,15);
     if(st==='idle'){const col=lookOf(name,workerIdx[name]||0).shirt;const g2=c.createLinearGradient(0,22,W2,H2);g2.addColorStop(0,'#0f172a');g2.addColorStop(1,col);c.globalAlpha=.55;c.fillStyle=g2;c.fillRect(0,22,W2,H2-22);c.globalAlpha=1;
       c.fillStyle='rgba(255,255,255,.9)';c.font='700 22px Inter,system-ui,sans-serif';c.textAlign='center';c.fillText(name,W2/2,104);c.font='500 13px Inter,system-ui,sans-serif';c.fillStyle='rgba(255,255,255,.7)';c.fillText('en pausa · café',W2/2,126);c.textAlign='left';u.tex.needsUpdate=true;return}
-    const off=Math.floor(t/260)%40;
+    /* `working` anima la pantalla; `blocked`/`done`/`unknown` pintan el mismo panel de código QUIETO
+       (offset fijo por seed, sin cursor): el lienzo nunca queda roto y el bucle sigue siendo bajo demanda. */
+    const active=st==='working',off=active?Math.floor(t/260)%40:u.seed%40;
     for(let k=0;k<11;k++){const ln=u.code[(off+k)%40];const y=34+k*14;c.fillStyle='#334155';c.fillRect(6,y,10,6);for(const sg of ln){c.fillStyle=sg.c;c.globalAlpha=.85;c.fillRect(22+sg.x,y,sg.w,7);c.globalAlpha=1}}
-    if(Math.floor(t/450)%2){c.fillStyle='#e2e8f0';c.fillRect(22+((off*37)%180),34+10*14,7,9)}
+    if(active&&Math.floor(t/450)%2){c.fillStyle='#e2e8f0';c.fillRect(22+((off*37)%180),34+10*14,7,9)}
     u.tex.needsUpdate=true}
 
   /* empleado virtual: articulaciones jerárquicas para sentarse, teclear, caminar y tomar café */
@@ -559,8 +563,8 @@ const scene3d=(()=>{
       if(!people[a.name]){const pe=employee(a.name,L,idx);world.add(pe);people[a.name]=pe;fresh=true}
       const d=desks[a.name],pe=people[a.name];const st=statusOf(a);
       d.userData.led.material=mat(LED[st],{emissive:LED[st],emissiveIntensity:1.3});d.userData.state=st;d.userData.act=a.activity;
-      const atDesk=st!=='idle'&&!(a.name==='suplente'&&!S.suplencia);
-      const want=atDesk?'type':'coffee';
+      const atDesk=st!=='idle'&&!(a.name==='suplente'&&!S.suplencia);   /* `blocked`/`done`/`unknown` se QUEDAN en el escritorio */
+      const want=atDesk?(st==='working'?'type':'stand'):'coffee';       /* 'stand' no anima: no arrastra el bucle de render */
       if(pe.userData.target!==want){pe.userData.target=want;goTo(pe,atDesk?deskSeat(d):tableSeat(a.name),want,fresh)}
       drawCode(d,a.name,a.activity,atDesk?st:'idle',performance.now());
     }
@@ -692,7 +696,7 @@ function renderInspector(){
   const pane=$('#ipane');const a=S.agents.find(x=>x.name===sel)||S.agents[0];if(!a){pane.innerHTML='<div class="empty">Esta oficina aún no tiene agentes.</div>';return}sel=a.name;
   if(tab==='salida'){loadLog(a.name);return}
   if(tab==='hilo'){loadHilo(a.name);return}
-  const st=statusOf(a);const stTxt={working:'trabajando',idle:'en reposo',waiting:'espera',blocked:'bloqueado'}[st];
+  const st=statusOf(a);const stTxt={working:'trabajando',blocked:'esperando confirmación',done:'terminado',idle:'en reposo',unknown:'estado desconocido'}[st];   /* mismas palabras que ACTS en server.py:71 */
   const L=lookOf(a.name,workerIdx[a.name]||0);
   const need=pendingAdrian(),wc=waitingClaude(),tl=tasksOf(a.name);
   pane.innerHTML=`

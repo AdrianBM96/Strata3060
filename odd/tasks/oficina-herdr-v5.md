@@ -39,7 +39,8 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 ## Checklist
 - [x] **T1** — Stub de Herdr a nivel argv + suite pytest (sin GPU ni Herdr vivo). Commit `0b1f224`.
 - [x] **T2** — Contrato de estado real (`agent_status` + `pane_id`, `focused`, `interactive_ready`, `completion_seq`, `state_change_seq`, `agent`) en el payload. Commit: *(hash en el próximo commit)*
-- [ ] **T3** — `statusOf` del frontend pasa a ser función de estado real; se elimina el regex de `index.html:341`.
+- [x] **T3** — `statusOf` es función pura del estado real; se elimina el regex. Commit: *(hash en el próximo commit)*
+- [ ] **T22** — Las clases `.st.done`/`.st.unknown` y el badge rojo no se consumen en el DOM: ningún elemento usa la clase `st`. Superficie: `index.html`. Verificado por navegador en T3.
 - [ ] **T4** — `herdr_out` captura `stderr` y parsea `{error:{code,message}}`; se eliminan los checks de substring muertos.
 - [ ] **T5** — `agent prompt --wait --timeout` + manejo real de `agent_blocked` / `agent_prompt_stalled` con mensaje humano.
 - [ ] **T6** — Un solo `api snapshot` por ciclo de estado.
@@ -74,6 +75,11 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - **Viva**: un agente `agy` en un panel de prueba, transición `idle → working → blocked`, y `notification.show`.
 
 ## Progreso
+- 2026-10-06: **T3 completada y verificada en navegador real** (Chromium headless 1187 + Playwright 1.63, instancia descratch en puerto 8099, HOME aislado, `STRATA_OFICINA_PW` generado, `herdr` stub no mutante, `tailscale` stub → 127.0.0.1). Solo `index.html` (12+/8-).
+  - VERIFICADO: `blocked` pinta rojo en LED del diorama (`#ff937e` claro, `#ff7163` oscuro), en pill (`rgb(239,68,68)` = `#ef4444` exacto), en selector de chat y en menú. El agente bloqueado **se queda en su escritorio** (pill en (447.6,295.1) = posición de `working`; `idle` en (723.2,344.6), mesa de café, Δ 275.6 px). Leyenda con **5** estados, 481.7×28.7 px dentro de 1280×720, sin overflow. **Render bajo demanda intacto: 2 rAF ticks en 90.004 s** (0.0222 fps, gaps 34.9/35.2 s por heartbeat SSE); la caminata transitoria fue 71 frames en los primeros 4 s y **0 frames** en los 8 s siguientes. 0 errores de consola, 0 requests externos, canvas WebGL sano. `working`/`idle` idénticos a base en pixel de LED y pill.
+  - Evidencia: `/tmp/oficina-verify/shots/*.png`, `results*.json`, `renderloop.json`. 554 `agent list`, 40 `workspace list`, 0 comandos mutantes.
+  - **Hallazgo nuevo → T22**: ninguna clase `st` se usa en el DOM. T3 agregó `.st.done`/`.st.unknown` y existe `.st.blocked{color:var(--bad)}`, pero el inspector muestra el texto "esperando confirmación" en gris (`rgb(100,116,139)`), **no rojo**. El badge de estado necesita un elemento que consuma la clase.
+  - Deviación registrada: el verificador envió dos GET read-only al servicio vivo 8095 al final (`/login` 200, `/` 302) para probar que seguía sirviendo. Ningún POST ni mutación. Servicio `active` antes y después, `MainPID` y `ActiveEnterTimestamp` sin cambio.
 - 2026-10-06: **T2 completada.** Writer delegado modificó solo `server.py` (45 líneas) y `test_herdr_stub.py` (218). `mkagent` deja de colapsar: dominio verificado `idle|working|blocked|done|unknown`, lo fuera de dominio es `unknown`, nunca `idle`; `SEEN` keyed en estado real. Campos de Herdr propagados con `.get()` → `None` si ausentes. Agente sin `name` se omite (se elimina el fantasma `"?"`). `tester` prefiere Herdr y el lock queda como texto de actividad. `state_ws` deriva actividad del estado normalizado (`ACTS`), sin contradicción.
   - Evidencia observada por el padre: `git diff` revisado línea por línea y **`50 passed in 3.28 s`**. El writer reportó RED `16 failed, 29 passed` antes del fix. Payload +659 B sobre 5 agentes (~132 B/agente). Herdr calls por ciclo: solo `agent list` (sin cambio).
   - Anclas renombradas: `test_mkagent_conserva_el_estado_real`, `test_build_state_conserva_el_bloqueado`, `test_state_ws_alinea_estado_y_actividad`, `test_state_ws_remota_conserva_el_bloqueado`. Dos anclas T1 adicionales (`test_build_state_linea_base`, `test_api_offices_linea_base`) se actualizaron por la omisión del agente sin `name`.
