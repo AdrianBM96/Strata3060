@@ -199,10 +199,10 @@ class HerdrStub:
     def _herdr(self, mach, args):
         scripted = self._take(mach, args)
         if scripted:
-            if scripted[0] == "raw":
-                _, out, err, rc = scripted
-                return _cp(["herdr"] + args, out, err, rc)
-            return _cp(["herdr"] + args, "", _dump(scripted), 1)
+            if isinstance(scripted, dict):   # script_error: JSON en stderr, exit 1 (verificado en el binario)
+                return _cp(["herdr"] + args, "", _dump(scripted), 1)
+            _, out, err, rc = scripted
+            return _cp(["herdr"] + args, out, err, rc)
         key = tuple(args[:2])
         if key == ("agent", "list"):
             return self._ok("cli:agent:list", {"agents": copy.deepcopy(self.agents.get(mach, [])), "type": "agent_list"})

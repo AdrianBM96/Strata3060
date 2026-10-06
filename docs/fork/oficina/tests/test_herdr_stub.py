@@ -4,10 +4,14 @@ El proposito es doble:
   1. Probar que el stub reproduce las formas que `server.py` parsea. Un run verde es la linea base
      que cada tarea tiene que mantener verde.
   2. Dejar anclas visibles para el RED->GREEN de las tareas T2..T6: despues de T2 quedan
-     `test_herdr_out_solo_stdout`, `test_checks_de_substring_de_start_estan_muertos`,
-     `test_api_log_sin_respuesta_es_el_error_actual` (T4), `test_send_no_observa_la_entrega` y
-     `test_send_a_bloqueado_da_el_mensaje_actual` (T5), `test_snapshot_emulado_tiene_la_forma_de_la_captura`,
-     `test_build_state_no_pide_snapshot` y `test_api_offices_linea_base` (T6).
+     `test_herdr_out_solo_stdout` (linea base de T4: `herdr_out` sigue viendo solo stdout),
+     `test_send_no_observa_la_entrega` y `test_build_state_no_pide_snapshot` (lineas base).
+     T4 volvio verdes sus tres anclas (`test_start_parsea_el_error_de_stderr`,
+     `test_api_log_sin_respuesta_es_el_error_actual`, `test_send_a_bloqueado_es_legible`) y anadio
+     la seccion `T4: el error de herdr vive en stderr`.
+     Quedan anclas de T5 (`test_send_no_observa_la_entrega`) y T6
+     (`test_snapshot_emulado_tiene_la_forma_de_la_captura`, `test_build_state_no_pide_snapshot`,
+     `test_api_offices_linea_base`).
 
 T2 (contrato de estado) fija el dominio `idle | working | blocked | done | unknown` y los campos
 que viajan por agente: `pane_id`, `focused`, `interactive_ready`, `completion_seq`,
@@ -20,6 +24,7 @@ Las formas verificadas contra el binario herdr 0.9.3 estan en `fixtures/` (ver R
 """
 from __future__ import annotations
 import json
+from pathlib import Path
 
 from stub_herdr import FIXTURES, STATUSES
 
@@ -27,6 +32,18 @@ CAMPOS_AGENTE = {"agent", "agent_status", "completion_seq", "cwd", "focused", "f
                  "name", "pane_id", "revision", "state_change_seq", "tab_id", "terminal_id",
                  "terminal_title", "terminal_title_stripped", "workspace_id"}
 CAMPOS_T2 = {"pane_id", "focused", "interactive_ready", "completion_seq", "state_change_seq"}
+
+
+def _script_error(server, code, message, match, mach=None, cid="cli:agent:prompt"):
+    """Programa un error de herdr con la forma VERIFICADA: stdout vacio, JSON en stderr, exit 1.
+
+    El stub tiene un arreglo en `_herdr` (2026-10-06, T4): cuando el payload scripted es un dict lo
+    manda a stderr con exit 1. Antes indexaba `scripted[0]` -> KeyError, que el servidor traga como
+    salida vacia, asi que la evidencia de `herdr no responde` salia de un KeyError y no de la forma
+    capturada del binario 0.9.3. `test_stub_script_error_llega_como_sobre_verificado` lo fija.
+    """
+    payload = json.dumps({"id": cid, "error": {"code": code, "message": message}}, separators=(",", ":")) + "\n"
+    return server.script_response(match, "", payload, 1, mach)
 
 
 def _agentes(state):
@@ -247,33 +264,46 @@ def test_api_log_agente_desconocido(server):
 
 
 def test_api_log_sin_respuesta_es_el_error_actual(server):
-    """ANCLA T4: el error de herdr esta en stderr y `herdr_out` solo devuelve stdout -> ""."""
-    server.script_error("agent_name_not_found", "no agent named explorer", ["agent", "read"],
-                        cid="cli:agent:read")
-    assert server.api_log("explorer") == {"agent": "explorer", "error": "herdr no responde"}
+    """T4 (ancla vuelta verde): el error de herdr estaba en stderr y `herdr_out` lo tiraba.
+
+    El inspector recibe el codigo traducido y el mensaje real de herdr, no el generico.
+    """
+    _script_error(server, "agent_name_not_found", "no agent named explorer", ["agent", "read"],
+                    cid="cli:agent:read")
+    r = server.api_log("explorer")
+    assert r["agent"] == "explorer"
+    assert "ese agente no existe en herdr" in r["error"]
+    assert "no agent named explorer" in r["error"]   # el mensaje real de herdr llega
+    assert "herdr no responde" not in r["error"]
 
 
 def test_herdr_out_solo_stdout(server):
-    server.script_error("agent_blocked", "pendiente de aprobacion", ["agent", "prompt"],
-                        cid="cli:agent:prompt")
+    """Linea base: `herdr_out` se queda para lo que solo necesita stdout, y sigue siendo ciego al error."""
+    _script_error(server, "agent_blocked", "pendiente de aprobacion", ["agent", "prompt"],
+                    cid="cli:agent:prompt")
     assert server.mod.herdr_out(["agent", "prompt", "explorer", "hola"], 30) == ""
 
 
-def test_checks_de_substring_de_start_estan_muertos(server):
-    """ANCLA T4: con el error en stderr, `server.py:255-256` no ve nunca `agent_not_ready`."""
-    server.script_error("agent_not_ready", "panel sin prompt interactivo", ["agent", "start"],
-                        cid="cli:agent:start")
-    assert server.mod._start("tester", "pi", "", "w1:pH", "/tmp", False) == "ERROR herdr no respondió"
+def test_start_parsea_el_error_de_stderr(server):
+    """T4 (ancla vuelta verde): `agent_not_ready` vive solo en stderr; el parseo lo traduce.
+
+    Los checks de substring de `server.py:268-269` no lo veian nunca porque miraban stdout.
+    """
+    _script_error(server, "agent_not_ready", "pane is not at an interactive shell prompt", ["agent", "start"],
+                    cid="cli:agent:start")
+    assert server.mod._start("tester", "pi", "", "w1:pH", "/tmp", False) == "espera confirmación en su panel"
     err = json.loads((FIXTURES / "error_agent_not_ready.json").read_text(encoding="utf-8"))
     assert err["error"]["code"] == "agent_not_ready"      # el codigo real vive solo en stderr
     assert '"agent_started"' not in json.dumps(err, separators=(",", ":"))
 
 
 def test_start_listo_cuando_el_stub_devuelve_agent_started(server):
+    """T4: el sobre verificado `agent_started` se parsea y no cae en la rama de error."""
     assert server.mod._start("tester", "pi", "", "w1:pH", "/tmp", False) == "listo"
     assert '"interactive_ready":true' in json.dumps(
         json.loads((FIXTURES / "agent_start.json").read_text(encoding="utf-8")),
         separators=(",", ":"))
+    assert json.loads((FIXTURES / "agent_start.json").read_text(encoding="utf-8"))["type"] == "agent_started"
 
 
 def test_send_no_observa_la_entrega(server):
@@ -285,11 +315,195 @@ def test_send_no_observa_la_entrega(server):
     assert "--wait" not in prompt   # server.py:346 lanza el prompt sin esperar
 
 
-def test_send_a_bloqueado_da_el_mensaje_actual(server):
-    """ANCLA T5: `agent_blocked` llega como 502 "herdr no responde", no como mensaje legible."""
-    server.script_error("agent_blocked", "pendiente de aprobacion", ["agent", "prompt"])
+# ---------- T4: stdout, stderr y exit status ----------
+
+def test_herdr_cmd_captura_los_tres_canales(server):
+    """El helper ve lo que `herdr_out` tiraba: el JSON de `stderr` y el exit 1 verificados."""
+    raw = (FIXTURES / "error_agent_blocked.json").read_text(encoding="utf-8")
+    server.script_response(["agent", "prompt"], "", raw, 1)
+    r = server.mod.herdr_cmd(["agent", "prompt", "explorer", "hola"], 30)
+    assert r["out"] == "" and r["rc"] == 1
+    assert r["code"] == "agent_blocked" and r["msg"].startswith("agent is blocked")
+    assert r["dead"] is False
+    assert json.loads(r["err"]) == json.loads(raw)   # la captura verbatim del binario, en stderr
+    assert json.loads(raw)["id"] == "cli:agent:prompt"
+
+
+def test_herdr_cmd_parsea_el_sobre_de_exit0(server):
+    server.set_state("explorer", "idle")
+    r = server.mod.herdr_cmd(["agent", "prompt", "explorer", "hola"], 30)
+    assert r["rc"] == 0 and r["code"] is None and r["type"] == "agent_prompted"
+    assert r["env"]["agent"]["name"] == "explorer" and r["dead"] is False
+
+
+def test_herdr_cmd_socket_muerto_es_dead(server):
+    """Socket muerto: stdout y stderr vacios, exit != 0. No es un error de agente."""
+    server.script_response(["agent", "prompt"], "", "", 1)
+    r = server.mod.herdr_cmd(["agent", "prompt", "explorer", "hola"], 30)
+    assert r["out"] == "" and r["err"] == "" and r["rc"] == 1
+    assert r["dead"] is True and r["code"] is None and r["env"] is None
+
+
+def test_tabla_de_codigos_cubre_los_fixtures(server):
+    """Todo codigo capturado en `fixtures/error_*.json` tiene su mensaje en espanol."""
+    ficheros = ("error_agent_blocked.json", "error_agent_not_ready.json", "error_agent_name_not_found.json",
+                "error_agent_prompt_stalled.json", "error_timeout.json")
+    for f in ficheros:
+        raw = (FIXTURES / f).read_text(encoding="utf-8")
+        err = json.loads(raw)["error"]
+        assert server.mod.HERDR_MSG[err["code"]], f
+        assert "herdr no responde" not in server.mod.HERDR_MSG[err["code"]]
+        server.script_response(["agent", "prompt"], "", raw, 1)   # stdout vacio, JSON en stderr, exit 1
+        server.mod.LAST_SEND = 0.0   # el limite de 3 s es por envio, no por test
+        code, r = server.mod.api_send(json.dumps({"agent": "explorer", "mode": "direct", "text": "sigue"}))
+        assert code == 502 and r["code"] == err["code"]
+        assert server.mod.HERDR_MSG[err["code"]] in r["error"] and err["message"] in r["error"]
+        assert r["error"] != "herdr no responde"
+        assert server.api_hilo("explorer")["envios"] == []   # ninguno queda registrado como enviado
+
+
+def test_codigo_desconocido_muestra_el_codigo(server):
+    """Un codigo de un herdr futuro se ve, no se traga."""
+    m = server.mod.herdr_msg("pane_locked", "pane is locked")
+    assert "pane_locked" in m and "pane is locked" in m
+    assert server.mod.herdr_msg(None, "") == "respuesta de herdr sin sobre JSON"
+
+
+def test_socket_muerto_se_distingue_de_un_error_de_agente(server):
+    server.script_response(["agent", "prompt"], "", "", 1)
     code, r = server.mod.api_send(json.dumps({"agent": "explorer", "mode": "direct", "text": "sigue"}))
-    assert code == 502 and r == {"ok": False, "error": "herdr no responde"}
+    assert code == 502 and r["code"] == "no_response"
+    assert "herdr no responde" in r["error"] and "aprobación" not in r["error"]
+
+
+def test_api_log_socket_muerto_dice_el_socket(server):
+    server.script_response(["agent", "read"], "", "", 1)
+    r = server.api_log("explorer")
+    assert "herdr no responde" in r["error"] and "aprobación" not in r["error"]
+
+
+def test_json_malformado_en_stderr_no_reventa(server):
+    server.script_response(["agent", "prompt"], "", "herdr: connect: No such file or directory\n", 1)
+    code, r = server.mod.api_send(json.dumps({"agent": "explorer", "mode": "direct", "text": "x"}))
+    assert code == 502 and r["code"] == "no_response" and "No such file" in r["error"]
+
+
+def test_json_malformado_en_stdout_no_reventa_el_estado(server):
+    server.script_response(["agent", "list"], "herdr: socket closed\n", "", 1)
+    st = server.build_state()
+    assert st["herdr"] is False and all(a["status"] == "idle" for a in st["agents"])
+
+
+def test_texto_en_stdout_con_stderr_ruido_no_es_error(server):
+    """`agent read --format text` es texto, no JSON: el ruido en stderr no lo vuelve error."""
+    server.script_response(["agent", "read"], "linea 1\nlinea 2\n", "herdr: aviso\n", 0)
+    r = server.api_log("explorer")
+    assert r["lines"] == ["linea 1", "linea 2"] and "error" not in r
+
+
+def test_start_parsea_la_captura_agent_started(server):
+    server.script_response(["agent", "start"], (FIXTURES / "agent_start.json").read_text(encoding="utf-8"), "", 0)
+    assert server.mod._start("tester", "pi", "", "w1:pH", "/tmp", False) == "listo"
+
+
+def test_send_parsea_la_captura_agent_prompted(server):
+    server.script_response(["agent", "prompt"], (FIXTURES / "agent_prompt.json").read_text(encoding="utf-8"), "", 0)
+    code, r = server.mod.api_send(json.dumps({"agent": "claude", "mode": "direct", "text": "hola"}))
+    assert code == 200 and r["confirmed"] is True
+    assert json.loads(r["output"])["type"] == "agent_prompted"
+
+
+def test_exit0_sin_sobre_no_confirma_el_envio(server):
+    server.script_response(["agent", "prompt"], "", "", 0)
+    code, r = server.mod.api_send(json.dumps({"agent": "explorer", "mode": "direct", "text": "x"}))
+    assert code == 502 and r["code"] == "no_response"
+    assert Path(server.mod.ENVLOG).exists() is False   # nada se registra como enviado
+
+
+def test_envio_exitoso_deja_la_huella_en_envios_log(server):
+    code, r = server.mod.api_send(json.dumps({"agent": "claude", "mode": "direct", "text": "revisa la cola"}))
+    assert code == 200 and r["confirmed"] is True
+    d = json.loads(Path(server.mod.ENVLOG).read_text(encoding="utf-8").strip())
+    assert d["agent"] == "claude" and d["mode"] == "direct" and d["text"] == "revisa la cola"
+
+
+def test_limite_de_3s_y_huella_se_mantienen(server):
+    code, r = server.mod.api_send(json.dumps({"agent": "claude", "mode": "direct", "text": "primero"}))
+    assert code == 200 and r["confirmed"] is True
+    code2, r2 = server.mod.api_send(json.dumps({"agent": "claude", "mode": "direct", "text": "segundo"}))
+    assert code2 == 429 and r2["error"] == "limite 1 envio/3s"
+    assert len(Path(server.mod.ENVLOG).read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_validaciones_de_send_se_mantienen(server):
+    """Los rechazos de `api_send` no llegan a herdr y no dejan huella en `envios.log`."""
+    for body, err in ((json.dumps({"agent": "no-existe", "mode": "direct", "text": "x"}), "agente desconocido"),
+                      (json.dumps({"agent": "claude", "mode": "no-mode", "text": "x"}), "modo invalido"),
+                      (json.dumps({"agent": "claude", "mode": "direct", "text": ""}), "texto 1..4000 chars"),
+                      (json.dumps({"agent": "claude", "mode": "direct", "text": "x" * 4001}), "texto 1..4000 chars")):
+        code, r = server.mod.api_send(body)
+        assert code == 400 and r["error"] == err
+    assert ("agent", "prompt") not in [tuple(c[:2]) for c in server.calls()]
+    assert Path(server.mod.ENVLOG).exists() is False
+
+
+def test_error_de_start_llega_al_log_del_job(server):
+    """El paso del job dice en espanol lo que hay que hacer, no "herdr no respondió"."""
+    _script_error(server, "agent_not_ready", "pane is not at an interactive shell prompt", ["agent", "start"],
+                    cid="cli:agent:start")
+    code, r = server.mod.api_office(json.dumps(
+        {"name": "prueba agy", "equipo": [{"perfil": "obrero", "kind": "agy", "model": "gemini-pro", "n": 1}]}))
+    j = server.job(r["job"])
+    pasos = " ".join(j["pasos"])
+    assert j["estado"] == "hecho" and "espera confirmación en su panel" in pasos
+    assert "herdr no respondió" not in pasos
+
+
+def test_bloqueado_en_el_log_del_job_es_accionable(server):
+    _script_error(server, "agent_blocked", "agent is blocked: a pending approval is waiting in its pane",
+                    ["agent", "start"], cid="cli:agent:start")
+    code, r = server.mod.api_office(json.dumps(
+        {"name": "prueba agy", "equipo": [{"perfil": "obrero", "kind": "agy", "model": "gemini-pro", "n": 1}]}))
+    j = server.job(r["job"])
+    paso = [p for p in j["pasos"] if "obrero" in p][-1]
+    assert "ERROR" in paso and "aprobación" in paso and "agent is blocked" in paso
+    assert "herdr no respondió" not in " ".join(j["pasos"])
+
+
+def test_office_delete_superficie_el_error_de_herdr(server):
+    """T4: borrar una oficina remota reporta el codigo real, y `ok` no es un false positivo."""
+    server.add_agent(name="agy-obrero", kind="agy", status="idle", mach="mac-mini", workspace_id="w9")
+    _script_error(server, "workspace_not_found", "no workspace w9", ["workspace", "close"],
+                    mach="mac-mini", cid="cli:workspace:close")
+    code, r = server.mod.api_office_delete(json.dumps({"id": "mac-mini:w9", "confirm": "w9"}))
+    assert code == 502 and "workspace_not_found" in r["error"] and r["ok"] is False
+    assert r["code"] == "workspace_not_found"
+
+
+def test_office_delete_ok_con_el_sobre_emulado(server):
+    server.add_agent(name="agy-obrero", kind="agy", status="idle", mach="mac-mini", workspace_id="w9")
+    code, r = server.mod.api_office_delete(json.dumps({"id": "mac-mini:w9", "confirm": "w9"}))
+    assert code == 200 and r["ok"] is True and "workspace_close" in r["output"]
+
+
+def test_hj_usa_el_helper_y_devuelve_result(server):
+    """`hj` pasa por el helper: el `result` de los comandos list va envuelto y se parsea igual."""
+    r = server.mod.hj(["workspace", "list"])
+    assert r["workspaces"][0]["workspace_id"] == "w1"
+    _script_error(server, "usage", "stub sin respuesta", ["workspace", "list"], cid="cli:workspace:list")
+    assert server.mod.hj(["workspace", "list"]) is None
+
+
+def test_send_a_bloqueado_es_legible(server):
+    """T4 (ancla de T5 vuelta verde): `agent_blocked` dice lo que hay que hacer, no "herdr no responde"."""
+    _script_error(server, "agent_blocked", "agent is blocked: a pending approval is waiting in its pane",
+                    ["agent", "prompt"])
+    code, r = server.mod.api_send(json.dumps({"agent": "explorer", "mode": "direct", "text": "sigue"}))
+    assert code == 502
+    assert r["code"] == "agent_blocked"                       # el codigo real, para el log
+    assert "aprobación" in r["error"] and "agent is blocked" in r["error"]
+    assert r["error"] != "herdr no responde"
+    assert server.api_hilo("explorer")["envios"] == []        # no queda como enviado
 
 
 def test_api_offices_linea_base(server):
@@ -396,7 +610,7 @@ def test_tester_sin_herdr_usa_el_lock(server):
 def test_herdr_no_responde_no_reventa(server):
     """T2 con `agent list` vacio (herdr_out == ""): los cinco de siempre siguen en reposo y los
     campos de Herdr son `None`. El estado ausente no es un estado desconocido: no hay agente."""
-    server.script_error("usage", "stub sin respuesta", ["agent", "list"], cid="cli:agent:list")
+    _script_error(server, "usage", "stub sin respuesta", ["agent", "list"], cid="cli:agent:list")
     st = server.build_state()
     assert st["herdr"] is False
     ag = _agentes(st)
@@ -494,3 +708,31 @@ def test_stub_no_lanza_binarios_real(server):
     server.build_state(); server.api_offices(); server.api_log("claude"); server.kinds()
     assert server.unknown() == []
     assert server.executables() == ["ada-cli", "agy", "herdr", "opencode", "pi"]
+
+
+def test_stub_script_error_llega_como_sobre_verificado(server):
+    """T4: el defecto latente del stub esta arreglado. `script_error` (la API del stub) produce
+    stdout vacio, JSON en stderr y exit 1, y el servidor lo parsea como sobre verificado.
+    Antes de la correccion, `_herdr` indexaba el dict como `scripted[0]` -> KeyError, que el
+    servidor traga como salida vacia: la evidencia de `herdr no responde` salia de un KeyError,
+    no de la forma capturada del binario 0.9.3."""
+    server.script_error("agent_blocked", "pendiente de aprobacion", ["agent", "prompt"],
+                        cid="cli:agent:prompt")
+    r = server.mod.herdr_cmd(["agent", "prompt", "explorer", "hola"])
+    assert r["out"] == "" and r["rc"] == 1
+    assert r["code"] == "agent_blocked" and "pendiente de aprobacion" in r["msg"]
+    assert r["dead"] is False   # socket muerto es stdout y stderr vacios; aqui stderr trae el sobre
+
+
+def test_office_delete_no_quita_la_meta_si_herdr_fallo(server):
+    """T4: borrar no puede dejar la oficina sin `cwd` y `perfiles` cuando herdr no cerro nada."""
+    server.add_agent(name="agy-obrero", kind="agy", status="idle", mach="mac-mini", workspace_id="w9")
+    oid = "mac-mini:w9"
+    server.mod.save_meta({oid: {"nombre": "Ofi9", "cwd": "/Users/x/of9", "maquina": "mac-mini",
+                                "agentes": [{"name": "agy-obrero", "rol": "Dev", "kind": "agy", "model": ""}]}})
+    _script_error(server, "workspace_not_found", "no workspace w9", ["workspace", "close"],
+                  mach="mac-mini", cid="cli:workspace:close")
+    code, r = server.mod.api_office_delete(json.dumps({"id": oid, "confirm": "w9"}))
+    assert code == 502
+    assert oid in server.mod.meta(), "la meta se quito aunque herdr no cerro el workspace"
+    assert server.mod.meta()[oid].get("cwd") == "/Users/x/of9"

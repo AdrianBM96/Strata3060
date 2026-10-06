@@ -41,7 +41,7 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - [x] **T2** — Contrato de estado real (`agent_status` + `pane_id`, `focused`, `interactive_ready`, `completion_seq`, `state_change_seq`, `agent`) en el payload. Commit: *(hash en el próximo commit)*
 - [x] **T3** — `statusOf` es función pura del estado real; se elimina el regex. Commit: *(hash en el próximo commit)*
 - [ ] **T22** — Las clases `.st.done`/`.st.unknown` y el badge rojo no se consumen en el DOM: ningún elemento usa la clase `st`. Superficie: `index.html`. Verificado por navegador en T3.
-- [ ] **T4** — `herdr_out` captura `stderr` y parsea `{error:{code,message}}`; se eliminan los checks de substring muertos.
+- [x] **T4** — `herdr_out` captura `stderr` y parsea `{error:{code,message}}`; se eliminan los checks de substring muertos. Commit: *(hash en el próximo commit)*
 - [ ] **T5** — `agent prompt --wait --timeout` + manejo real de `agent_blocked` / `agent_prompt_stalled` con mensaje humano.
 - [ ] **T6** — Un solo `api snapshot` por ciclo de estado.
 - [ ] **T7** — Locks + rebuild atómico de `CACHE`/`SEEN`/`FAILS`/`MCACHE`/`KCACHE`/`JOBS`/`meta`; `interval` no muta el dict en iteración.
@@ -75,6 +75,12 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - **Viva**: un agente `agy` en un panel de prueba, transición `idle → working → blocked`, y `notification.show`.
 
 ## Progreso
+- 2026-10-06: **T4 completada.** Writer delegado: `server.py` +71/-13 (`herdr_cmd`, `_env`, `HERDR_MSG`, `SIN_RESPUESTA`, `herdr_msg`, `herdr_error`; call sites `build_state`, `api_log`, `hj`, `_start`, `api_send`, `api_office_delete`), `test_herdr_stub.py` +251/-32 con 21 tests nuevos. RED observado por el writer: `14 failed, 57 passed`. Tabla `code→mensaje`: `agent_blocked` → "el agente está esperando una aprobación en su panel: aprueba y vuelve a enviar"; `agent_not_ready` → "espera confirmación en su panel"; `agent_prompt_stalled` → "el mensaje no se entregó"; `agent_name_not_found`, `timeout`, `usage`; default muestra el código y conserva el texto original de Herdr.
+  - **Dos defectos encontrados y arreglados por el padre inline:**
+    1. `stub_herdr.py:_herdr` indexaba el payload scripted como `scripted[0]` (dict) → `KeyError: 0`, tragado por el servidor como salida vacía. La evidencia T1 de "herdr no responde" salía de un KeyError, no de la forma verificada. Arreglado: `isinstance(scripted, dict)` → stderr + exit 1. Fijado por `test_stub_script_error_llega_como_sobre_verificado`.
+    2. `api_office_delete` quitaba la meta de `oficinas.json` **antes** de comprobar que Herdr cerró el workspace → oficina sin `cwd`/`perfiles` con el workspace vivo. Movido tras el éxito. Fijado por `test_office_delete_no_quita_la_meta_si_herdr_fallo`.
+  - Evidencia observada por el padre: **73 passed** en dos runs (7.25 s y 7.16 s). `grep shell=True` = 0; cap 8192, scrypt, cookie HttpOnly/SameSite=Strict, `log_message` silencioso intactos. Servicio `active`, no reiniciado. Ningún comando mutante de Herdr ejecutado.
+  - Pendiente: `envios.log` solo se escribe cuando `type == "agent_prompted"`; `api_send` devuelve 200 con `confirmed:false` si Herdr responde un stdout que no es `agent_prompted`.
 - 2026-10-06: **T3 completada y verificada en navegador real** (Chromium headless 1187 + Playwright 1.63, instancia descratch en puerto 8099, HOME aislado, `STRATA_OFICINA_PW` generado, `herdr` stub no mutante, `tailscale` stub → 127.0.0.1). Solo `index.html` (12+/8-).
   - VERIFICADO: `blocked` pinta rojo en LED del diorama (`#ff937e` claro, `#ff7163` oscuro), en pill (`rgb(239,68,68)` = `#ef4444` exacto), en selector de chat y en menú. El agente bloqueado **se queda en su escritorio** (pill en (447.6,295.1) = posición de `working`; `idle` en (723.2,344.6), mesa de café, Δ 275.6 px). Leyenda con **5** estados, 481.7×28.7 px dentro de 1280×720, sin overflow. **Render bajo demanda intacto: 2 rAF ticks en 90.004 s** (0.0222 fps, gaps 34.9/35.2 s por heartbeat SSE); la caminata transitoria fue 71 frames en los primeros 4 s y **0 frames** en los 8 s siguientes. 0 errores de consola, 0 requests externos, canvas WebGL sano. `working`/`idle` idénticos a base en pixel de LED y pill.
   - Evidencia: `/tmp/oficina-verify/shots/*.png`, `results*.json`, `renderloop.json`. 554 `agent list`, 40 `workspace list`, 0 comandos mutantes.

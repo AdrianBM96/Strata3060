@@ -62,6 +62,59 @@ def short_row(row): c = [x.strip() for x in row.strip().strip("|").split("|")]; 
 def herdr_out(args, timeout=8, mach=None):
     try: return subprocess.run(["herdr"] + (["--machine", mach] if mach else []) + args, capture_output=True, text=True, timeout=timeout).stdout
     except Exception: return ""
+# Verificado en herdr 0.9.3 (tests/README.md): los errores van a `stderr` con exit 1 como
+# `{"id":...,"error":{"code":...,"message":...}}`; el exit 0 trae el sobre en `stdout`
+# (`{"id":...,"result":...}` en los comandos list/api, `{"type":"agent_started"|"agent_prompted",...}` en
+# start/prompt). `herdr_out` queda para lo que solo necesita stdout; `herdr_cmd` es el camino para todo
+# lo que inspecciona un resultado. Las formas INFERIDAS (workspace create / pane split / workspace close)
+# se leen con `.get()`, sin inventar campos.
+def _env(s):
+    """JSON de herdr como dict, o None: texto de `agent read`, JSON roto, lista desnuda."""
+    try: d = json.loads(s)
+    except Exception: return None
+    return d if isinstance(d, dict) else None
+def herdr_cmd(args, timeout=8, mach=None):
+    """Llamada a herdr con stdout, stderr y exit status, y su sobre parseado.
+
+    `code`/`msg` son el codigo y el mensaje real de herdr (None si no los trajo); `res` es el `result`
+    de los comandos list/api; `type` es el sobre de start/prompt; `dead` es socket muerto (vacio por
+    los dos canales). No reventa con JSON malformado ni con salida vacia.
+    """
+    try:
+        p = subprocess.run(["herdr"] + (["--machine", mach] if mach else []) + args, capture_output=True, text=True, timeout=timeout)
+        out, err, rc = p.stdout, p.stderr, p.returncode
+    except Exception:
+        out, err, rc = "", "", 1
+    env = _env(out) or _env(err)
+    e = env.get("error") if env else None
+    code = e.get("code") if isinstance(e, dict) else None
+    msg = e.get("message") if isinstance(e, dict) else None
+    return {"out": out, "err": err, "rc": rc, "env": env, "code": code, "msg": msg,
+            "res": env.get("result") if env else None, "type": env.get("type") if env else None,
+            "dead": not out and not err}
+# Codigo de error de herdr -> mensaje que un humano puede accionar. Un codigo de un herdr futuro cae en
+# el default, que muestra el codigo: no se traga.
+HERDR_MSG = {"agent_blocked": "el agente está esperando una aprobación en su panel: aprueba y vuelve a enviar",
+             "agent_not_ready": "espera confirmación en su panel",
+             "agent_prompt_stalled": "el mensaje no se entregó: el agente no pasó a working ni a blocked",
+             "agent_name_not_found": "ese agente no existe en herdr",
+             "timeout": "herdr no observó el estado antes de su tiempo límite",
+             "usage": "comando no válido para herdr"}
+SIN_RESPUESTA = "herdr no responde: el socket no devolvió nada"
+def herdr_msg(code, msg):
+    t = HERDR_MSG.get(code)
+    if not t: t = "herdr devolvió el código %s" % code if code else "respuesta de herdr sin sobre JSON"
+    return "%s (%s)" % (t, msg[:120]) if msg else t
+def herdr_error(r):
+    """Mensaje humano para el resultado de herdr; None si la respuesta es sana.
+
+    Distingue el error de un agente (`code` en stderr) del socket muerto (vacio por los dos canales),
+    que es lo que antes se fundia en un solo "herdr no responde".
+    """
+    if r["code"]: return herdr_msg(r["code"], r["msg"])
+    if r["dead"]: return SIN_RESPUESTA
+    if not r["out"]: return herdr_msg(None, r["err"].strip()[:120])
+    return None
 # El dominio de `agent_status`, verificado en el binario herdr 0.9.3 (tests/README.md). Lo que no esta
 # en el dominio (clave ausente, None, un string de un Herdr futuro) es `unknown`, nunca `idle`.
 ESTADOS = ("idle", "working", "blocked", "done", "unknown")
@@ -83,7 +136,8 @@ def tasks_list():
 def build_state():
     try:
         # el agente sin `name` no es un agente de la oficina: se omite, no se convierte en "?"
-        statuses = {a["name"]: a for a in json.loads(herdr_out(["agent", "list"]))["result"]["agents"] if a.get("name")}
+        ags = (hj(["agent", "list"], 8) or {}).get("agents") or []
+        statuses = {a["name"]: a for a in ags if a.get("name")}
     except Exception:
         statuses = {}
     segs = estado_segments()
@@ -125,10 +179,11 @@ def get_state():
 def valid_agent(agent): get_state(); return bool(re.match(r"^[\w][\w.\-]{0,31}$", agent or "")) and (agent in LAST_AGENTS or agent in agmap())
 def api_log(agent):
     if not valid_agent(agent): return {"error": "agente desconocido"}
-    out = herdr_out(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "45", "--format", "text"], 15, agmap().get(agent))
-    if not out:
-        return {"agent": agent, "error": "herdr no responde"}
-    return {"agent": agent, "lines": out.strip().splitlines()[-30:]}
+    r = herdr_cmd(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "45", "--format", "text"], 15, agmap().get(agent))
+    e = herdr_error(r)
+    if e:
+        return {"agent": agent, "error": e}
+    return {"agent": agent, "lines": r["out"].strip().splitlines()[-30:]}
 def api_hilo(agent):
     if not valid_agent(agent): return {"error": "agente desconocido"}
     env = []
@@ -150,8 +205,8 @@ def save_meta(m):
     os.makedirs(os.path.dirname(OFIMETA), exist_ok=True)
     with open(OFIMETA, "w") as f: json.dump(m, f, ensure_ascii=False)
 def hj(args, timeout=15, mach=None):
-    try: return json.loads(herdr_out(args, timeout, mach))["result"]
-    except Exception: return None
+    r = herdr_cmd(args, timeout, mach)
+    return r["res"] if isinstance(r["res"], dict) else None
 def raw_agents(mach=None):
     r = hj(["agent", "list"], 15, mach); return r["agents"] if r else []
 MCACHE = {"at": 0, "data": []}; HOMES = {}; AGCACHE = {"at": 0, "data": {}}
@@ -259,16 +314,19 @@ def kinds(mach=None):
 def _start(nombre, kind, model, pid, cwd, auto, mach=None):
     if kind == "ada-cli":   # en su panel, `pi` es un enlace a ada-cli (ADA_PATH), así herdr lo reconoce como pi
         extra = ["--model", model] if model else []
-        out = herdr_out(["agent", "start", nombre, "--kind", "pi", "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 75)
+        r = herdr_cmd(["agent", "start", nombre, "--kind", "pi", "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 75)
     else:
         extra = (["--model", model] if model and kind != "opencode" else [])
         if auto and kind in ("claude", "agy"): extra.append("--dangerously-skip-permissions")
         if auto and kind == "opencode": extra.append("--auto")
-        out = herdr_out(["agent", "start", nombre, "--kind", kind, "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 90, mach)
-    if '"interactive_ready":true' in out or '"agent_started"' in out: return "listo"
-    if "agent_not_ready" in out: return "espera confirmación en su panel"
-    try: return "ERROR " + json.loads(out)["error"]["message"][:160]
-    except Exception: return "ERROR " + (out[-160:] or "herdr no respondió")
+        r = herdr_cmd(["agent", "start", nombre, "--kind", kind, "--pane", pid, "--timeout", "60000"] + (["--"] + extra if extra else []), 90, mach)
+    # antes: substringes sobre stdout (`"interactive_ready":true`, `"agent_started"`, `agent_not_ready`), que
+    # no veian el error: ese vive en stderr. Ahora se parsea el sobre.
+    if r["type"] == "agent_started": return "listo"
+    if r["code"] == "agent_not_ready": return HERDR_MSG["agent_not_ready"]
+    e = herdr_error(r)
+    if e: return "ERROR " + e
+    return "ERROR " + (r["out"][-160:] or SIN_RESPUESTA)
 def oc_config(nombre, model, mach=None):
     """opencode no acepta --model en su interfaz: cada agente recibe su propio fichero de configuración."""
     if mach:
@@ -356,16 +414,19 @@ def api_send(body):
             return 429, {"ok": False, "error": "limite 1 envio/3s"}
         LAST_SEND = time.monotonic()
     tgt, pre = (agent, "adrian: ") if mode == "direct" else ("claude", "adrian (oficina): ")
-    out = herdr_out(["agent", "prompt", tgt, pre + text], 30, agmap().get(tgt))
-    if not out: return 502, {"ok": False, "error": "herdr no responde"}
-    try:
-        os.makedirs(os.path.dirname(ENVLOG), exist_ok=True)
-        with open(ENVLOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                "agent": agent, "mode": mode, "text": text}, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
-    return 200, {"ok": True, "confirmed": "agent_prompted" in out, "output": out[-500:]}
+    r = herdr_cmd(["agent", "prompt", tgt, pre + text], 30, agmap().get(tgt))
+    e = herdr_error(r)
+    if e: return 502, {"ok": False, "error": e, "code": r["code"] or "no_response"}
+    ok = r["type"] == "agent_prompted"   # el sobre verificado, no un substring sobre stdout
+    if ok:
+        try:
+            os.makedirs(os.path.dirname(ENVLOG), exist_ok=True)
+            with open(ENVLOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                    "agent": agent, "mode": mode, "text": text}, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+    return 200, {"ok": True, "confirmed": ok, "output": r["out"][-500:]}
 def api_office_delete(body):
     try: d = json.loads(body[:1024])
     except Exception: return 400, {"ok": False, "error": "JSON invalido"}
@@ -376,9 +437,11 @@ def api_office_delete(body):
     if not w: return 404, {"ok": False, "error": "oficina no encontrada"}
     if not mach and wid == strata_ws(ws): return 403, {"ok": False, "error": "la oficina de Strata no se puede borrar"}
     if str(d.get("confirm") or "") != (w.get("label") or wid): return 400, {"ok": False, "error": "escribe el nombre exacto para confirmar"}
-    out = herdr_out(["workspace", "close", wid], 20, mach)
+    r = herdr_cmd(["workspace", "close", wid], 20, mach)
+    e = herdr_error(r)
+    if e: return 502, {"ok": False, "error": e, "code": r["code"] or "no_response"}   # la meta solo se quita si herdr cerró de verdad
     m = meta(); m.pop(oid, None); save_meta(m); AGCACHE["at"] = 0
-    return 200, {"ok": True, "output": out[-200:]}
+    return 200, {"ok": True, "output": r["out"][-200:]}
 with open(os.path.join(HERE, "index.html"), "rb") as f:
     INDEX = f.read()
 with open(os.path.join(HERE, "login.html"), "rb") as f:
