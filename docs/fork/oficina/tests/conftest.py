@@ -15,13 +15,13 @@ Aislamiento: `HOME` temporal, `STRATA_OFICINA_PW` temporal, `FORK` al arbol de f
 deterministas). Ningun proceso real se lanza: `subprocess` del modulo es el stub.
 """
 from __future__ import annotations
-import base64, hashlib, importlib.util, json, shutil, sys, time
+import base64, hashlib, importlib.util, json, shutil, sys, threading, time
 from pathlib import Path
 import pytest
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from stub_herdr import HerdrStub, FIXTURES   # noqa: E402
+from stub_herdr import HerdrSocket, HerdrStub, FIXTURES   # noqa: E402
 
 SERVER = HERE.parent / "server.py"
 PASSWORD = "oficina-stub-pw"
@@ -52,10 +52,11 @@ class _Shim:
 class Oficina:
     """Control del servidor aislado: helpers de estado, caches y regimen de subprocess."""
 
-    def __init__(self, mod, stub, tmp):
+    def __init__(self, mod, stub, tmp, monkeypatch):
         self.mod = mod
         self.stub = stub
         self.tmp = tmp
+        self.monkeypatch = monkeypatch
         self.password = PASSWORD
 
     def reset(self):
@@ -65,6 +66,9 @@ class Oficina:
         m.MCACHE.update(at=0, data=[]); m.AGCACHE.update(at=0, data={}); m.KCACHE.clear()
         m.JOBS.clear(); m.SESS.clear()
         m.LAST_AGENTS = set(m.FIXED); m.LAST_SEND = 0.0
+        with m.ELOCK:   # T9: `EV` es global por modulo; el reset lo deja en el modo de la base (polling)
+            m.EV.update(mode="unavailable", dirty=True, subs=[], panes=set(), status={}, names={},
+                        thread=None, stop=threading.Event())
         return self
 
     # ---------- lecturas que emiten el estado ----------
@@ -179,10 +183,73 @@ class Oficina:
     def unknown(self):
         return self.stub.unknown
 
+    # ---------- T9: el socket de eventos ----------
+    def start_events(self, sock, timeout=6.0):
+        """Arranca el unico hilo de eventos del servidor contra el socket emulado y espera a que se fije el modo.
+
+        El modo tarda lo que tarda el connect + el ack; se espera con limite, no con un sleep fijo: el
+        assert es el modo observado, no el tiempo esperado.
+        """
+        self.monkeypatch.setenv("HERDR_SOCKET_PATH", str(sock.path))
+        self.mod.ev_start()
+        if sock.refuse:
+            return self.wait_health_mode(min(timeout, 1.0))   # sin socket en la ruta: el modo no cambia
+        return self.wait_health("live", timeout)
+
+    def wait_health(self, mode, timeout=6.0):
+        p = self.mod.ev_health
+        end = time.monotonic() + timeout
+        while time.monotonic() < end and p() != mode:
+            time.sleep(0.01)
+        return p()
+
+    def wait_health_mode(self, timeout=6.0):
+        """Espera a que el hilo salga del modo inicial (`unavailable`), sea `polling` o `unavailable` repetido."""
+        end = time.monotonic() + timeout
+        p = self.mod.ev_health
+        while time.monotonic() < end and p() == "unavailable":
+            time.sleep(0.01)
+        return p()
+
+    def health(self):
+        return self.mod.ev_health()
+
+    def dirty(self, on=True):
+        with self.mod.ELOCK: self.mod.EV["dirty"] = on
+
+    def panes(self):
+        with self.mod.ELOCK: return set(self.mod.EV["panes"])
+
+    def ev_status(self, pane_id):
+        with self.mod.ELOCK: return self.mod.EV["status"].get(pane_id)
+
+    def ev_names(self):
+        with self.mod.ELOCK: return dict(self.mod.EV["names"])
+
 
 @pytest.fixture
 def stub():
     return HerdrStub()
+
+
+@pytest.fixture
+def herdr_socket(tmp_path):
+    """Factoria de sockets Unix de herdr emulados, en el directorio temporal del test.
+
+    `refuse=True` deja la ruta sin socket (`connect` reventa: el caso del binario parado),
+    `ack=` sustituye el ack para probar la degradacion, `kick=True` cierra la conexion justo despues
+    del ack (el corte a mitad de transmision observado en el probe vivo). El fixture cierra los
+    sockets al terminar el test.
+    """
+    made = []
+
+    def make(name, **kw):
+        s = HerdrSocket(tmp_path / name, **kw)
+        s.start(); made.append(s); return s
+
+    yield make
+    for s in made:
+        s.stop()
 
 
 @pytest.fixture
@@ -210,8 +277,12 @@ def server(tmp_path, stub, monkeypatch):
     monkeypatch.setattr(mod, "MOTOR", str(tmp_path / "motor"))
     monkeypatch.setattr(mod, "BENCH", str(tmp_path / "bench"))
     monkeypatch.setattr(mod, "subprocess", _Shim(stub))
-    of = Oficina(mod, stub, tmp_path).reset()
+    of = Oficina(mod, stub, tmp_path, monkeypatch).reset()
     yield of
     # ningun test debe lanzar un binario real: el stub es la unica fuente de subprocess
     assert stub.unknown == [], "el servidor pidio un binario no emulado: %s" % stub.unknown
+    mod.ev_stop()   # T9: apagar el hilo de eventos al terminar el test
+    t = mod.EV["thread"]
+    if t: t.join(2.0)   # el hilo sale en `EV_TICK` s: si vive, conectaria contra el socket del test
+                        # siguiente, porque `HERDR_SOCKET_PATH` es una variable de proceso
     sys.modules.pop("oficina_server", None)

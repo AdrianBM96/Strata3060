@@ -9,7 +9,7 @@ El stub registra cada invocation en `calls` y cualquier binario no emulado en `u
 (que los tests exigen vacio), de modo que nunca se lanza un proceso real.
 """
 from __future__ import annotations
-import copy, json, subprocess
+import copy, json, socket, subprocess, threading, time
 from pathlib import Path
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -316,3 +316,205 @@ def _worst(statuses):
         if s in statuses:
             return s
     return "idle"
+
+
+# ---------- socket Unix de herdr emulado (T9) ----------
+#
+# El protocolo esta capturado verbatim del binario 0.9.3 (odd/tasks/oficina-herdr-v5.md, "Sondeos de
+# eventos"): JSON newline-delimited, pedidos con `id`, ack de suscripcion
+# `{"id":..,"result":{"type":"subscription_started"}}`, y eventos por la MISMA conexion con forma
+# `{"data":{...},"event":"..."}`. Las suscripciones globales necesitan solo `type`;
+# `pane.agent_status_changed` y `pane.scroll_changed` necesitan `pane_id`; `pane.output_matched`
+# necesita `pane_id + source + match`, y `OutputMatch` es `{type: substring|regex, value: string}`.
+# El binario rechaza el SET ENTERO cuando una entrada es de forma invalida (observado dos veces),
+# asi que el stub valida y responde un no-ack: un cliente que manda `text` en vez de `value` ve
+# claramente que su suscripcion murio.
+GLOBAL_SUBS = ("pane.agent_detected", "pane.created", "pane.closed", "pane.exited", "pane.updated",
+               "pane.focused", "pane.moved", "workspace.created", "workspace.closed",
+               "workspace.updated", "workspace.renamed", "workspace.metadata_updated",
+               "workspace.focused", "workspace.moved", "workspace.reordered")
+PER_PANE = ("pane.agent_status_changed", "pane.scroll_changed")
+MATCH_TYPES = ("substring", "regex")
+EV_POLL = 0.2   # s: el stub lee con `recv` y timeout corto, para que `drop()`/`stop()` se vean al instante
+
+
+def _sub_ok(s):
+    """Forma de una suscripcion, segun lo verificado en el binario. Devuelve el motivo del rechazo."""
+    if not isinstance(s, dict): return "subscription is not an object"
+    t = s.get("type")
+    if not isinstance(t, str) or not t: return "missing field type"
+    if t in PER_PANE and not s.get("pane_id"): return "missing field pane_id for " + t
+    if t == "pane.output_matched":
+        if not s.get("pane_id"): return "missing field pane_id for pane.output_matched"
+        if s.get("source") not in ("recent-unwrapped", "recent-wrapped", "scrollback", "visible"):
+            return "missing field source for pane.output_matched"
+        m = s.get("match")
+        if not isinstance(m, dict): return "missing field match for pane.output_matched"
+        if m.get("type") not in MATCH_TYPES: return "OutputMatch needs type substring|regex"
+        if not isinstance(m.get("value"), str): return "OutputMatch needs field value"
+        if "text" in m: return "OutputMatch has no field text"
+    return None
+
+
+class HerdrSocket:
+    """Socket Unix de herdr emulado, en un directorio temporal.
+
+    Acepta conexiones, registra cada pedido en `requests`, contesta `ping` y `events.subscribe` con la
+    forma verbatim, y emite los eventos por la misma conexion. `refuse` deja la ruta sin socket
+    (connect reventa), `drop` corta la conexion a mitad de transmision, y `ack` permite sustituir el
+    ack para probar la degradacion. Registra conexiones, para el backoff acotado.
+    """
+
+    def __init__(self, path, ack=None, refuse=False, validate=True, kick=False):
+        self.path = str(path)
+        self.requests = []
+        self.acks = []
+        self.ack = ack if ack is not None else {"type": "subscription_started"}
+        self.refuse = refuse
+        self.validate = validate
+        self.kick = kick       # cerrar la conexion justo despues del ack: el corte a mitad de transmision
+        self.conns = 0
+        self.lines = []          # lineas de evento pendientes, en el orden de emision
+        self._srv = None
+        self._conn = None
+        self._dead = False       # `stop()`/`drop()`: el bucle de lectura sale en su propio timeout
+        self._thread = None
+
+    # ---------- ciclo de vida ----------
+    def start(self):
+        if self.refuse:
+            return self            # no se binda: `connect` da ENOENT/ECONNREFUSED
+        self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._srv.bind(self.path)
+        self._srv.listen(8)
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._dead = True
+        for s in (self._conn, self._srv):
+            if s:
+                try: s.close()
+                except OSError: pass
+        self._conn = None; self._srv = None
+
+    def drop(self):
+        """Corta la conexion viva: lo que el binario hizo en el probe vivo (BrokenPipe).
+
+        Se cierra el socket y se levanta la bandera: el bucle de lectura del stub usa `recv` con
+        timeout corto, asi que el corte se ve en menos de `EV_POLL` s, no al final del timeout del
+        cliente. Un `makefile` bloqueado en `readline` sostiene el lock del socket y `close()` se
+        queda 10 s: por eso el stub no usa `makefile`.
+        """
+        if self._conn:
+            try: self._conn.close()
+            except OSError: pass
+        self._conn = None
+
+    def _serve(self):
+        self._srv.settimeout(EV_POLL)
+        while not self._dead:
+            try:
+                conn, _ = self._srv.accept()
+            except (socket.timeout, TimeoutError):
+                continue
+            except (OSError, ValueError):   # `stop()` cerro el listener
+                return
+            self.conns += 1
+            self._conn = conn
+            conn.settimeout(EV_POLL)
+            buf = b""
+            try:
+                while not self._dead:
+                    try:
+                        chunk = conn.recv(4096)
+                    except (socket.timeout, TimeoutError):
+                        continue
+                    except (OSError, ValueError):
+                        break                        # `drop()` cerro la conexion
+                    if not chunk: break               # EOF: el cliente se fue
+                    buf += chunk
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        if line.strip(): self._handle(conn, line.decode("utf-8", "replace"))
+            finally:
+                try: conn.close()
+                except OSError: pass
+                if self._conn is conn: self._conn = None
+
+    def _send(self, conn, obj):
+        try: conn.sendall(_dump(obj).encode())
+        except (OSError, ValueError): pass   # la conexion puede estar cerrada por `drop`/`kick`
+
+    def _handle(self, conn, line):
+        try: req = json.loads(line)
+        except Exception: req = None
+        if not isinstance(req, dict) or not req.get("id"):
+            self._send(conn, {"type": "invalid_request", "message": "missing field id"})
+            return
+        self.requests.append(req)
+        m = req.get("method")
+        cid = req.get("id")
+        if m == "ping":
+            self._send(conn, {"id": cid, "result": {"type": "pong", "version": "0.9.3",
+                                                    "protocol": 22, "capabilities": {}}})
+            return
+        if m == "events.subscribe":
+            subs = (req.get("params") or {}).get("subscriptions")
+            if not isinstance(subs, list):
+                self._send(conn, {"id": cid, "error": {"code": "invalid_request", "message": "missing field subscriptions"}})
+                return
+            bad = next((_sub_ok(s) for s in subs if _sub_ok(s)), None) if self.validate else None
+            ack = self.ack if not bad else {"type": "invalid_request", "message": bad}
+            self.acks.append(ack)
+            self._send(conn, {"id": cid, "result": ack})
+            for l in list(self.lines):   # lo pendiente sale por la misma conexion, verbatim
+                self._send(conn, l)
+            if self.kick:
+                self.drop()   # el corte a mitad: lector y socket, para que el cliente vea el EOF
+            return
+        self._send(conn, {"id": cid, "error": {"code": "method_not_found", "message": "no method " + str(m)}})
+
+    # ---------- emision de eventos ----------
+    def enqueue(self, obj):
+        """Prepara una linea de evento. Se manda al suscribir (por la misma conexion, verbatim)."""
+        self.lines.append(obj)
+        return obj
+
+    def emit(self, obj):
+        """Manda un evento a la conexion viva. Si no hay conexion, queda en cola para el re-suscribir."""
+        if self._conn:
+            self._send(self._conn, obj)
+        else:
+            self.lines.append(obj)
+        return obj
+
+    def event_detected(self, pane_id, agent, workspace_id="w1"):
+        """Captura verbatim: `event` con GUIONES, y trae `agent` y `pane_id` (el de estado no trae nombre)."""
+        return self.enqueue({"data": {"agent": agent, "pane_id": pane_id, "type": "pane_agent_detected",
+                                      "workspace_id": workspace_id}, "event": "pane_agent_detected"})
+
+    def event_status(self, pane_id, status, workspace_id="w1"):
+        """Captura verbatim: `event` con PUNTO, y SIN el nombre del agente."""
+        return self.enqueue({"data": {"agent_status": status, "pane_id": pane_id, "workspace_id": workspace_id},
+                             "event": "pane.agent_status_changed"})
+
+    def event_workspace_created(self, workspace_id, label):
+        return self.enqueue({"data": {"type": "workspace_created", "workspace": {"workspace_id": workspace_id,
+                                                                                 "label": label}},
+                             "event": "workspace_created"})
+
+    def event_workspace_closed(self, workspace_id, label):
+        return self.enqueue({"data": {"type": "workspace_closed", "workspace": {"workspace_id": workspace_id,
+                                                                                "label": label},
+                                      "workspace_id": workspace_id}, "event": "workspace_closed"})
+
+    def subscriptions(self, i=0):
+        """Las suscripciones del pedido `i`, como tuples (type, pane_id) para aserciones de forma."""
+        req = self.requests[i]
+        return [(s.get("type"), s.get("pane_id")) for s in req["params"]["subscriptions"]]
+
+    def methods(self):
+        """Metodos mandados al socket. La asercion de T9: nunca un metodo mutante."""
+        return [r.get("method") for r in self.requests]

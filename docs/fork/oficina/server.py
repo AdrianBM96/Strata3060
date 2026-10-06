@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Login scrypt + sesion cookie; GET lectura (+SSE) y POST solo con sesion."""
-import base64, hashlib, hmac, json, os, re, secrets, shlex, subprocess, sys, threading, time
+import base64, hashlib, hmac, json, os, re, secrets, shlex, socket, select, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8095
@@ -253,11 +253,15 @@ def build_state():
             "herdr": bool(statuses), "tareas": tasks_list(), "updated": time.strftime("%H:%M:%S UTC", time.gmtime())}
 def get_state():
     interval = 30 if os.path.exists(BENCH) else 5
+    live = ev_health() == "live"   # T9: con eventos el camino rapido es el evento, no el reloj
+    ciclo = RECONCILE if live else interval
     with STLOCK:   # T7: un solo hilo construye por intervalo; los demas leen lo publicado. Antes era
                    # check-then-act: N hilos SSE y de peticion entraban todos a `build_state`.
-        if CACHE["data"] is None or time.monotonic() - CACHE["at"] >= interval:
-            SNAP["ttl"] = interval   # T6: el snapshot envejece igual que el estado que construye
+        if CACHE["data"] is None or (live and ev_dirty()) or time.monotonic() - CACHE["at"] >= ciclo:
+            SNAP["ttl"] = ciclo   # T6: el snapshot envejece igual que el estado que construye
             nuevo = build_state(); nuevo["interval"] = interval   # T7: `interval` antes de publicar
+            if live:
+                with ELOCK: EV["dirty"] = False   # T9: la construccion consume la suciedad del evento
             CACHE["data"] = nuevo; CACHE["at"] = time.monotonic()   # publicar con una sola asignacion
         return CACHE["data"]   # el dict publicado no se muta nunca: los hilos SSE lo iteran sin riesgo
 def valid_agent(agent):   # `LAST_AGENTS` se reasocia entero en `build_state`, nunca se muta en sitio
@@ -351,8 +355,262 @@ def snapshot(mach=None, timeout=15):
         SNAP["data"][mach] = (time.monotonic(), s)   # se publica la pareja entera, de una
         return s
 def raw_agents(mach=None, timeout=15):
-    """Agentes del snapshot de la maquina: la misma lista que daba `agent list`, en la misma forma."""
-    return fld(snapshot(mach, timeout), "agents")
+    """Agentes del snapshot de la maquina: la misma lista que daba `agent list`, en la misma forma.
+
+    T9: en la maquina local se superpone el estado vivo del socket (`ev_overlay`). El snapshot de una
+    maquina remota no se superpone: el socket de herdr es el de bazzite, y los eventos no llegan de
+    la maquina remota.
+    """
+    ags = fld(snapshot(mach, timeout), "agents")
+    return ev_overlay(ags) if mach is None else ags
+
+# ---------- T9: `events.subscribe` por socket Unix: push en vez de polling ----------
+# Protocolo VERBATIM del binario herdr 0.9.3, capturado en vivo 2026-10-06 (ver
+# odd/tasks/oficina-herdr-v5.md, "Sondeos de eventos"): JSON newline-delimited en
+# `$HERDR_SOCKET_PATH` (la unidad systemd la fija) o `~/.config/herdr/herdr.sock`. Los pedidos llevan
+# `id` (sin `id` el servidor responde `invalid_request: missing field id`).
+# `events.subscribe` -> ack `{"id":..,"result":{"type":"subscription_started"}}` y los eventos llegan
+# por la MISMA conexion con forma `{"data":{...},"event":"..."}`. `ping` ->
+# `{"id":..,"result":{"type":"pong","version":"0.9.3","protocol":22,...}}`.
+# Las suscripciones GLOBALES necesitan solo `type`. `pane.agent_status_changed` y
+# `pane.scroll_changed` requieren `pane_id`; `pane.output_matched` requiere `pane_id + source +
+# match`, y `OutputMatch` es `{type: substring|regex, value: string}` (la clave es `value`, no
+# `text`). Una entrada de forma invalida rechaza el SET ENTERO (observado dos veces), asi que la
+# oficina manda solo las formas verificadas: nunca `scroll_changed` ni `output_matched`, porque un
+# item mal formado mata toda la suscripcion y el canal se queda mudo.
+# El evento de estado NO trae el nombre del agente (trae `pane_id` y `workspace_id`), asi que la
+# correspondencia pane->nombre viene del snapshot de T6 y se refresca en `pane.agent_detected`.
+# En el probe vivo, la segunda escritura sobre una misma conexion dio BrokenPipe: la suscripcion
+# necesita una conexion larga y cada pedido suelto reconecta. El hilo NUNCA manda un metodo mutante:
+# solo `events.subscribe` (y `ping` si hiciera falta); nunca `agent prompt`, `agent start`,
+# `pane split`, `workspace create`/`close`, `server.stop`.
+GLOBAL_SUBS = ("pane.agent_detected", "pane.created", "pane.closed", "pane.exited", "pane.updated",
+               "pane.focused", "pane.moved", "workspace.created", "workspace.closed",
+               "workspace.updated", "workspace.renamed", "workspace.metadata_updated",
+               "workspace.focused", "workspace.moved", "workspace.reordered")
+EV_ACK = "subscription_started"      # el unico ack que pone el canal en modo `live`
+EV_TIMEOUT = 10.0                    # s de connect y de lectura del ack: el hilo nunca se cuelga
+EV_BACK0 = 1.0                       # s: primer reintento
+EV_BACKMAX = 30.0                    # s: tope del backoff (cota de la oficina, no una medida)
+EV_WAKE = 0.2                        # s: granularidad con la que el SSE despierta ante un evento
+# `RECONCILE` es el polling LENTO que mantiene frescos los campos que los eventos NO llevan: `cwd`,
+# `terminal_title`, `interactive_ready`, `completion_seq` (ver `CAMPOS_H`). 30 s es eleccion de la
+# oficina, no una medida: el ciclo de 5 s cuesta 12 subprocesos `api snapshot` por minuto compitiendo
+# con la medicion de la RTX 3060, y el de 30 s cuesta 2. Ademas es el plazo del latido del SSE
+# (`quiet >= 6` con quantum de 5 s) y el intervalo que la oficina ya usa con BENCH, asi el reposo son
+# 2 subprocesos por minuto y el latido sigue siendo ~30 s. El camino rapido son los eventos: un cambio
+# de estado se empuja en menos de 0.2 s, no en 5 s.
+RECONCILE = 30
+# `EV_TICK` es el tiempo maximo que el hilo espera una linea antes de mirar la bandera de parada. Con
+# `readline()` sin `select` el hilo estaria 10 s colgado en un socket mudo y la parada no se notaria.
+# `select` (stdlib) acota la espera sin imponer una reconexion periodica: el canal en reposo no se
+# corta, solo se mira la bandera cada `EV_TICK` s.
+EV_TICK = 1.0
+EV = {"mode": "unavailable", "dirty": True, "subs": [], "panes": set(), "status": {}, "names": {},
+      "thread": None, "stop": threading.Event()}
+# `ELOCK` protege `EV` (`mode`, `dirty`, `subs`, `panes`, `status`, `names`). Orden de adquisicion
+# (T7, server.py:44-50): `MLOCK` -> `STLOCK` -> `ELOCK`, que es lo que hacen `agmap` -> `raw_agents` ->
+# `ev_overlay` y `get_state` -> `build_state` -> `raw_agents`. `ELOCK` nunca toma `STLOCK` ni `MLOCK`
+# (el hilo de eventos los toma por separado), asi que no hay ciclo y no hay deadlock.
+ELOCK = threading.Lock()
+
+def ev_path():
+    """Ruta del socket: la que fija la unidad systemd (`HERDR_SOCKET_PATH`) o la del binario."""
+    return os.environ.get("HERDR_SOCKET_PATH") or H("~/.config/herdr/herdr.sock")
+
+def ev_subs(panes):
+    """El set de suscripciones, en UN solo sitio: las globales (solo `type`) mas
+    `pane.agent_status_changed` por cada `pane_id` conocido, en orden estable.
+
+    El orden estable es lo que hace idempotente la re-suscripcion: dos listas iguales no vuelven a
+    mandarse. Los `pane_id` salen del snapshot (`ev_overlay`) y de los eventos.
+    """
+    out = [{"type": t} for t in GLOBAL_SUBS]
+    out += [{"type": "pane.agent_status_changed", "pane_id": p} for p in sorted(panes) if p]
+    return out
+
+def ev_health():
+    """Salud del canal de eventos, para la UI: `live` | `polling` | `unavailable`."""
+    with ELOCK: return EV["mode"]
+
+def ev_dirty():
+    """True si hay que reconstruir YA. Solo en modo `live`: el polling no necesita bandera."""
+    with ELOCK: return EV["mode"] == "live" and EV["dirty"]
+
+def ev_resub_needed():
+    """El set crecio (aparecio un panel nuevo): hay que re-suscribir. Idempotente por comparacion."""
+    with ELOCK: return ev_subs(EV["panes"]) != EV["subs"]
+
+def ev_overlay(ags):
+    """Estado vivo superpuesto por `pane_id` sobre los agentes del snapshot.
+
+    El evento de estado no trae el nombre: el nombre lo pone el snapshot, por eso el overlay indexa
+    por `pane_id`. Copia cada agente: el snapshot cacheado no se muta en sitio (T7: el dict publicado
+    no se muta). Los `pane_id` del snapshot entran en `EV["panes"]`, que es lo que hace crecer la
+    re-suscripcion cuando aparece un panel.
+    """
+    with ELOCK:
+        st = dict(EV["status"])
+        for a in ags:
+            if a.get("pane_id"): EV["panes"].add(a["pane_id"])
+        if not st: return ags
+    out = []
+    for a in ags:
+        p = a.get("pane_id")
+        if p in st:
+            a = dict(a); a["agent_status"] = estado_real(st[p])
+        out.append(a)
+    return out
+
+def ev_event(line):
+    """Aplica una linea de evento y marca el estado sucio. True si hay que refrescar el snapshot.
+
+    `pane_agent_detected` llega con `event` de guiones y la suscripcion es de punto: se manejan las
+    dos grafias. El evento de deteccion si trae `agent` y `pane_id`, asi que la correspondencia
+    pane->nombre se actualiza en el acto; el snapshot envejece para que el ciclo la confirme.
+    """
+    try: d = json.loads(line)
+    except Exception: return False
+    if not isinstance(d, dict): return False
+    kind = str(d.get("event") or "").replace(".", "_")
+    data = d.get("data") if isinstance(d.get("data"), dict) else {}
+    pane = data.get("pane_id") or (data["pane"].get("pane_id") if isinstance(data.get("pane"), dict) else None)
+    if kind == "pane_agent_detected":
+        if pane and data.get("agent"):
+            with ELOCK: EV["names"][pane] = data["agent"]
+        wide = True
+    elif kind == "pane_agent_status_changed":
+        st = data.get("agent_status")
+        if pane and st in ESTADOS:
+            with ELOCK: EV["status"][pane] = st
+        wide = bool(pane)
+    elif kind in ("pane_created", "pane_closed", "pane_exited", "pane_updated", "pane_focused", "pane_moved"):
+        wide = True
+    elif kind.startswith("workspace_"):
+        wide = True
+    else:
+        return False   # un evento de un herdr futuro no se traga ni ensucia: se ignora
+    with ELOCK:
+        if pane: EV["panes"].add(pane)
+        EV["dirty"] = True
+    if wide:
+        with STLOCK: SNAP["data"].pop(None, None)   # el snapshot local envejece: pane->nombre al ciclo
+    return wide
+
+def _ev_send(s, obj):
+    s.sendall((json.dumps(obj, separators=(",", ":")) + "\n").encode())
+
+def _ev_ack(line):
+    """El ack verbatim: `{"id":..,"result":{"type":"subscription_started"}}`."""
+    try: d = json.loads(line)
+    except Exception: return False
+    res = d.get("result") if isinstance(d, dict) else None
+    return bool(isinstance(res, dict) and res.get("type") == EV_ACK)
+
+def ev_subscribe(s, r):
+    """Manda la suscripcion con su `id` requerido y espera el ack. Devuelve True si empezo."""
+    with ELOCK:
+        subs = ev_subs(EV["panes"]); EV["subs"] = subs
+    _ev_send(s, {"id": "oficina:subscribe", "method": "events.subscribe",
+                 "params": {"subscriptions": subs}})
+    return _ev_ack(r.readline())
+
+def ev_seed():
+    """Los `pane_id` que la oficina conoce: los del snapshot local, la misma fuente de T6.
+
+    Se siembra antes de la primera suscripcion: sin esto la suscripcion inicial lleva solo las globales
+    y el estado de los paneles existentes no se enteraria hasta el primer `pane.agent_detected`.
+    `raw_agents` registra los `pane_id` en `EV["panes"]` por `ev_overlay`.
+    """
+    return raw_agents(None)
+
+def ev_client():
+    """El hilo de eventos: una conexion larga, suscribir, aplicar, re-suscribir al crecer, reconectar.
+
+    Degradacion obligatoria: socket ausente, refusado, timeout, ack que no es `subscription_started` o
+    conexion cortada -> el modo pasa a `polling`/`unavailable` y `get_state` vuelve al ciclo de 5 s /30 s
+    de hoy. El hilo no sale del bucle, no lanza subproceso, no bloquea los hilos HTTP, y el backoff esta
+    acotado (`EV_BACK0` -> `EV_BACKMAX`, con reset al funcionar).
+
+    Si el ack no es `subscription_started` la conexion se cierra y se reintenta: una conexion que no
+    suscribio no tiene eventos que leer, y quedarse leyendo 10 s en ella es la espera muerta que hoy
+    sondea cada ciclo. El reintento acotado es lo que permite que la oficina se recupera sola cuando
+    herdr vuelve, sin reiniciar el servicio.
+    """
+    back = EV_BACK0
+    while True:
+        s = None
+        if EV["stop"].is_set(): return
+        try:
+            ev_seed()   # los paneles existentes entran en el set: la suscripcion inicial es completa
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(EV_TIMEOUT)   # acotado: el hilo nunca se cuelga en un socket mudo
+            s.connect(ev_path())
+            r = s.makefile("r")
+            live = ev_subscribe(s, r)
+            with ELOCK: EV["mode"] = "live" if live else "polling"
+            if live:
+                back = EV_BACK0        # el canal funciona: el reintento vuelve a su cota minima
+                while True:
+                    if EV["stop"].is_set(): break
+                    line = _ev_read(s, r, EV_TICK)   # `select`: mirar la bandera sin colgarse
+                    if line is None: continue        # el canal en reposo: no es un fallo
+                    if not line: break               # el servidor cerro la conexion
+                    if _ev_ack(line): continue       # ack de una re-suscripcion
+                    if ev_event(line) and ev_resub_needed() and not ev_subscribe(s, r): break
+        except Exception:
+            pass                                          # nunca un crash del servidor por el socket
+        with ELOCK:
+            if EV["mode"] == "live": EV["mode"] = "polling"   # cortada: se sondea hasta reconectar
+        if s:
+            try: s.close()
+            except Exception: pass
+        EV["stop"].wait(back)   # el sueno del backoff se corta al parar: el hilo sale sin esperar el tope
+        back = min(back * 2, EV_BACKMAX)
+
+def _ev_read(s, r, timeout):
+    """Una linea con `select`: el bucle de la conexion larga puede mirar `EV["stop"]` sin colgarse.
+
+    Devuelve None si no hay nada que leer en `timeout` (el canal en reposo: no es un fallo, no hay que
+    reconectar). Si el peer cerro, `readline()` da la cadena vacia y el bucle sale.
+    """
+    rd, _, _ = select.select([s], [], [], timeout)
+    if not rd: return None
+    return r.readline()
+
+def ev_stop():
+    """Parada ordenada del hilo de eventos (el cierre del servicio, y el teardown de los tests).
+
+    Es un `Event`, no un bool: el hilo esta dormido en el backoff (hasta `EV_BACKMAX` s) y un bool solo
+    se veria al despertar. Con `Event.set()` el sueno se corta al instante, y el hilo sale en `EV_TICK` s.
+    Los hilos daemon de un test anterior seguirian reconectando contra el socket del test que corre
+    ahora, porque `HERDR_SOCKET_PATH` es una variable de proceso.
+    """
+    with ELOCK: EV["stop"].set()
+
+def ev_start():
+    """Un solo hilo de fondo para la suscripcion. Se arranca en `__main__`, no en el import: los tests
+    lo arrancan cuando quieren un socket emulado, y la suite que no lo arranca no lanza subprocesos.
+    """
+    with ELOCK:
+        if EV["thread"] and EV["thread"].is_alive(): return EV["thread"]
+        EV["stop"].clear()
+        t = threading.Thread(target=ev_client, daemon=True, name="oficina-events")
+        EV["thread"] = t; t.start(); return t
+
+def ev_cycle(interval):
+    """El sueno del bucle SSE: un quantum de `interval` segundos, cortado cuando un evento ensucia.
+
+    En `polling`/`unavailable` es el `time.sleep(interval)` de hoy, asi que el latido (`quiet >= 6`) sigue
+    siendo ~30 s. En `live` se despierta a los `EV_WAKE` s: un cambio de estado se empuja en menos de
+    0.2 s, y un reposo completo duerme el quantum entero, asi que la condicion de latido no cambia.
+    """
+    if ev_health() != "live":
+        time.sleep(interval); return
+    end = time.monotonic() + interval
+    while time.monotonic() < end:
+        if ev_dirty(): return   # hay evento: el bucle empuja ahora
+        time.sleep(min(EV_WAKE, end - time.monotonic()))
 MCACHE = {"at": 0, "data": []}; HOMES = {}; AGCACHE = {"at": 0, "data": {}, "ttl": 20}
 # T8 (defecto 2): `HOMES` guarda la pareja `(home, marca de la ultima sondadura)`. Un `""` es un fallo,
 # no un resultado: el exito no caduca (el home de una maquina no cambia) y el fallo solo durante
@@ -699,6 +957,7 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/state":
             ws = parse_qs(u.query).get("ws", [""])[0]
             code, payload = state_for(ws)   # T8, defecto 3: nunca un fallback silencioso al estado local
+            payload = dict(payload); payload["events"] = ev_health()   # T9: salud del canal, clave aditiva
             self._json(code, payload)
         elif u.path == "/api/kinds":
             mq = parse_qs(u.query).get("m", ["bazzite"])[0]
@@ -708,7 +967,8 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/log": self._json(200, api_log(q))
         elif u.path == "/api/hilo": self._json(200, api_hilo(q))
         elif u.path == "/api/offices":
-            self._json(200, api_offices())
+            r = api_offices(); r["events"] = ev_health()   # T9: clave aditiva, nunca renombrada
+            self._json(200, r)
         elif u.path == "/api/events":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream"); self.send_header("Cache-Control", "no-store")
@@ -716,13 +976,15 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 prev = None; quiet = 0
                 while True:
-                    st = get_state(); body = json.dumps({k: v for k, v in st.items() if k != "updated"}, ensure_ascii=False)
+                    st = get_state()
+                    payload = dict(st); payload["events"] = ev_health()   # T9: clave aditiva en el stream
+                    body = json.dumps({k: v for k, v in payload.items() if k != "updated"}, ensure_ascii=False)
                     if body != prev or quiet >= 6:   # solo si cambia; latido cada ~30 s para mantener viva la conexión
-                        self.wfile.write(("data: " + json.dumps(st, ensure_ascii=False) + "\n\n").encode()); self.wfile.flush()
+                        self.wfile.write(("data: " + json.dumps(payload, ensure_ascii=False) + "\n\n").encode()); self.wfile.flush()
                         prev = body; quiet = 0
                     else:
                         quiet += 1
-                    time.sleep(st.get("interval", 5))
+                    ev_cycle(st.get("interval", 5))   # T9: en `live` el sueno se corta cuando un evento ensucia
             except (BrokenPipeError, ConnectionResetError):
                 pass
         else: self.send_error(404)
@@ -755,5 +1017,6 @@ class Handler(BaseHTTPRequestHandler):
 def serve(ip): ThreadingHTTPServer((ip, PORT), Handler).serve_forever()
 if __name__ == "__main__":
     ips = ["127.0.0.1", tailscale_ip()]
+    ev_start()   # T9: un solo hilo de eventos, antes de los servidores HTTP
     for ip in dict.fromkeys(ips): threading.Thread(target=serve, args=(ip,), daemon=True).start()
     print("oficina en %s (puerto %d)" % (" y ".join(ips), PORT), flush=True); threading.Event().wait()
