@@ -1,0 +1,1 @@
+{"id":"cli:agent:start","error":{"code":"agent_not_ready","message":"pane is not at an interactive shell prompt"}}

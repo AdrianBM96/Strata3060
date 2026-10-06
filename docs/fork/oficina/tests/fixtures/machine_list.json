@@ -1,0 +1,18 @@
+[
+  {
+    "id": "7da85d77c99e7c647212c70af1547d0c",
+    "label": "mac-mini",
+    "target": "nicoaisdr@100.98.211.55",
+    "session": "default",
+    "enabled": true,
+    "selected": false
+  },
+  {
+    "id": "28b481d65419c98255e8f2db420b34e1",
+    "label": "macbook-air",
+    "target": "31017423Z@100.99.86.60",
+    "session": "default",
+    "enabled": true,
+    "selected": false
+  }
+]

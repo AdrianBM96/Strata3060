@@ -1,0 +1,6 @@
+{"base": {"B1": 50.7, "B2": 42.35, "B4": 56.15, "P3_s": 20.17, "P4_s": 26.09, "fuente": "orden 7"},
+ "candidato": {"nombre": "CUP-0.1.40", "B1": 55.23, "brazo_def_B1": 54.77,
+   "IC": "B1/B2/P3/P4 frios nulos; B4 +4,5% IC0; aceptacion igual"},
+ "historial": [{"fecha": "2026-10-04", "cambio": "C26 A/B B1 (P08+MTMIN vs prod, 6+6, deriva 69-76C)",
+   "B1": 45.0, "P3_s": null},
+  {"fecha": "2026-10-05", "cambio": "P08-redo B1 6+6 bench.py N23 (P08+MTMIN vs prod)", "B1": 51.32, "P3_s": null}]}

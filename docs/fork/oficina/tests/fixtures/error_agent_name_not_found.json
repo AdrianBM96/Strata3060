@@ -1,0 +1,1 @@
+{"id":"cli:agent:get","error":{"code":"agent_name_not_found","message":"no agent named tester"}}

@@ -1,0 +1,84 @@
+# Oficina v5 — estado real de Herdr, push, y visual legible
+
+Feature: `oficina-herdr-v5` · Rama: `claude/strata-rtx3060-optimization-zfgxq8` · Inicio: 2026-10-06
+
+## Objetivo
+Que la oficina web muestre **el estado real de cada agente** (idle · working · blocked · done · unknown) y que Herdr hable con la oficina por **eventos**, no por polling. Hoy el estado se destruye en el servidor y la visualización es decorativa.
+
+## Problema (evidencia, verificada en el binario Herdr 0.9.3)
+- `docs/fork/oficina/server.py:66` (`mkagent`): `st = "working" if status == "working" else "idle"` → `blocked`, `done`, `unknown` se pierden antes de llegar al navegador.
+- `docs/fork/oficina/index.html:341` (`statusOf`): `blocked`/`waiting` solo se fabrican con un regex sobre la actividad de `opencode2`.
+- `docs/fork/oficina/index.html:340,154` ya tienen LED ámbar/rojo y clases CSS para esos estados → lenguaje visual muerto.
+- Consecuencia: un agente bloqueado esperando aprobación **camina a la mesa de café y se pinta gris**.
+- `herdr_out` (`server.py:63`) devuelve solo `stdout` y descarta `stderr`. Herdr manda errores como JSON a stderr con exit 1 (`{"id":…,"error":{"code":…,"message":…}}`), así que los checks `server.py:256-258` son código muerto.
+- `agent prompt` se lanza sin `--wait` (`server.py:346`) → no se observa si la entrega ocurrió.
+- Herdr tiene `events.subscribe` con `PaneAgentStatusChangedEvent`, `PaneOutputMatchedEvent`, `PaneScrollChangedEvent`. La oficina sondea cada 5 s y nunca suscribe.
+- `herdr api snapshot` (verificado: 6.6 KB) entrega `agents`, `panes`, `tabs`, `workspaces`, `layouts`, foco en **una** llamada. La oficina hace `agent list` + `workspace list` por separado.
+- Hay **102 métodos de API**; la oficina usa 10 comandos CLI.
+- La oficina **no tiene ningún test**.
+- Concurrency: `get_state` es check-then-act (`server.py:110-111`); `CACHE["data"]["interval"]` (`server.py:111`) muta el dict que los hilos SSE iteran (`server.py:418`). Sin lock en `CACHE`, `SEEN`, `FAILS`, `MCACHE`, `KCACHE`, `JOBS`, `save_meta`.
+- Multi-máquina: `agent start` de `ada-cli` descarta `mach` (`server.py:249`); `rhome` cachea `""` para siempre (`server.py:160`); la regex `/api/state?ws` (`server.py:401`) rechaza labels con mayúsculas/guiones bajos.
+- Visual: `applyTheme` (`index.html:654-662`) reconstruye sala y materiales sin `dispose()` (fuga de GPU por cambio de tema); `placeLabels` (`index.html:627-639`) reconstruye DOM cada frame; `drawBoard` pinta blanco en tema oscuro (`index.html:394`); `metrics.jefe` no existe en `METRICAS.json` → el jefe del tablero está hardcodeado (`index.html:772`); `t.pasos` no existe en `TAREAS.json` (`index.html:708`); `G.cap` (`index.html:367`) crea `CapsuleGeometry` por llamada; el comentario `index.html:352` dice ~60 mallas, la realidad es 350–400.
+- Datos que viajan y nunca se muestran: `ticker`, `bench`, `interval`, `updated`, `agents.color`, `ws`/`maquina`, `metrics.fuente`, `candidato.B1`, `brazo_def_B1`, `TAREAS.columnas`.
+- Deriva documental: `README.md` dice 847/77 líneas (son 879/52); el `strata-oficina.service` del repo apunta a `wt-C30` y menciona un token que ya no existe.
+
+## Por qué
+La oficina existe para que Adrián vea qué está haciendo cada agente y qué necesita. Si el estado `blocked` se pierde, la herramienta falla en su función central. Y el polling cada 5 s subprocesos es consumo que compite con las mediciones de la RTX 3060.
+
+## Alcance
+`docs/fork/oficina/server.py`, `docs/fork/oficina/index.html`, `docs/fork/oficina/tests/` (nuevo), `docs/fork/oficina/README.md`, `docs/fork/oficina/strata-oficina.service`.
+
+## Restricciones
+1. **Cero dependencia externa** en `server.py`: solo stdlib de Python 3.12. Los tests pueden usar `pytest` (ya instalado, 9.1.1).
+2. **No robar cómputo a la medición**: render bajo demanda intacto, ~0 % dGPU en reposo. Cada fase se verifica midiendo reposo.
+3. **Seguridad intacta**: scrypt + cookie `sid` HttpOnly/SameSite=Strict + fail-closed + `shell=False` + cap 8192 B. No exponer fuera de localhost/tailnet.
+4. **Verificación viva solo con agentes `agy`** (decisión de Adrián, 2026-10-06): no usar `claude`, `pi`, `opencode2` como sujetos de prueba en Herdr vivo.
+5. Idioma: UI y docs de la oficina en español (convención del repo); identificadores siguiendo el estilo existente (`herdr_out`, `mkagent`, `build_state`).
+6. Cerrar cada tarea con un commit de unidad de trabajo en la rama de feature. Push/PR/merge quedan en Adrián.
+
+## Checklist
+- [ ] **T1** — Stub de Herdr a nivel argv + suite pytest (sin GPU ni Herdr vivo).
+- [ ] **T2** — Contrato de estado: `agent_status` real + `pane_id`, `focused`, `interactive_ready`, `completion_seq`, `state_change_seq` en el payload; `mkagent` deja de colapsar; `state_ws` alinea.
+- [ ] **T3** — `statusOf` del frontend pasa a ser función de estado real; se elimina el regex de `index.html:341`.
+- [ ] **T4** — `herdr_out` captura `stderr` y parsea `{error:{code,message}}`; se eliminan los checks de substring muertos.
+- [ ] **T5** — `agent prompt --wait --timeout` + manejo real de `agent_blocked` / `agent_prompt_stalled` con mensaje humano.
+- [ ] **T6** — Un solo `api snapshot` por ciclo de estado.
+- [ ] **T7** — Locks + rebuild atómico de `CACHE`/`SEEN`/`FAILS`/`MCACHE`/`KCACHE`/`JOBS`/`meta`; `interval` no muta el dict en iteración.
+- [ ] **T8** — Baches multi-máquina: `mach` en `agent start` de ada-cli, `rhome` no cachea `""`, regex `ws` acepta labels reales.
+- [ ] **T9** — `events.subscribe` en un hilo; SSE alimentado por eventos; cero subprocesos en reposo.
+- [ ] **T10** — `notification.show` cuando un agente pasa a `blocked`.
+- [ ] **T11** — Mapeo visual `blocked` / `done` / `unknown` (LED, pose, badge).
+- [ ] **T12** — Burbuja "TE NECESITA" sigue al agente bloqueado (deja de estar hardcodeada a `opencode2`).
+- [ ] **T13** — Canvas theme-aware: `drawBoard` y `drawScreen` leen el tema.
+- [ ] **T14** — `dispose()` en `applyTheme` + cache de `G.cap`.
+- [ ] **T15** — `placeLabels` sin reconstruir DOM cada frame.
+- [ ] **T16** — Código muerto y claims de mallas corregidos.
+- [ ] **T17** — Mostrar datos que viajan y se ignoran: `ticker`, `interval`, `bench`, `metrics.fuente`, `candidato.B1`, `TAREAS.columnas`.
+- [ ] **T18** — A11y: tabs con `role`/`aria-selected`/teclado, label de `#msg`, `role="status"` en toast, focus trap en modal, `prefers-reduced-motion` aplicado al bucle 3D.
+- [ ] **T19** — Responsive compacto real: oficinas, KPIs y cola accesibles bajo 1150 px.
+- [ ] **T20** — Estados de error/empty/retry en `/api/state`, "Salida" e "Hilo".
+- [ ] **T21** — Deriva documental: `README.md` y `strata-oficina.service`.
+
+## Criterios de aceptación
+1. Un agente `blocked` en Herdr se ve rojo/ámbar en el diorama y en el inspector, **no** como inactivo. Verificado con stub y con un agente `agy` vivo.
+2. En reposo, el servidor no lanza subprocesos Herdr (T9) y la dGPU queda ~0 %.
+3. Los errores de Herdr aparecen como mensaje legible en la UI, no como "herdr no responde".
+4. La suite pytest corre sin GPU, sin Herdr vivo y sin red.
+5. Ninguna verificación viva toca `claude`, `pi` ni `opencode2`.
+
+## Verificación
+- **Regresión**: `python3 -m pytest docs/fork/oficina/tests/ -q` con stub de Herdr.
+- **Servicio**: `systemctl --user restart strata-oficina.service` + `journalctl --user -u strata-oficina.service -n 40`.
+- **Puertas sin sesión**: `/api/*` → 401, `/` → 302, `/login` → 200.
+- **Reposo**: `nvidia-smi` (dGPU %) y `ps -o %cpu` del servicio tras 60 s sin cambios.
+- **Viva**: un agente `agy` en un panel de prueba, transición `idle → working → blocked`, y `notification.show`.
+
+## Progreso
+- 2026-10-06: Plan aprobado por Adrián (Fases 0→5 completas, fase por fase). Verificación: stub para regresión **y** Herdr vivo, **solo con agentes `agy`**. Documentación leída: `docs/fork/oficina/README.md`, `docs/fork/AUDITORIA-OFICINA.md`. Dos scouts de exploración mapearon `server.py` e `index.html` con evidencia `path:line`; el binario Herdr 0.9.3 se inspeccionó en vivo (grupo help, `api snapshot`, `api schema --json`, `machine list --json`).
+- Ninguna tarea iniciada.
+
+## Espejo Engram
+Pendiente: no hay herramientas de memoria (`mem_context`/`mem_search`/`mem_get_observation`/save) disponibles en esta sesión. El espejo local `odd/oficina-herdr-v5/tasks` se mantiene como copia; se resincronizará cuando Engram esté disponible.
+
+## Próximo paso
+T1: stub de Herdr + suite pytest, con superficies de edición acotadas a `docs/fork/oficina/tests/`.

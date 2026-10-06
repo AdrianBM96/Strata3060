@@ -1,0 +1,13 @@
+{"actualizado": "2026-10-06T08:55Z",
+ "columnas": ["EN COLA", "EN CURSO", "ESPERA OK", "HECHO", "DESCARTADO"],
+ "tareas": [
+  {"columna": "HECHO", "id": "CUP", "inicio": "2026-10-06", "nota": "v0.1.40 desplegado 01856e5a",
+   "responsable": "obrero", "titulo": "Upstream 0.1.40"},
+  {"columna": "EN CURSO", "id": "C26", "inicio": "2026-10-04", "nota": "paso b",
+   "responsable": "opencode2", "titulo": "Kernel CPU IQ2"},
+  {"columna": "EN COLA", "id": "C34", "inicio": "2026-10-05", "nota": "precarga en larga",
+   "responsable": "tester", "titulo": "Precarga"},
+  {"columna": "ESPERA OK", "id": "C17-ven", "inicio": "2026-10-06", "nota": "T≈2,5 siempre",
+   "responsable": "opencode2", "titulo": "Ventana B4", "aprobador": "adrian"},
+  {"columna": "ESPERA OK", "id": "CUP-ab", "inicio": "2026-10-06", "nota": "bit-bit OK",
+   "responsable": "claude", "titulo": "Bit-bit", "aprobador": "maria"}]}

@@ -1,0 +1,3 @@
+adrian: revisa la cola
+opencode2 · idle · esperando
+la medida B1 quedo en 50,70 tok/s
