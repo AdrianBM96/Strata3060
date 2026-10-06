@@ -19,5 +19,9 @@ offers the same steps as tools.
 - AMD (HIP) build and validation: [docs/AMD_HIP.md](docs/AMD_HIP.md); multi-GPU: [docs/MULTI_GPU.md](docs/MULTI_GPU.md).
 - Setup's own tests run without a GPU or downloads: `python tools/test_setup_<name>.py` (for example
   `tools/test_setup_amd.py`, `tools/test_setup_choices.py`).
+- The virtual office is a fork-only web tool under `docs/fork/oficina/`, not part of Strata: see
+  [docs/fork/oficina/README.md](docs/fork/oficina/README.md). The service runs the copy in this folder
+  directly (`strata-oficina.service` → `docs/fork/oficina/server.py`), so editing the folder takes effect
+  on the next restart.
 - Keep the docs' style: plain words, measured numbers with what they were measured on, no claims without a
   measurement.
