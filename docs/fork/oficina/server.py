@@ -212,6 +212,13 @@ def mkagent(name, status, activity, color, role, h=None):   # h: dict del agente
 def tasks_list():
     try: return json.loads(read(TAREAS) or "{}").get("tareas", [])
     except Exception: return []
+def tasks_cols():
+    """Las columnas declaradas en `TAREAS.json`. T17: la UI no debe fijarlasy decir "el payload no las trae".
+    `columnas` existe en el fichero; `tasks_list` lo descartaba, asi que el tablero y la pizarra 3D usaban 5
+    columnas hardcodeadas. Se manda como viene; `None` si el fichero no lo trae, y la UI lo dice.
+    """
+    try: return json.loads(read(TAREAS) or "{}").get("columnas") or None
+    except Exception: return None
 def build_state():
     try:
         # el agente sin `name` no es un agente de la oficina: se omite, no se convierte en "?"
@@ -250,7 +257,8 @@ def build_state():
     if last_line(LOG_WD): ticker.append("vigia: " + last_line(LOG_WD))
     return {"agents": agents, "metrics": metrics, "ticker": ticker, "queue": {"done": done, "total": total},
             "lock": bool(lock_txt.strip()), "bench": os.path.exists(BENCH), "suplencia": supl,
-            "herdr": bool(statuses), "tareas": tasks_list(), "updated": time.strftime("%H:%M:%S UTC", time.gmtime())}
+            "herdr": bool(statuses), "tareas": tasks_list(), "columnas": tasks_cols(),
+            "updated": time.strftime("%H:%M:%S UTC", time.gmtime())}
 def get_state():
     interval = 30 if os.path.exists(BENCH) else 5
     live = ev_health() == "live"   # T9: con eventos el camino rapido es el evento, no el reloj

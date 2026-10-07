@@ -894,7 +894,7 @@ def test_el_aviso_es_aditivo_y_la_linea_base_de_aviso_no_lanza_subproceso(server
     st = server.get_state()
     assert "notif" not in st, "la clave aditiva `notif` no esta autorizada en el payload (T10)"
     assert set(st) == {"agents", "metrics", "ticker", "queue", "lock", "bench", "suplencia", "herdr",
-                       "tareas", "updated", "interval"}, "ninguna clave del estado se renombra ni se anade"
+                       "tareas", "updated", "interval", "columnas"}, "ninguna clave del estado se renombra (T17 anade `columnas` aditivo)"
     http = _HTTP(server)
     code, r = http.get("/api/state")
     assert code == 200 and r["events"] == "unavailable" and "notif" not in r
@@ -958,7 +958,7 @@ def test_sin_ws_el_stream_es_la_oficina_de_strata_exacta(server, herdr_socket):
     assert {a["name"] for a in f["agents"]} == set(server.mod.FIXED), \
         "el roster sin `ws` es el de w1: %s" % sorted(a["name"] for a in f["agents"])
     assert set(f) == {"agents", "metrics", "ticker", "queue", "lock", "bench", "suplencia", "herdr",
-                      "tareas", "updated", "interval", "events"}, "solo `events` es aditiva"
+                      "tareas", "updated", "interval", "events", "columnas"}, "solo `events` y `columnas` son aditivas"
     sse.close()
     sse = _SSE(server, path="/api/events?ws=w1")
     g, dt = sse.first(2.0)

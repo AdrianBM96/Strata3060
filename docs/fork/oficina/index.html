@@ -20,6 +20,9 @@
   --ink:#e6e8ee;--inkText:#0f131b;--accent:#6ea0ff;--accentSoft:#17223a;--ok:#34d27a;--okSoft:#10261a;--warn:#f5a524;--warnSoft:#2a2010;
   --bad:#f87171;--badSoft:#2c1416;--shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35)}
 *{box-sizing:border-box}
+/* `hidden` tiene que ganar: `.chip` y `#skel` declaran `display`, y una regla de autor tapa la de UA
+   para `[hidden]`. Sin esta linea el `hidden` de `#contract` (y el de los nuevos chips) no ocultaba. */
+[hidden]{display:none!important}
 html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   font:13.5px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
 button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
@@ -30,10 +33,28 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
   width:min(100vw,calc(100vh*16/9));height:min(100vh,calc(100vw*9/16));
   display:grid;grid-template-columns:64px 250px 1fr 330px;gap:12px;padding:12px;overflow:hidden}
 #stage.other .strataOnly,#stage.other #contract{display:none!important}
-#stage.compact{grid-template-columns:56px 1fr;gap:8px;padding:8px}
-#stage.compact #side,#stage.compact #subtitle,#stage.compact .legend,#stage.compact .float{display:none}
+/* Compacto REAL (<1150 px): `#side` ya NO se oculta. Oficinas, KPIs y cola suben a la fila superior
+   y siguen alcanzables; el inspector sigue siendo cajón y el badge del estado vive en la cabecera, así
+   el estado se lee sin abrir el cajón. El letterbox 16:9 de `#stage` no cambia: solo se reparten sus
+   columnas en dos filas (rail a la izquierda, contenido a la derecha). */
+#stage.compact{grid-template-columns:56px 1fr;grid-template-rows:auto 1fr;gap:8px;padding:8px}
+#stage.compact #rail{grid-column:1;grid-row:1/3}
+#stage.compact #center{grid-column:2;grid-row:2}
+#stage.compact #side{grid-column:2;grid-row:1;display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px;padding:10px;overflow:hidden}
+#stage.compact #side .h{margin:2px 2px 0;flex:none}
+#stage.compact #side .grow{display:none}
+#stage.compact #offices{flex:1 1 210px;min-width:0;flex-direction:row;flex-wrap:nowrap;gap:6px;overflow-x:auto;scrollbar-width:thin}
+#stage.compact #offices .offw{flex:none}
+#stage.compact #newOff{flex:none;width:auto;padding:8px 12px;font-size:12px}
+#stage.compact .off{padding:8px 10px;gap:8px;width:auto;min-width:150px}
+#stage.compact .mini{flex:none;grid-template-columns:1fr 1fr;gap:6px;min-width:158px}
+#stage.compact #side .kpi:last-of-type{flex:1 1 150px;min-width:120px}
+#stage.compact #head{gap:8px;padding:0 4px}
 #stage.compact #head h1{font-size:18px}
-#stage.compact #contract{max-width:40%;overflow:hidden;text-overflow:ellipsis}
+#stage.compact #contract,#stage.compact #thr{max-width:40%;overflow:hidden;text-overflow:ellipsis}
+#stage.compact #subtitle{display:none}
+#stage.compact #fresh{flex:1 1 100%;order:6;white-space:normal}
+#stage.compact .legend,#stage.compact .float{display:none}
 #stage.compact #insp{position:absolute;right:8px;top:8px;bottom:8px;width:min(340px,62%);z-index:40;transform:translateX(calc(100% + 16px));transition:transform .25s ease}
 #stage.compact.drawer #insp{transform:none}
 #closeInsp{display:none;position:absolute;right:10px;top:10px;width:30px;height:30px;border-radius:9px;background:var(--panel2);z-index:2}
@@ -72,12 +93,25 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 .kpi small{color:var(--muted);font-size:11.5px;display:block}
 .kpi b{font-size:18px;font-weight:680;letter-spacing:-.02em}
 .kpi i{font-style:normal;font-size:11.5px;font-weight:600}
+.src{grid-column:1/-1;font-size:11px;color:var(--muted);border-radius:10px;padding:6px 8px;background:var(--panel);border:1px solid var(--line);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* T20: el estado de fallo se declara con la paleta de `--bad`/`--badSoft` que ya usan `.st.blocked`
+   y `.toast.bad`; no se añade color nuevo. Va en `#ipane` (Salida/Hilo/estado) y en `#thread`. */
+.fail{border:1.5px solid var(--bad);border-radius:14px;padding:12px;background:var(--badSoft);font-size:13px;
+  display:flex;gap:10px;align-items:center;flex-wrap:wrap;word-break:break-word}
+.fail .btn{margin-left:auto}
 .up{color:var(--ok)}.down{color:var(--bad)}.flat{color:var(--muted)}
 /* Centro */
 #center{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
-#head{display:flex;align-items:center;gap:12px;padding:2px 6px}
+#head{display:flex;align-items:center;gap:12px;padding:2px 6px;flex-wrap:wrap;min-width:0}
 #head h1{font-size:22px;margin:0;font-weight:700;letter-spacing:-.02em}
-#head .sub{color:var(--muted)}
+#head .sub{color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis}
+/* franja de ticker: las filas REALES de CHANGELOG que viajan en `S.ticker` (T17). `title` lleva
+   todas las líneas; la cabecera muestra la última fila de CHANGELOG, no una decoración. */
+.tick{flex:1 1 150px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--muted);font-size:12px;font-weight:600;padding-left:10px;border-left:1px solid var(--line)}
+.tick b{color:var(--text);font-weight:700}
+#head .st{margin-left:0}
+#fresh{color:var(--faint);font-size:11.5px;white-space:nowrap}
 .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);white-space:nowrap}
 .chip.amber{background:var(--warnSoft);border-color:transparent;color:var(--warn)}
 .live{display:inline-flex;align-items:center;gap:6px;color:var(--ok);font-weight:600;font-size:12.5px}
@@ -88,6 +122,16 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 #scene{position:absolute;inset:0;border-radius:var(--r);overflow:hidden}
 #scene canvas{display:block;width:100%;height:100%;touch-action:none}
 #labels{position:absolute;inset:0;pointer-events:none}
+/* esqueleto y estados de fallo del diorama (T20): un solo elemento, dos caras. Se pinta mientras
+   `S` es null (el escena 3D no tiene datos) y se quita cuando llega el estado. `#skel` es DOM/CSS: no
+   toca el canvas, no pinta frames, no añade temporizadores. `prefers-reduced-motion` ya apaga la animación. */
+#skel{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:10px;padding:18px;text-align:center;background:var(--panel2);border-radius:var(--r)}
+#skel .sk{width:min(420px,80%);height:14px;border-radius:8px;background:var(--line);animation:sh 1.4s ease-in-out infinite}
+@keyframes sh{0%,100%{opacity:.45}50%{opacity:1}}
+#skel p{margin:2px 0 0;color:var(--muted);font-size:13px;max-width:440px}
+#skel .btn{display:none}
+#skel.err .btn{display:inline-flex}
 .pill{position:absolute;transform:translate(-50%,0);pointer-events:auto;cursor:pointer;display:flex;align-items:center;gap:6px;
   background:var(--ink);color:var(--inkText);font-size:11.5px;font-weight:650;padding:4px 9px 4px 7px;border-radius:999px;white-space:nowrap;
   box-shadow:0 4px 14px rgba(0,0,0,.18);transition:transform .15s,opacity .2s}
@@ -239,8 +283,22 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
 @keyframes tin{from{transform:translateY(8px);opacity:0}}
 #rotate{position:fixed;inset:0;display:none;place-items:center;text-align:center;background:var(--bg);z-index:100;padding:24px}
 #rotate svg{margin-bottom:14px;animation:rot 2.4s ease-in-out infinite}
+#rotate h3{margin:0 0 6px}
+#rotate p{margin:0;color:var(--muted)}
 @keyframes rot{0%,30%{transform:rotate(0)}60%,100%{transform:rotate(-90deg)}}
-@media (orientation:portrait) and (max-width:900px){#rotate{display:grid}#stage{display:none}}
+/* Retrato: el MURO de «Gira el dispositivo» se quita. El aviso pasa a banda superior y `#stage`
+   sigue visible: el letterbox 16:9 queda como franja y el layout compacto (activado por el
+   ResizeObserver de `#stage`, <1150 px) deja oficinas, KPIs, cola, badge e inspector usables. */
+@media (orientation:portrait) and (max-width:900px){
+  #rotate{display:flex;inset:0 0 auto 0;bottom:auto;place-items:initial;text-align:left;align-items:center;
+    justify-content:center;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 14px}
+  #rotate>div{display:flex;align-items:center;gap:10px}
+  #rotate svg{margin:0;width:22px;height:22px;animation:none}
+  #rotate h3{font-size:13px;margin:0}
+  #rotate p{font-size:11.5px;margin:0}
+  #stage{top:calc(50% + 27px)}
+  #stage.compact #head{padding-top:4px}
+}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -272,13 +330,19 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
       <h1 id="title">Strata3060</h1>
       <span class="sub" id="subtitle">—</span>
       <span class="chip amber" id="contract" hidden></span>
+      <span class="chip amber" id="thr" hidden></span>
+      <span class="st" id="badge" hidden></span>
+      <span class="tick" id="tick" hidden></span>
       <span class="grow"></span>
       <span class="live" id="live">live</span>
+      <span class="sub mono" id="fresh"></span>
       <span class="sub mono" id="clock"></span>
     </header>
     <section id="view" class="card">
       <div id="scene"></div>
       <div id="labels"></div>
+      <div id="skel" aria-busy="true"><div class="sk"></div><div class="sk"></div><div class="sk"></div>
+        <p id="skmsg">Cargando oficina…</p><button class="btn pri" id="skRetry" type="button">Reintentar</button></div>
       <div class="float" style="left:14px;bottom:14px"><button class="btn" data-goto="campus">← Campus</button><button class="btn" data-goto="tablero">Tablero</button></div>
       <div class="legend" aria-label="Leyenda"><span><i class="led" style="background:#22c55e"></i>trabajando</span><span><i class="led" style="background:#ef4444"></i>bloqueado</span><span><i class="led" style="background:#3b82f6"></i>terminado</span><span><i class="led" style="background:#9ca3af"></i>en reposo</span><span><i class="led" style="background:#64748b"></i>estado desconocido</span></div>
       <div class="panelview" id="pv-metricas"></div>
@@ -309,7 +373,7 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
 
 <div id="modal"><div class="card" role="dialog" aria-modal="true"><h3 id="mt"></h3><p id="mp"></p><div id="mb"></div><div class="row"><button class="btn" id="mc">Cancelar</button><button class="btn pri" id="mo">Aceptar</button></div></div></div>
 <div id="toasts" aria-live="polite"></div>
-<div id="rotate"><div><svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg><h3 style="margin:0 0 6px">Gira el dispositivo</h3><p style="margin:0;color:var(--muted)">La oficina está diseñada en horizontal.</p></div></div>
+<div id="rotate"><div><svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg><h3>La oficina está diseñada en horizontal</h3><p>En vertical se ve estrecha, pero sigue usable: oficinas, KPIs, cola, estado e inspector están arriba.</p></div></div>
 
 <script type="module">
 import * as THREE from '/vendor/three.module.min.js';
@@ -351,9 +415,9 @@ const poseOf=st=>st==='working'?'type':st==='blocked'?'ask':st==='unknown'?'quer
 function avatarSVG(name,i){const L=lookOf(name,i);return`<svg class="av" viewBox="0 0 48 48" aria-hidden="true"><defs><radialGradient id="g${esc(name)}" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".55"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><circle cx="24" cy="24" r="24" fill="var(--panel)"/><path d="M11 47c0-9 5.5-14 13-14s13 5 13 14" fill="${L.shirt}"/><circle cx="24" cy="20" r="13" fill="${L.shirt}"/><circle cx="24" cy="20" r="13" fill="url(#g${esc(name)})"/><ellipse cx="19.5" cy="20" rx="3.2" ry="3.8" fill="#fff"/><ellipse cx="28.5" cy="20" rx="3.2" ry="3.8" fill="#fff"/><circle cx="20.2" cy="20.8" r="1.7" fill="#111827"/><circle cx="29.2" cy="20.8" r="1.7" fill="#111827"/>${L.glasses?'<g fill="none" stroke="#111827" stroke-width="1.3"><circle cx="19.5" cy="20" r="4.6"/><circle cx="28.5" cy="20" r="4.6"/></g>':''}</svg>`}
 
 /* ---------- estado global ---------- */
-let WS=null, STRATA_WS=null, S=null, OFFICES=[], sel=store.get('sel')||'opencode2', tab='inspector', view='oficina', to='claude', workerIdx={};
+let WS=null, STRATA_WS=null, S=null, OFFICES=[], sel=store.get('sel')||'opencode2', tab='inspector', view='oficina', to='claude', workerIdx={}, lastAt=null, FAIL=null;
 const OTHER=()=>WS&&STRATA_WS&&WS!==STRATA_WS;
-function agentList(){return S?S.agents:[]}
+function agentList(){return(S&&S.agents)||[]}   /* T20: un payload sin `agents` no revienta la UI: la lista vacia se declara, no se inventa */
 
 /* ======================================================================
    ESCENA 3D estilo arcilla: render bajo demanda, sombras suaves. La escena medida en Chromium
@@ -419,13 +483,16 @@ const scene3d=(()=>{
   const cssVars=()=>{const cs=getComputedStyle(document.documentElement);return n=>cs.getPropertyValue(n).trim()};
   function drawBoard(){const c=boardCanvas.getContext('2d'),w=1024,h=624,V=cssVars();
     c.fillStyle=V('--panel2');c.fillRect(0,0,w,h);
-    const cols=['EN COLA','EN CURSO','ESPERA OK','HECHO'];const T=(S&&S.tareas)||[];const cw=w/4;
-    cols.forEach((k,i)=>{c.fillStyle=V('--muted');c.font='700 26px Inter,system-ui,sans-serif';c.fillText(k,i*cw+22,44);
+    /* T17: las columnas de la pizarra son las del payload (`S.columnas`), no cuatro literales. El set
+       real de TAREAS.json son 5 columnas, así el ancho y el pósit se adaptan al número que viene. */
+    const cols=(S&&S.columnas)||['EN COLA','EN CURSO','ESPERA OK','HECHO','DESCARTADO'];const T=(S&&S.tareas)||[];const cw=w/cols.length;
+    const pw=Math.min(110,(cw-36)/2),s=pw/110;
+    cols.forEach((k,i)=>{c.fillStyle=V('--muted');c.font=`700 ${Math.min(26,cw/8)}px Inter,system-ui,sans-serif`;c.fillText(k,i*cw+22,44);
       c.strokeStyle=V('--line');c.lineWidth=3;if(i){c.beginPath();c.moveTo(i*cw,14);c.lineTo(i*cw,h-14);c.stroke()}
-      T.filter(t=>t.columna===k).slice(0,8).forEach((t,j)=>{const x=i*cw+18+(j%2)*118,y=70+Math.floor(j/2)*132;const L=lookOf(t.responsable,0);
-        c.save();c.translate(x+55,y+55);c.rotate(((j*7)%5-2)*.025);c.fillStyle='#fde68a';c.shadowColor='rgba(0,0,0,.18)';c.shadowBlur=8;c.shadowOffsetY=3;c.fillRect(-55,-55,110,110);c.shadowColor='transparent';
-        c.fillStyle=L.shirt;c.fillRect(-55,-55,110,12);c.fillStyle='#1f2937';c.font='800 30px Inter,system-ui,sans-serif';c.fillText(t.id,-45,-8);
-        c.font='500 17px Inter,system-ui,sans-serif';c.fillStyle='#374151';const words=(t.titulo||'').split(' ');let line='',yy=20;for(const wd of words){if(c.measureText(line+wd).width>92){c.fillText(line,-45,yy);line='';yy+=20;if(yy>48)break}line+=wd+' '}if(yy<=48)c.fillText(line,-45,yy);c.restore()})});
+      T.filter(t=>t.columna===k).slice(0,8).forEach((t,j)=>{const x=i*cw+18+(j%2)*(pw+8),y=70+Math.floor(j/2)*(pw+22);const L=lookOf(t.responsable,0);
+        c.save();c.translate(x+pw/2,y+pw/2);c.rotate(((j*7)%5-2)*.025);c.fillStyle='#fde68a';c.shadowColor='rgba(0,0,0,.18)';c.shadowBlur=8;c.shadowOffsetY=3;c.fillRect(-pw/2,-pw/2,pw,pw);c.shadowColor='transparent';
+        c.fillStyle=L.shirt;c.fillRect(-pw/2,-pw/2,pw,12*s);c.fillStyle='#1f2937';c.font=`800 ${30*s}px Inter,system-ui,sans-serif`;c.fillText(t.id,-45*s,-8*s);
+        c.font=`500 ${17*s}px Inter,system-ui,sans-serif`;c.fillStyle='#374151';const words=(t.titulo||'').split(' ');let line='',yy=20*s;for(const wd of words){if(c.measureText(line+wd).width>92*s){c.fillText(line,-45*s,yy);line='';yy+=20*s;if(yy>48*s)break}line+=wd+' '}if(yy<=48*s)c.fillText(line,-45*s,yy);c.restore()})});
     boardTex.needsUpdate=true}
   function buildRoom(){
     if(room)world.remove(room);room=new THREE.Group();world.add(room);
@@ -604,7 +671,7 @@ const scene3d=(()=>{
     u.walk={x0:p.position.x,z0:p.position.z,tg,mode,t0:performance.now(),dur:Math.max(900,Math.min(3200,dist/1.3*1000)),ry:Math.atan2(dx,dz)};request()}
   function sync(agents){
     const names=new Set(agents.map(a=>a.name));
-    for(const n of Object.keys(desks))if(!names.has(n)){world.remove(desks[n]);delete desks[n];world.remove(people[n]);delete people[n];delete seatOf[n]}
+    for(const n of Object.keys(desks))if(!names.has(n)){world.remove(desks[n]);delete desks[n];world.remove(people[n]);delete people[n];delete seatOf[n];dropPill(n)}   /* T15: la pill de un agente que se va se quita en el cambio de estado, nunca en `tick` */
     let wi=0;
     for(const a of agents){
       const isW=OTHER()||!LOOK[a.name];const idx=isW?wi++:0;const L={...lookOf(a.name,idx),role:a.role||lookOf(a.name,idx).role};
@@ -703,12 +770,28 @@ const scene3d=(()=>{
   pillBox.id='pills';bub.className='bub';bub.hidden=true;
   bub.onclick=()=>{if(bub.dataset.a)select(bub.dataset.a)};   /* la misma ruta de selección de las pills */
   lab.append(pillBox,bub);
+  /* T15: las pills son ELEMENTOS PERSISTENTES, hijos de `#pills`, con la misma regla de T12: se crean
+   UNA vez por agente y su `onclick` se enlaza en la creación. `placeLabels` solo mueve coordenadas,
+   enciende el LED y cambia el resaltado, y solo cuando esos valores cambian. No hay escritura de
+   `innerHTML` dentro de `tick()`: el bucle de render no reconstruye DOM ni re-enlaza. */
+  const pills=new Map();   /* nombre -> {el,led,nm,em,st,role,x,y,sel,on} */
+  function pillEl(name){
+    const had=pills.get(name);if(had)return had;
+    const el=document.createElement('div');el.className='pill';el.dataset.a=name;
+    const led=document.createElement('i');led.className='led';
+    const nm=document.createElement('span');nm.textContent=name;
+    const em=document.createElement('em');
+    el.append(led,nm,em);
+    el.onclick=()=>select(name);   /* ENLACE UNA SOLA VEZ, en la creación */
+    pillBox.append(el);
+    const p={el,led,nm,em,st:'',role:'',x:'',y:'',sel:false,on:true};pills.set(name,p);return p}
+  function dropPill(name){const p=pills.get(name);if(!p)return;p.el.remove();pills.delete(name)}
   /* Regla de selección, determinista y documentada: entre los agentes cuyo `statusOf` es `blocked`
    se elige el de MAYOR `state_change_seq`, o sea el bloqueo más reciente. Un agente cuyo seq no viene
    (Herdr no lo trae → null) queda detrás de los que sí lo traen. Los empates se resuelven por
    `pane_id` y luego por nombre, así la elección no depende del orden de `agent list`. */
   const seqOf=a=>Number.isFinite(a.state_change_seq)?+a.state_change_seq:-Infinity;
-  const blockedOf=()=>(S?S.agents:[]).filter(a=>statusOf(a)==='blocked');
+  const blockedOf=()=>(S?(S.agents||[]):[]).filter(a=>statusOf(a)==='blocked');
   function pickBlocked(){const b=blockedOf();if(!b.length)return null;
     return b.slice().sort((x,y)=>seqOf(y)-seqOf(x)||String(x.pane_id||'').localeCompare(String(y.pane_id||''))||String(x.name).localeCompare(String(y.name)))[0]}
   function headPoint(n){const p=people[n];if(!p)return null;p.userData.head.getWorldPosition(v);v.y+=.34;v.project(cam);
@@ -732,13 +815,21 @@ const scene3d=(()=>{
   function placeLabels(){
     if(!S)return;
     const items=[];
-    for(const a of S.agents){const p=people[a.name];if(!p||a.name!==hovered)continue;
+    for(const a of(S.agents||[])){const p=people[a.name];if(!p||a.name!==hovered)continue;
       const it=headPoint(a.name);if(it)items.push({a,x:it.x,y:it.y})}
     items.sort((p,q)=>q.y-p.y);
     for(let i=0;i<items.length;i++)for(let j=0;j<i;j++){const p=items[i],q=items[j];if(Math.abs(p.x-q.x)<140&&Math.abs(p.y-q.y)<26)p.y=q.y-26}
-    pillBox.innerHTML=items.map(({a,x,y})=>{const st=statusOf(a);const L=lookOf(a.name,workerIdx[a.name]||0);
-      return`<div class="pill${a.name===sel?' sel':''}" data-a="${esc(a.name)}" style="left:${x}px;top:${y}px"><i class="led" style="background:${LED[st]}"></i>${esc(a.name)} <em>${esc(L.role)}</em></div>`}).join('');
-    pillBox.querySelectorAll('[data-a]').forEach(el=>el.onclick=()=>select(el.dataset.a));
+    const live=new Set();
+    for(const{a,x,y}of items){const p=pillEl(a.name);live.add(a.name);
+      const st=statusOf(a),role=lookOf(a.name,workerIdx[a.name]||0).role,isSel=a.name===sel;
+      if(p.st!==st){p.st=st;p.led.style.background=LED[st]}      /* el LED se re-pinta solo si cambia */
+      if(p.role!==role){p.role=role;p.em.textContent=role}
+      if(p.sel!==isSel){p.sel=isSel;p.el.classList.toggle('sel',isSel)}
+      const l=x+'px',t=y+'px';
+      if(p.x!==l){p.x=l;p.el.style.left=l}                        /* coordenadas con guarda de igualdad */
+      if(p.y!==t){p.y=t;p.el.style.top=t}
+      if(!p.on){p.on=true;p.el.hidden=false}}
+    for(const[n,p]of pills)if(!live.has(n)&&p.on){p.on=false;p.el.hidden=true}   /* fuera de la vista: se oculta, no se reconstruye */
     moveBubble();   /* coordenadas nada más: el contenido se escribió en sync() */
   }
 
@@ -755,7 +846,7 @@ const scene3d=(()=>{
     if(room){world.remove(room);disposeOwned(room);room=null}
     for(const k in M){M[k].dispose();shared.delete(M[k]);delete M[k]}
     buildRoom();
-    if(S)sync(S.agents);else{drawScreen();drawBoard()}
+    if(S)sync(S.agents||[]);else{drawScreen();drawBoard()}
     resize()}
   applyTheme();
   return{sync,applyTheme,request,resize,drawScreen};
@@ -769,26 +860,79 @@ function waitingClaude(){return(S?.tareas||[]).filter(t=>t.columna==='ESPERA OK'
 function tasksOf(name){const T=S?.tareas||[];if(name==='claude')return waitingClaude();
   return T.filter(t=>(t.columna==='EN CURSO'||t.columna==='ESPERA OK')&&(t.responsable===name||(name==='opencode2'&&/^obrero/.test(t.responsable||''))))}
 
+/* T17: los datos que viajan y antes no se mostraban. Cada campo se lee con acceso opcional; si no
+   viene, se DICE en la propia línea, nunca se inventa. `S.ticker` son filas reales de CHANGELOG
+   (`server.py:248-250`), `S.interval` es el quantum del ciclo (`server.py:255`), `S.bench` es la marca
+   `/tmp/strata-bench.lock`, `S.updated` es el sello UTC del estado (`server.py:253`), `S.events` es la
+   salud del canal de T9, `S.ws`/`S.maquina` solo vienen con las oficinas remotas (`server.py:885`). */
+const TICKSEP=/^COLA |^upstream: |^vigia: /;
+function renderTick(){
+  const t=S.ticker||[],tk=$('#tick');
+  tk.hidden=false;
+  if(!t.length){tk.textContent='ticker: el estado no trae ticker';tk.title='';return}
+  const ch=t.filter(x=>!TICKSEP.test(x));
+  const last=ch[ch.length-1];
+  tk.textContent=last?last:'ticker: solo contadores, sin filas de CHANGELOG';
+  tk.title=t.join('\n');   /* la franja muestra una fila; el `title` lleva todas */
+}
+function renderThrottle(){
+  const c=$('#thr'),b=S.bench,i=S.interval;
+  if(b==null&&i==null){c.hidden=false;c.textContent='ralentización: el estado no lo dice';return}
+  if(b){c.hidden=false;c.textContent=`ralentizado para medir · ${i!=null?i+' s':'intervalo no declarado'}`}   /* BENCH: la oficina se ralentiza a propósito */
+  else c.hidden=true;   /* 5 s: no hay nada que avisar */
+}
+function renderFresh(){
+  const f=$('#fresh'),u=S.updated;
+  const age=lastAt?rel(lastAt/1000):'sin recibir';
+  const wv=S.ws?' · ws '+S.ws:' · ws no declarado';
+  const mc=S.maquina?' · '+S.maquina:'';
+  f.textContent=(u?'estado '+u:'estado sin sello')+` · ${age}${wv}${mc}`;
+}
+function renderLive(){
+  const l=$('#live'),e=S.events;
+  if(e==='live'){l.className='live';l.textContent='live'}
+  else if(e==='polling'){l.className='live off';l.textContent='polling'+(S.interval!=null?' · '+S.interval+' s':' · intervalo no declarado')}
+  else if(e==='unavailable'){l.className='live off';l.textContent='sin canal de eventos'}
+  else{l.className='live'+(S.herdr?'':' off');l.textContent='canal no declarado'+(S.herdr?' · herdr responde':'')}
+}
+function renderBadge(){   /* el badge del estado también en la cabecera: legible sin abrir el cajón compacto */
+  const b=$('#badge'),a=agentList().find(x=>x.name===sel)||agentList()[0];
+  if(!a){b.hidden=true;return}
+  const st=statusOf(a);b.hidden=false;b.className='st '+st;b.textContent=STTXT[st];
+}
 function renderHeader(){
   const o=OFFICES.find(x=>x.id===WS);$('#title').textContent=o?o.nombre:'Strata3060';
-  const n=S.agents.length,cur=(S.tareas||[]).filter(t=>t.columna==='EN CURSO').length;
-  $('#subtitle').textContent=`${n} agentes · ${cur} tareas en curso`;
-  const yo=(S.agents.find(a=>a.name==='opencode2')||{}).activity||'';
+  const ag=S.agents||[],n=ag.length,cur=(S.tareas||[]).filter(t=>t.columna==='EN CURSO').length;
+  const mc=S.maquina||o?.maquina||null;
+  $('#subtitle').textContent=`${n} agentes · ${cur} tareas en curso · ${S.ws?'ws '+S.ws:'ws no declarado'}${mc?' · '+mc:''}`;
+  const yo=(ag.find(a=>a.name==='opencode2')||{}).activity||'';
   const m=yo.match(/C\d+[a-z]?/i);const t=m&&(S.tareas||[]).find(x=>x.id===m[0].toUpperCase());
   const c=$('#contract');if(m){c.hidden=false;c.textContent='◆ '+m[0].toUpperCase()+(t?' · '+t.titulo:'')}else c.hidden=true;
-  $('#live').className='live'+(S.herdr?'':' off');$('#live').textContent=S.herdr?'live':'herdr no responde';
+  renderThrottle();renderTick();renderLive();renderFresh();renderBadge();
+}
+/* T17: un número de B1/P3 nunca se lee sin su fuente y su candidato. `fuente` vive en
+   `METRICAS.json.base.fuente` (captura: "orden 7"), `candidato` trae `nombre`, `B1`, `brazo_def_B1` e
+   `IC`. Si alguna clave no viene, la línea lo dice. */
+function srcLine(m){
+  const p=m.produccion||{},b=m.base||{},cd=m.candidato||{};
+  const f=m.fuente||b.fuente||p.fuente;
+  const c=cd.nombre?`candidato ${cd.nombre} · B1 ${fmt(cd.B1)} · brazo def ${fmt(cd.brazo_def_B1)}`:'candidato: ninguno en prueba';
+  return`<div class="src" title="fuente y candidato del número">${f?'fuente '+f:'fuente no declarada'} · ${cd.nombre?c:'candidato no declarado'}</div>`;
 }
 function renderSide(){
+  if(!S)return;   /* T20: sin estado no se pintan KPIs fantasma (`setOffice` llama aquí antes del primer estado) */
   const p=S.metrics?.produccion||{},b=S.metrics?.base||{};
   const k=(lab,val,unit,d)=>`<div class="kpi"><small>${lab}</small><b>${fmt(val)}</b> <small style="display:inline">${unit}</small><br><i class="${d>0.05?'up':d<-0.05?'down':'flat'}">${d==null?'—':(d>=0?'+':'')+fmt(d)+' %'}</i></div>`;
-  $('#sideKpi').innerHTML=k('Escritura B1',p.B1,'t/s',p.B1&&b.B1?(p.B1/b.B1-1)*100:null)+k('Lectura P3',p.P3_s,'s',p.P3_s&&b.P3_s?(b.P3_s/p.P3_s-1)*100:null);
+  $('#sideKpi').innerHTML=k('Escritura B1',p.B1,'t/s',p.B1&&b.B1?(p.B1/b.B1-1)*100:null)+k('Lectura P3',p.P3_s,'s',p.P3_s&&b.P3_s?(b.P3_s/p.P3_s-1)*100:null)+srcLine(S.metrics||{});
   const q=S.queue||{done:0,total:0};$('#qtxt').textContent=`${q.done} de ${q.total} contratos cerrados`;$('#qbar').style.width=(q.total?q.done/q.total*100:0)+'%';
   $('#offices').innerHTML=OFFICES.map(o=>
     `<div class="offw"><button class="off${o.id===WS?' on':''}" data-off="${esc(o.id)}"><span class="ic">${o.strata?ICB:ICF}</span><span><b>${esc(o.nombre)}</b><small>${o.agentes.length} agentes${o.strata?' · '+o.tareas+' tareas':''}${o.maquina&&o.maquina!=='bazzite'?`<span class="mtag">${esc(o.maquina)}</span>`:''}</small></span>${o.needs?'<i class="dot"></i>':''}</button>${o.strata?'':`<button class="del" data-del="${esc(o.id)}" aria-label="Borrar ${esc(o.nombre)}" title="Borrar oficina">${ICX}</button>`}</div>`).join('');
   $$('#offices [data-off]').forEach(b=>b.onclick=()=>setOffice(b.dataset.off));$$('[data-del]').forEach(b=>b.onclick=e=>{e.stopPropagation();delOffice(b.dataset.del)});
 }
 function renderInspector(){
-  const pane=$('#ipane');const a=S.agents.find(x=>x.name===sel)||S.agents[0];if(!a){pane.innerHTML='<div class="empty">Esta oficina aún no tiene agentes.</div>';return}sel=a.name;
+  const pane=$('#ipane');
+  if(!S){pane.innerHTML='<div class="fail">'+(FAIL?'El estado no llegó: '+esc(FAIL):'Cargando el estado de la oficina…')+'<button class="btn pri" data-retry="Estado" type="button">Reintentar</button></div>';bindRetry();return}   /* T20: sin estado hay frase y boton, no un panel vacio */
+  const a=(S.agents||[]).find(x=>x.name===sel)||(S.agents||[])[0];if(!a){pane.innerHTML='<div class="empty">Esta oficina aún no tiene agentes.</div>';return}sel=a.name;
   if(tab==='salida'){loadLog(a.name);return}
   if(tab==='hilo'){loadHilo(a.name);return}
   const st=statusOf(a);const stTxt=STTXT[st];   /* mismas palabras que ACTS en server.py:198 (T2) */
@@ -813,13 +957,25 @@ function renderInspector(){
   pane.querySelectorAll('[data-ok]').forEach(b=>b.onclick=()=>confirmModal('Aprobar '+b.dataset.ok,'Se enviará a claude: “OK a '+b.dataset.ok+'”. claude lo comunicará a quien corresponda.',()=>send('claude','viaclaude','OK a '+b.dataset.ok)));
   pane.querySelectorAll('[data-rev]').forEach(b=>b.onclick=()=>{to='claude';updateTo();$('#msg').value='Revisa conmigo '+b.dataset.rev+': ';$('#msg').focus()});
 }
+/* T20: ningun `catch` se traga el fallo. `runTab()` relanza la MISMA lectura de la pestana actual
+   desde el boton de reintento; el temporizador de 5 s que ya existia (`logTimer`) sigue refrescando.
+   El boton se enlaza una vez por pintado, con `bindRetry`. */
+function runTab(){if(tab==='salida'&&sel)loadLog(sel);else if(tab==='hilo'&&sel)loadHilo(sel)}
+function bindRetry(){const el=$('#ipane [data-retry]');if(el)el.onclick=runTab}
+const RETRY='<button class="btn pri" data-retry="pestan" type="button">Reintentar</button>';
 async function loadLog(n){$('#ipane').innerHTML='<div class="empty">Cargando terminal…</div>';
   try{const d=await api('/api/log?agent='+encodeURIComponent(n));if(sel!==n||tab!=='salida')return;
-    $('#ipane').innerHTML=d.error?`<div class="empty">${esc(d.error)}</div>`:`<pre class="log mono">${esc(d.lines.join('\n'))}</pre>`;const p=$('#ipane');p.scrollTop=p.scrollHeight}catch(_){}}
+    const L=d.lines||[];
+    $('#ipane').innerHTML=d.error?`<div class="fail">${esc(d.error)}${RETRY}`:L.length?`<pre class="log mono">${esc(L.join('\n'))}</pre>`:'<div class="empty">El panel no tiene salida registrada</div>';const p=$('#ipane');p.scrollTop=p.scrollHeight;bindRetry()}
+  catch(e){if(sel!==n||tab!=='salida')return;
+    $('#ipane').innerHTML=`<div class="fail">No se pudo leer la salida de ${esc(n)}: ${esc(e.message||'sin respuesta')}${RETRY}`;bindRetry()}}
 async function loadHilo(n){$('#ipane').innerHTML='<div class="empty">Cargando…</div>';
   try{const d=await api('/api/hilo?agent='+encodeURIComponent(n));if(sel!==n||tab!=='hilo')return;
-    const m=[...(d.envios||[]).map(x=>`<div class="m"><small>enviado desde la oficina</small>${esc(x)}</div>`),...(d.menciones||[]).map(x=>`<div class="m"><small>CHANGELOG</small>${esc(x)}</div>`)];
-    $('#ipane').innerHTML=`<div class="msgs">${m.join('')||'<div class="empty">Sin mensajes todavía</div>'}</div>`}catch(_){}}
+    const m=[...(d.envios||[]).map(x=>`<div class="m"><small>enviado desde la oficina</small>${esc(x)}</div>`),...(d.menciones||[]).map(x=>`<div class="m"><small>CHANGELOG</small>${esc(x)}</div>`)],
+      sc=d.scope?`<div class="empty">${esc(d.scope)}${d.maquina?' · '+esc(d.maquina):''}</div>`:'';
+    $('#ipane').innerHTML=`<div class="msgs">${m.join('')||sc||'<div class="empty">Sin mensajes todavía</div>'}</div>`}
+  catch(e){if(sel!==n||tab!=='hilo')return;
+    $('#ipane').innerHTML=`<div class="fail">No se pudo leer el hilo de ${esc(n)}: ${esc(e.message||'sin respuesta')}${RETRY}`;bindRetry()}}
 let logTimer=setInterval(()=>{if(tab==='salida'&&sel)loadLog(sel);if($('#chat').classList.contains('open')&&sel)loadThread(sel,true)},5000);
 /* ficha + chat expandido por CLI */
 function kindOf(n){return n==='claude'?'Claude Code':n==='tester'?'pi':n==='explorer'?'agy':n==='suplente'?'agy':n.startsWith('obrero')?'obrero':'opencode'}
@@ -833,14 +989,16 @@ async function loadThread(n,quiet){try{
   const theirs=(l.lines||[]).slice(-30).map(x=>`<div class="msg them"><small>${esc(n)} · ${esc(k)}</small><pre>${esc(x)}</pre></div>`).join('');
   $('#thread').innerHTML=ours+theirs||'<div class="empty">Sin mensajes todavía. Escríbele abajo.</div>';
   if(!quiet)$('#thread').scrollTop=$('#thread').scrollHeight;
-}catch(_){if(!quiet)$('#thread').innerHTML='<div class="empty">herdr no responde</div>'}}
+}catch(e){if(sel!==n||!$('#chat').classList.contains('open'))return;   /* T20: el fallo del chat se lee, no se traga */
+  if(!quiet){$('#thread').innerHTML=`<div class="fail">No se pudo leer el chat de ${esc(n)}: ${esc(e.message||'sin respuesta')}<button class="btn pri" data-retry="chat" type="button">Reintentar</button></div>`;const b=$('#thread [data-retry]');if(b)b.onclick=()=>loadThread(n)}}}
 
 function delta(p,b,lower){if(p==null||b==null)return null;return lower?(b/p-1)*100:(p/b-1)*100}
 function spark(vals){if(vals.length<2)return'<svg></svg>';const lo=Math.min(...vals),hi=Math.max(...vals),r=hi-lo||1;
   const pts=vals.map((v,i)=>`${(i/(vals.length-1)*100).toFixed(1)},${(38-(v-lo)/r*32).toFixed(1)}`).join(' ');
   return`<svg viewBox="0 0 100 42" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`}
 function renderMetrics(){
-  const m=S.metrics||{},p=m.produccion||{},b=m.base||{},h=m.historial||[];
+  const m=S.metrics||{},p=m.produccion||{},b=m.base||{},h=m.historial||[],tk=S.ticker||[];
+  const fuente=m.fuente||b.fuente||p.fuente;   /* T17: `fuente` vive en `base.fuente` (captura: "orden 7") */
   const card=(k,lab,unit,lower)=>{const d=delta(p[k],b[k],lower);const vals=h.map(x=>x[k]).filter(v=>v!=null);
     return`<div class="card mcard"><small>${lab}</small><div class="v">${fmt(p[k])}<span>${unit}</span></div><div class="d ${d>0.05?'up':d<-0.05?'down':'flat'}">${d==null?'—':(d>=0?'+':'')+fmt(d)+' % vs base'} <span style="color:var(--muted);font-weight:500">· base ${fmt(b[k])}</span></div>${spark(vals)}</div>`};
   const goal=(lab,cur,base,target,lower,unit)=>{const pr=cur==null?0:Math.max(0,Math.min(1,lower?(base-cur)/(base-target):(cur-base)/(target-base)));
@@ -855,15 +1013,24 @@ function renderMetrics(){
     <div class="grid g3" style="margin-top:12px">
       ${goal('Misión: escritura a 60 t/s',p.B1,b.B1,60,false,'t/s')}
       ${goal('Misión: leer 32K en 10 s',p.P3_s,b.P3_s,10,true,'s')}
-      <div class="card goal"><b>Candidato en prueba</b><p style="margin:8px 0 0;color:var(--muted)">${esc(m.candidato?.nombre||'ninguno')} · ${esc(m.candidato?.IC||'')}</p></div>
+      <div class="card goal"><b>Candidato en prueba</b><p style="margin:8px 0 0;color:var(--muted)">${m.candidato?`${esc(m.candidato.nombre||'sin nombre')} · B1 ${fmt(m.candidato.B1)} · brazo def ${fmt(m.candidato.brazo_def_B1)} · ${esc(m.candidato.IC||'sin IC')}`:'el estado no trae candidato'}</p>
+        <p style="margin:8px 0 0;color:var(--muted)">${fuente?`fuente ${esc(fuente)}`:'fuente no declarada en METRICAS.json'}</p></div>
     </div>
     <div class="card boss" style="margin-top:12px"><div><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c-4 0-7 3-7 7v8l2-2 2 2 3-2 3 2 2-2 2 2v-8c0-4-3-7-7-7z"/><circle cx="9.5" cy="10" r="1.3" fill="#ef4444"/><circle cx="14.5" cy="10" r="1.3" fill="#ef4444"/></svg></div><div class="hp"><b>${medido?'Jefe actual:':'Objetivo fijo, no medido:'} ${esc(boss.nombre)}</b><div class="bar"><i style="width:${(hp*100).toFixed(0)}%"></i></div><small style="color:var(--muted)">${medido?`${fmt(boss.ms)} ms perdidos por paso · suelo físico ${fmt(boss.suelo)} ms. Cada mejora adoptada le quita vida.`:`Punto de partida ${fmt(boss.ms)} ms · suelo físico ${fmt(boss.suelo)} ms. Es un objetivo que fija la oficina: METRICAS.json no trae \`jefe\`, así que no es una métrica medida.`}</small></div></div>
-    <div class="card" style="margin-top:12px;padding:16px"><b>Historial</b><div style="margin-top:8px">${h.slice(-8).reverse().map(x=>`<div style="display:flex;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-size:12.5px"><span class="mono" style="color:var(--muted);flex:none">${esc(x.fecha)}</span><span style="flex:1">${esc(x.cambio)}</span><b>${x.B1!=null?fmt(x.B1)+' t/s':''}</b></div>`).join('')}</div></div>`;
+    <div class="card" style="margin-top:12px;padding:16px"><b>Historial</b><div style="margin-top:8px">${h.slice(-8).reverse().map(x=>`<div style="display:flex;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-size:12.5px"><span class="mono" style="color:var(--muted);flex:none">${esc(x.fecha)}</span><span style="flex:1">${esc(x.cambio)}</span><b>${x.B1!=null?fmt(x.B1)+' t/s':''}</b></div>`).join('')}</div></div>
+    <div class="card" style="margin-top:12px;padding:16px"><b>Ticker del estado</b><div style="margin-top:8px">${tk.length?tk.map(x=>`<div class="mono" style="padding:7px 0;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)">${esc(x)}</div>`).join(''):'<div style="padding:7px 0;color:var(--muted)">el estado no trae ticker</div>'}</div></div>`;
 }
+/* T17: las columnas del tablero son las del payload. `TAREAS.json` trae `columnas` (captura verbatim:
+   EN COLA, EN CURSO, ESPERA OK, HECHO, DESCARTADO) y `server.py` lo inyecta en `S.columnas`. Si la
+   clave no viene, se pintan las columnas que aparecen en las tareas y la nota lo dice, sin callar. */
+const COLS=['EN COLA','EN CURSO','ESPERA OK','HECHO','DESCARTADO'];
+function colsOf(){const c=S&&(S.columnas||S.tareas?.columnas);return Array.isArray(c)&&c.length?c:COLS}
 function renderBoard(){
-  const cols=['EN COLA','EN CURSO','ESPERA OK','HECHO','DESCARTADO'];const T=S.tareas||[];
-  $('#pv-tablero').innerHTML=`<div class="kan">${cols.map(c=>{const ts=T.filter(t=>t.columna===c);return`<div class="col"><h4>${c}<span>${ts.length}</span></h4>${ts.map(t=>{const L=lookOf(t.responsable,0);
-    return`<div class="tc"><b>${esc(t.id)} · ${esc(t.titulo)}</b><p>${esc(t.nota||'')}</p><div class="who2"><i class="led" style="background:${L.shirt}"></i>${esc(t.responsable||'—')}${t.aprobador?' · aprueba '+esc(t.aprobador):''}</div></div>`}).join('')}</div>`}).join('')}</div>`;
+  const cols=colsOf(),T=S.tareas||[];
+  const note=S.columnas?'columnas: las del payload (TAREAS.columnas)':'columnas: el payload no trae `columnas`; la oficina fija 5';
+  $('#pv-tablero').innerHTML=`<div class="kan" style="grid-template-columns:repeat(${cols.length},minmax(0,1fr))">${cols.map(c=>{const ts=T.filter(t=>t.columna===c);return`<div class="col"><h4>${c}<span>${ts.length}</span></h4>${ts.map(t=>{const L=lookOf(t.responsable,0);
+    return`<div class="tc"><b>${esc(t.id)} · ${esc(t.titulo)}</b><p>${esc(t.nota||'')}</p><div class="who2"><i class="led" style="background:${L.shirt}"></i>${esc(t.responsable||'—')}${t.aprobador?' · aprueba '+esc(t.aprobador):''}</div></div>`}).join('')}</div>`}).join('')}</div>
+    <div class="empty" style="margin-top:10px">${esc(note)}</div>`;
 }
 function renderCampus(){
   const offs=OFFICES;
@@ -872,8 +1039,28 @@ function renderCampus(){
   $('#newOff2').onclick=newOffice;
   $$('#pv-campus [data-off]').forEach(b=>b.onclick=()=>{setOffice(b.dataset.off);setView('oficina')});
 }
-function renderAll(){if(!S)return;renderHeader();renderSide();renderInspector();   /* rama idéntica: se llama igual en los dos casos */
+function renderAll(){
+  if(!S){renderEmpty();return}   /* T20: sin estado la escena NO queda vacia en silencio */
+  const sk=$('#skel');sk.hidden=true;sk.classList.remove('err');
+  renderHeader();renderSide();renderInspector();   /* rama identica: se llama igual en los dos casos */
   if(view==='metricas')renderMetrics();if(view==='tablero')renderBoard();if(view==='campus')renderCampus();renderMenu();updateTo()}
+
+/* T20: el esqueleto cubre el diorama mientras `S` es null; el fallo se pinta con frase y boton de
+   reintento. No hay temporizador nuevo: el sondeo de respaldo de T27 (5 s) reintenta solo, y el boton
+   relanza la MISMA ruta de `loadState`. */
+function renderEmpty(){
+  const sk=$('#skel');sk.hidden=false;sk.classList.toggle('err',!!FAIL);sk.setAttribute('aria-busy',FAIL?'false':'true');
+  $('#skRetry').hidden=!FAIL;   /* sin fallo no hay boton: es una carga en curso, no un error */
+  $('#skmsg').textContent=FAIL?'No se pudo leer el estado: '+FAIL:'Cargando oficina…';
+  renderInspector();   /* la misma frase, con boton, en el panel del inspector */
+}
+function stateFail(msg){   /* T20: el fallo se declara; si habia estado, se conserva y envejece a la vista */
+  FAIL=msg;$('#live').className='live off';$('#live').textContent='estado no llegó';
+  renderAll()}
+function loadState(){   /* T20: primera carga y reintento, la MISMA ruta, con fallo explicito */
+  $('#live').className='live off';$('#live').textContent='cargando estado…';
+  return api(urlState(WS)).then(st=>{if(st.ws&&st.ws!==WS)return;apply(st,true);startPoll()})
+    .catch(e=>stateFail(e.message||'sin respuesta'))}
 
 /* vistas */
 function setView(v){view=v;$$('.rb[data-view]').forEach(b=>b.classList.toggle('on',b.dataset.view===v));
@@ -892,7 +1079,7 @@ function renderMenu(){$('#menu').innerHTML=agentList().map(a=>{const st=statusOf
   return`<button type="button" data-to="${esc(a.name)}" class="${a.name===to?'on':''}"><i class="led" style="background:${LED[st]}"></i>@${esc(a.name)}<span class="st ${st}">${esc(STTXT[st])}</span><small>${a.name==='claude'?'a la cola':'directo'}</small></button>`}).join('');
   $$('#menu [data-to]').forEach(b=>b.onclick=()=>{to=b.dataset.to;updateTo();$('#menu').classList.remove('open');$('#msg').focus()})}
 function updateTo(){const a=agentList().find(x=>x.name===to)||{name:to,status:'idle'};$('#to span').textContent='@'+to;$('#to .led').style.background=LED[statusOf(a)];
-  $('#msg').placeholder=to==='claude'?'Escribe una tarea… claude la convierte en contrato y la pone en la cola':`Mensaje directo a ${to} (lo recibe como orden de Adrián)`}
+  $('#msg').placeholder=to==='claude'?'Escribe una tarea… claude la convierte en contrato y la pone en la cola':`Mensaje directo a ${to} (lo recibe como orden de Adrián)`;renderBadge()}
 $('#to').onclick=e=>{e.stopPropagation();$('#menu').classList.toggle('open')};
 document.addEventListener('click',()=>$('#menu').classList.remove('open'));
 $('#chat').onsubmit=e=>{e.preventDefault();const t=$('#msg').value.trim();if(!t)return;
@@ -969,27 +1156,31 @@ new ResizeObserver(()=>$('#stage').classList.toggle('compact',$('#stage').client
 /* datos: SSE confinado a la oficina elegida (T27) y respaldo por sondeo solo sin canal `live` */
 let wsTimer=null, ES=null, gen=0;
 const urlState=id=>'/api/state'+(OTHER()?'?ws='+encodeURIComponent(id):'');
-function startPoll(){   /* T27: el sondeo de 5 s es RESPALDO: solo cuando `events` no es `live` (clave de T9) */
+function startPoll(){   /* T27: el sondeo de 5 s es RESPALDO: solo cuando `events` no es `live` (clave de T9).
+   T20: el mismo sondeo es el reintento automatico; el fallo se declara, no se traga. */
   if(wsTimer){clearInterval(wsTimer);wsTimer=null}
   if(S&&S.events==='live')return;
-  const go=()=>api(urlState(WS)).then(st=>{if(st.ws&&st.ws!==WS)return;apply(st,true)}).catch(()=>{});
+  const go=()=>api(urlState(WS)).then(st=>{if(st.ws&&st.ws!==WS)return;apply(st,true)}).catch(e=>stateFail(e.message||'sin respuesta'));
   wsTimer=setInterval(go,5000)}
-function setOffice(id){if(!id)return;WS=id;clearInterval(wsTimer);wsTimer=null;sel=null;$('#stage').classList.toggle('other',!!OTHER());to=OTHER()?'':'claude';
-  api(urlState(id)).then(st=>{apply(st,true);startPoll()}).catch(()=>{});   /* carga inicial, la misma de hoy */
+function setOffice(id){if(!id)return;WS=id;clearInterval(wsTimer);wsTimer=null;sel=null;FAIL=null;$('#stage').classList.toggle('other',!!OTHER());to=OTHER()?'':'claude';
+  loadState();   /* T20: la carga inicial de la oficina lleva el fallo explicito y el reintento */
   connect();renderSide()}
-function apply(st,force){if(!force&&st.ws&&st.ws!==WS)return;   /* T27: el stream es de la oficina que se pidio; un frame de otra se descarta */
-  const prevW=JSON.stringify(S?.agents?.map(a=>[a.name,a.status,a.activity]));S=st;
+function apply(st,force){
+  if(st&&st.error){stateFail(st.error);return}   /* T8: `state_for` responde 400/404 con `error`: eso no es un estado */
+  if(!force&&st.ws&&st.ws!==WS)return;   /* T27: el stream es de la oficina que se pidio; un frame de otra se descarta */
+  const prevW=JSON.stringify(S?.agents?.map(a=>[a.name,a.status,a.activity]));S=st;lastAt=Date.now();FAIL=null;
   let wi=0;for(const a of S.agents)if(OTHER()||!LOOK[a.name])workerIdx[a.name]=wi++;
-  if(OTHER()&&!S.agents.find(a=>a.name===to))to=(S.agents.find(a=>/arquit/i.test(a.role||''))||S.agents[0]||{name:''}).name;
-  if(!sel||!S.agents.find(a=>a.name===sel))sel=S.agents[0]?.name||null;
-  scene3d.sync(S.agents);renderAll();if(prevW!==JSON.stringify(S.agents.map(a=>[a.name,a.status,a.activity])))scene3d.request();
+  if(OTHER()&&!(S.agents||[]).find(a=>a.name===to))to=((S.agents||[]).find(a=>/arquit/i.test(a.role||''))||(S.agents||[])[0]||{name:''}).name;
+  if(!sel||!(S.agents||[]).find(a=>a.name===sel))sel=(S.agents||[])[0]?.name||null;
+  scene3d.sync(S.agents||[]);renderAll();if(prevW!==JSON.stringify((S.agents||[]).map(a=>[a.name,a.status,a.activity])))scene3d.request();
   startPoll()}
-async function loadOffices(){try{const r=await api('/api/offices');OFFICES=r.offices||[];STRATA_WS=r.strata;MACHS=r.maquinas||MACHS;if(!WS)WS=STRATA_WS;if(S)renderSide()}catch(_){}}
+async function loadOffices(){try{const r=await api('/api/offices');OFFICES=r.offices||[];STRATA_WS=r.strata;MACHS=r.maquinas||MACHS;if(!WS)WS=STRATA_WS;if(S)renderSide()}catch(e){toast('No se pudo leer la lista de oficinas: '+(e.message||'sin respuesta'),true)}}
 function connect(){   /* T27: el `EventSource` se crea con el `ws` de la oficina elegida, y se re-crea al cambiar */
   if(ES)ES.close();const g=++gen;const es=new EventSource('/api/events'+(OTHER()?'?ws='+encodeURIComponent(WS):''));ES=es;
-  es.onmessage=e=>{if(g!==gen)return;try{apply(JSON.parse(e.data))}catch(_){}};
+  es.onmessage=e=>{if(g!==gen)return;try{apply(JSON.parse(e.data))}catch(e2){stateFail('frame ilegible del stream')}};   /* T20: un frame que no se parsea se declara, no se traga */
   es.onerror=()=>{es.close();if(g!==gen)return;ES=null;$('#live').className='live off';$('#live').textContent='reconectando…';setTimeout(connect,4000)}}
-api('/api/state').then(st=>{apply(st);startPoll()}).catch(()=>{});loadOffices();setInterval(loadOffices,60000);connect();
+$('#skRetry').onclick=loadState;   /* el boton del esqueleto se enlaza UNA vez, en el arranque */
+loadState();loadOffices();setInterval(loadOffices,60000);connect();
 </script>
 </body>
 </html>

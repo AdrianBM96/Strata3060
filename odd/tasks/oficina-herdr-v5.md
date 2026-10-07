@@ -59,12 +59,12 @@ La oficina existe para que Adrián vea qué está haciendo cada agente y qué ne
 - [ ] **T12** — Burbuja "TE NECESITA" sigue al agente bloqueado (deja de estar hardcodeada a `opencode2`).
 - [ ] **T13** — Canvas theme-aware: `drawBoard` y `drawScreen` leen el tema.
 - [ ] **T14** — `dispose()` en `applyTheme` + cache de `G.cap`.
-- [ ] **T15** — `placeLabels` sin reconstruir DOM cada frame.
+- [x] **T15** — `placeLabels` sin reconstruir DOM cada frame. Commit: *(hash en el próximo commit)*
 - [ ] **T16** — Código muerto y claims de mallas corregidos.
-- [ ] **T17** — Mostrar datos que viajan y se ignoran: `ticker`, `interval`, `bench`, `metrics.fuente`, `candidato.B1`, `TAREAS.columnas`.
+- [x] **T17** — Mostrar datos que viajan y se ignoran: `ticker`, `interval`, `bench`, `metrics.fuente`, `candidato.B1`, `TAREAS.columnas` (el servidor **sí** los manda ahora). Commit: *(hash en el próximo commit)*
 - [ ] **T18** — A11y: tabs con `role`/`aria-selected`/teclado, label de `#msg`, `role="status"` en toast, focus trap en modal, `prefers-reduced-motion` aplicado al bucle 3D.
-- [ ] **T19** — Responsive compacto real: oficinas, KPIs y cola accesibles bajo 1150 px.
-- [ ] **T20** — Estados de error/empty/retry en `/api/state`, "Salida" e "Hilo".
+- [x] **T19** — Responsive compacto real: oficinas, KPIs y cola accesibles bajo 1150 px. Commit: *(hash en el próximo commit)*
+- [x] **T20** — Estados de error/empty/retry en `/api/state`, "Salida" e "Hilo". Commit: *(hash en el próximo commit)*
 - [ ] **T21** — Deriva documental: `README.md` y `strata-oficina.service`.
 
 ## Criterios de aceptación
@@ -116,6 +116,14 @@ Prueba end-to-end viva (Chromium headless 1187 + Herdr real, puerto 8099, 0 coma
 - 379 llamadas herdr del servidor scratch: 355 `agent list`, 18 `workspace list`, 6 `machine list --json`; **0 mutantes**. Servicio vivo 8095 intacto (`MainPID` 1645893 y `ActiveEnterTimestamp` sin cambio).
 
 ## Progreso
+- 2026-10-07: **T15, T17, T19, T20 completadas** (writer B, `index.html` +243/-52, 995→1186 líneas) y **T17 cerrada de verdad en el servidor** (padre, inline): `tasks_list` descartaba `columnas`, que **sí existe** en `TAREAS.json` (`['EN COLA','EN CURSO','ESPERA OK','HECHO','DESCARTADO']`). Se añade `tasks_cols()` y la clave `columnas` al payload; `None` si el fichero no la trae. Tres anclas de set exacto se actualizaron y se fijó `test_columnas_viajan_en_el_payload`. Suite: **173 passed**, hermeticidad limpia.
+  - **T15 medido**: HEAD hacía **8 escrituras de `innerHTML` en 8 frames**; el código nuevo, **0 en 120 frames estáticos**. `pillEl(name)` crea el elemento una vez por agente, enlaza `onclick` al crear, guarda `st`/`role`/`x`/`y`/`sel` en un `Map`; `placeLabels` escribe solo lo que cambió; `dropPill` elimina al desaparecer el agente (cambio de estado, nunca en `tick()`). Guardas: 155 escrituras de style con 100 coordenadas distintas, 0 construcciones DOM dentro de `tick()`, geometrías 38→38, materiales 71→71, canvases 8→8.
+  - **T17**: `ticker` en la franja del header (fila real del CHANGELOG), `bench`+`interval` como chip ámbar `ralentizado para medir · 30 s`, `events` como `live`/`polling · 5 s`/`sin canal de eventos`, `updated` como sello de frescura con `ws` y `maquina`, `metrics.fuente` + `candidato.B1` + `brazo_def_B1` bajo los KPIs, `TAREAS.columnas` manejando tablero y pizarra 3D. Cada ausente tiene texto explícito, nunca un número inventado.
+  - **T19**: `#stage.compact` pasa a `56px 1fr` con `#side` en fila 1 — `#side` **ya no es `display:none`**; en portrait `#rotate` es banda superior y la app sigue usable, no una pared.
+  - **T20**: `#skel` con `aria-busy`, `.err` + `Reintentar` atado a `loadState`; `renderAll` ya no retorna en silencio si `S` es null; `apply` rechaza pintar un payload con `error` como estado (cierra el fallback silencioso de un 400/404); `loadLog`/`loadHilo`/`loadThread` muestran el mensaje del servidor y `Reintentar`. Queda 1 `catch(_){}` (en `store.set`, no una ruta de red).
+  - **Arreglo global del writer**: `[hidden]{display:none!important}` — `.chip` declara `display:inline-flex`, así que en HEAD `#contract` **nunca se ocultaba** con `hidden` puesto.
+  - Pendiente de navegador: header a 1280/1150/900 px, fila compacta con 8 oficinas, drawer, portrait 390×844, y **re-medir dGPU y CPU** (el arnés es stub, no mide GPU).
+- 2026-10-07: **T22, T13, T14, T16 completadas** (writer A, `index.html` +79/-40). Badge `.st` en ficha y menú; `drawBoard`/`drawScreen` leen `cssVars()`; `dispose()` ordenado con `Set` de compartidos (29 geo + 71 mat + 6 tex liberadas, 0 compartidas); `G.cap` cacheado (CapsuleGeometry **104 → 6**); muertos quitados (`workersOf`, `rug2`, `theme.board`, rama idéntica de `renderAll`); claim de mallas corregido a **350–400 vivas / 38 geometrías**; `metrics.jefe` (no existe en `METRICAS.json`) etiquetado `Objetivo fijo, no medido` con barra 0 %, `t.pasos` (no existe en `TAREAS.json`) como `sin pasos registrados` sin barra. Suite 172 passed. `new THREE.` 70→69 en el sitio de la cápsula cacheada.
 - 2026-10-07: **T11 y T12 verificadas en navegador con `agy` vivos, y el hueco de T10 cerrado con la forma real de éxito.** Verificador: puerto 8099, Herdr real, `events: "live"`, 7 workspaces probe (`wZ, w0, w11, w12, w13, w14, w15`) creados y **todos cerrados**; `workspace list` = solo `w1`.
   - **Burbuja VERIFICADA**: `.bub` `hidden=false`, texto `<b>TE NECESITA</b>probeagy2 · probe-t12b · w0:p2`, `dataset.a` = nombre, rect x=431.3 y=196.7 w=250 h=53.2; ancla de la pill x=205.259 y=198.924 → **dx=0, dy=−8** (cuelga exactamente de la cabeza). Modelo de cámara reproduce la x de la pill a **0.14 px**. Desaparece al salir de `blocked` (`hidden=true`, `innerHTML=''`), reaparece al bloquearse de nuevo. **Clic** → `sel` pasa a `probeagy2` y el inspector lo muestra.
   - **Bucle bajo demanda VERIFICADO en vivo**: 60 s con bloqueado de pie y ningún `working` → **12 rAF**, gaps **4997.2–5002.3 ms** (un render por poll, cero frames entre medias). Con `working`: **567 rAF en 19.94 s = 28.39 fps**. dGPU: 6 samples, todos **0 %**. **0 errores de consola, 0 requests externos.** Pills con el nuevo `#pills`: posición, `led` y clic correctos.

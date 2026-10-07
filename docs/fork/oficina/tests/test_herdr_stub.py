@@ -190,7 +190,7 @@ def test_agent_get_forma(server):
 def test_build_state_linea_base(server):
     st = server.build_state()
     assert set(st) == {"agents", "metrics", "ticker", "queue", "lock", "bench", "suplencia",
-                       "herdr", "tareas", "updated"}
+                       "herdr", "tareas", "updated", "columnas"}   # T17: `columnas` es aditiva
     assert st["herdr"] is True and st["lock"] is False and st["bench"] is False
     assert st["queue"] == {"done": 3, "total": 9}
     assert [a["name"] for a in st["agents"]] == ["claude", "opencode2", "tester", "explorer",
@@ -965,7 +965,7 @@ def test_claves_de_siempre_y_payload_serializable(server):
     """T2 no renombra nada: `index.html` lee name/status/activity/role/color/since/ts y el payload sigue siendo JSON."""
     st = server.get_state()
     assert set(st) == {"agents", "metrics", "ticker", "queue", "lock", "bench", "suplencia", "herdr",
-                       "tareas", "updated", "interval"}
+                       "tareas", "updated", "interval", "columnas"}   # T17: `columnas` es aditivo, no un rename
     for a in st["agents"]:
         assert {"name", "status", "activity", "color", "role", "since", "ts"} <= set(a)
     d = json.loads(json.dumps(st, ensure_ascii=False))
@@ -1820,3 +1820,17 @@ def test_opencode_remoto_sin_home_fallas_legible_y_no_escribe_fuera_del_home(ser
     server.mod.HOMES["mac-mini"] = ("", time.monotonic() - server.mod.RHOME_NEG - 1)
     f = server.mod.oc_config("ofi-remota-obrero1", "gemini-pro", "mac-mini")
     assert f == "/Users/macmini/.cache/strata-oficina/opencode/ofi-remota-obrero1.json"
+
+
+def test_columnas_viajan_en_el_payload(server):
+    """T17: `TAREAS.json` declara `columnas` y `tasks_list` lo descartaba, asi que el tablero y la
+    pizarra 3D usaban 5 columnas hardcodeadas y la UI tenia que advertir "el payload no las trae".
+    Se manda como viene; `None` si el fichero no lo trae, y la UI dice eso, nunca un numero inventado.
+    """
+    import pathlib
+    st = server.build_state()
+    assert st["columnas"] == ["EN COLA", "EN CURSO", "ESPERA OK", "HECHO", "DESCARTADO"]
+    pathlib.Path(server.mod.TAREAS).write_text(json.dumps({"actualizado": "x", "tareas": []},
+                                                           ensure_ascii=False), encoding="utf-8")
+    assert server.mod.tasks_cols() is None
+    assert server.build_state()["columnas"] is None
