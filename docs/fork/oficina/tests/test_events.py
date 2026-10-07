@@ -39,7 +39,8 @@ El worker de avisos vive en su propio hilo y se apaga con `ev_stop()`, asi que e
 hilo de lectura (requisito 5 de T10).
 """
 from __future__ import annotations
-import json, socket, threading, time
+import json, os, socket, sys, threading, time
+import pytest
 from http.server import ThreadingHTTPServer
 
 from stub_herdr import GLOBAL_SUBS, _sub_ok
@@ -57,6 +58,27 @@ def _agentes(state):
 
 def _snaps(server, mach=None):
     return [c for c in server.calls(mach) if c[:2] == ("api", "snapshot")]
+
+
+def _handlers(server, srv):
+    """Handlers del `ThreadingHTTPServer` `srv` cuya pila esta dentro del `Handler` de `server.py`.
+
+    La definicion de "hilo del servidor" es la de T28 (`conftest.py:_server_threads`), acotada al servidor
+    de este test: el conteo del proceso entero no es un baseline estable, porque los handlers de otros tests
+    entran y salen durante la sesion. Lo que el test afirma es que el handler de SU servidor desaparece
+    cuando el cliente se va, y la guardia de sesion (`hilos del servidor al final=[]`) es la que cuenta el
+    proceso entero.
+    """
+    path = os.path.realpath(getattr(server.mod, "__file__", ""))
+    out = []
+    for t in threading.enumerate():
+        f = sys._current_frames().get(t.ident)
+        while f is not None:
+            h = f.f_locals.get("self")
+            if getattr(h, "server", None) is srv and os.path.realpath(f.f_code.co_filename) == path:
+                out.append(t); break
+            f = f.f_back
+    return out
 
 
 def _notifs(server):
@@ -160,6 +182,9 @@ class _HTTP:
         self.srv.shutdown(); self.srv.server_close()
 
 
+_STREAMS = []
+
+
 class _SSE:
     """Consumidor real del handler `/api/events` del servidor aislado.
 
@@ -167,6 +192,9 @@ class _SSE:
     stream que sale de la ruta, no una replica de su condicion de latido. Se lee con `recv` y corte por
     `\n\n`: un `makefile` que una vez dio timeout queda envenenado (`cannot read from timed out object`
     en socket.py:707), y el bucle de latido necesita varias lecturas con limite.
+
+    Cada stream se registra en `_STREAMS` y se cierra en el teardown (`_cerrar_streams`): un test que
+    revienta antes de `sse.close()` deja el cliente vivo, y el handler no sale hasta `SSE_MAX`.
     """
 
     def __init__(self, server, sid="s" * 32, path="/api/events"):
@@ -174,6 +202,7 @@ class _SSE:
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), server.mod.Handler)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.c = socket.create_connection(("127.0.0.1", self.srv.server_address[1]), 20)
+        _STREAMS.append(self)
         self.c.sendall(("GET %s HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: sid=%s\r\nConnection: close\r\n\r\n"
                         % (path, sid)).encode())
         buf = b""
@@ -233,6 +262,20 @@ class _SSE:
         try: self.c.close()
         except OSError: pass
         self.srv.shutdown(); self.srv.server_close()
+        if self in _STREAMS: _STREAMS.remove(self)
+
+
+@pytest.fixture(autouse=True)
+def _cerrar_streams():
+    """Cierra los streams que el test no cerro, tambien cuando el test falla en mitad.
+
+    Un handler de SSE con el cliente vivo no sale del bucle: T28 lo drenaba hasta `HEARTBEAT_DRAIN`
+    (35 s) y la guardia de sesion lo contaba como hilo del servidor. Con la condicion de salida de T27,
+    cerrar el cliente basta: el handler ve el EOF en su quantum y `server_close()` vuelve.
+    """
+    yield
+    for s in list(_STREAMS):
+        s.close()
 
 
 # ---------- el set de suscripciones, contra lo verificado en el binario ----------
@@ -880,3 +923,230 @@ def test_forma_de_exito_de_notification_show_es_la_capturada_en_vivo(server):
     assert r["res"]["reason"] == "shown"
     assert r["code"] is None and r["dead"] is False
     assert server.mod.herdr_error(r) is None   # sana: no es un error
+
+
+# ---------- T27: el stream lleva LA oficina pedida, y el handler sale cuando el cliente se va ----------
+# Defecto medido en vivo: `build_state` filtra a la oficina de Strata (`wsS` = el workspace de
+# `opencode2`), asi que `/api/events` solo llevaba `w1`: 16 frames con los mismos 5 agentes, y un cambio
+# real de estado en otra oficina no generaba ningun frame. La UI lo tapaba sondeando `/api/state?ws=`
+# cada 5 s, el polling que T9 quito.
+# Defecto secundario (registrado por T28): el bucle salia solo cuando una escritura contra el cliente
+# cerrado daba `BrokenPipe`, asi que el handler seguia llamando a `get_state` hasta ~30 s despues de que
+# el navegador se fue. La guardia de sesion de T28 lo media: `pedidos tras el sellado=25` y
+# `HEARTBEAT_DRAIN` = 35 s de drenado. La condicion de salida del servidor es la que hace innecesario ese
+# drenado, no una lucha contra el teardown: el handler sale al ver el EOF, y `server_close()` (que espera
+# a los handlers, `block_on_close` = True) vuelve al instante.
+# Superficie: `server.py` (`ev_scope`, `ev_dirty(oid)`, `ev_take`, `ev_cycle(quantum, oid)`,
+# `ev_event` marca `dirty_ws`, `Handler._sse_alive`) y `index.html` (el `EventSource` con el `ws` de la
+# oficina elegida y el sondeo como respaldo solo cuando `events` no es `live`).
+
+
+def test_sin_ws_el_stream_es_la_oficina_de_strata_exacta(server, herdr_socket):
+    """Requisito 1: sin `ws` el stream es la oficina de Strata, exactamente como hoy.
+
+    El roster es el de `w1` y el payload es el de `get_state` (metrics, cola, ticker, `interval`), sin
+    clave nueva: `events` es la unica aditiva de T9. `w1` y `bazzite:w1` son la misma oficina (T8), asi
+    que las dos salen por `get_state`, no por `state_ws`: la oficina de Strata es la unica que tiene
+    metrics, cola y ticker, y un `ws` redundante no puede convertirla en una oficina vacia.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    sse = _SSE(server)
+    f, dt = sse.first(2.0)
+    assert f and f["events"] == "live" and f["interval"] == 5
+    assert "ws" not in f, "sin `ws` el payload es el de `get_state`, sin clave nueva"
+    assert {a["name"] for a in f["agents"]} == set(server.mod.FIXED), \
+        "el roster sin `ws` es el de w1: %s" % sorted(a["name"] for a in f["agents"])
+    assert set(f) == {"agents", "metrics", "ticker", "queue", "lock", "bench", "suplencia", "herdr",
+                      "tareas", "updated", "interval", "events"}, "solo `events` es aditiva"
+    sse.close()
+    sse = _SSE(server, path="/api/events?ws=w1")
+    g, dt = sse.first(2.0)
+    assert g and "ws" not in g and {a["name"] for a in g["agents"]} == set(server.mod.FIXED), \
+        "`ws=w1` es la oficina de Strata: `get_state`, no `state_ws`"
+    sse.close()
+    sse = _SSE(server, path="/api/events?ws=bazzite:w1")
+    h, dt = sse.first(2.0)
+    assert h and "ws" not in h and {a["name"] for a in h["agents"]} == set(server.mod.FIXED), \
+        "`bazzite:w1` es la misma oficina (T8)"
+    sse.close()
+
+
+def test_el_stream_lleva_la_oficina_pedida_y_el_bloqueado_llega_como_frame(server, herdr_socket):
+    """Requisito 2 y 4, por la ruta real: un `pane.agent_status_changed` de `w2` genera frame en `w2`.
+
+    El estado es el real, incluido `blocked` (el contrato de T2), y la actividad deriva de ese estado
+    (`ACTS`), asi que el stream no contradice a `state_ws`. La oficina pedida lee el snapshot cacheado con
+    la TTL del ciclo de reconciliacion (`SNAP["ttl"] = RECONCILE` en `live`), y el overlay por `pane_id`
+    pone el estado del evento. El evento de estado envejece el snapshot local (T9: pane->nombre al ciclo),
+    asi que el push cuesta UNA lectura, no dos.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()   # siembra los paneles, la correspondencia pane->nombre y la TTL del snapshot
+    server.add_agent(name="agy-a1", kind="agy", status="idle", workspace_id="w2", pane_id="w2:p1")
+    with server.mod.STLOCK: server.mod.SNAP["data"].pop(None, None)   # `crear` envejece el snapshot (T6)
+    sse = _SSE(server, path="/api/events?ws=w2")
+    f, dt = sse.first(2.0)
+    assert f and f["ws"] == "w2" and f["maquina"] == "bazzite", "el stream no lleva la oficina pedida"
+    assert [a["name"] for a in f["agents"]] == ["agy-a1"], "el stream de w2 lleva los agentes de w2"
+    keys = set(server.state_ws("w2"))   # la forma de la oficina pedida: `state_ws`, mas `events`
+    n = len(_snaps(server))
+    sock.emit(sock.event_status("w2:p1", "blocked", "w2"))
+    g, dt2 = sse.first(3.0)
+    assert g is not None, "el cambio en w2 no genero frame: el filtro `wsS` de `build_state`"
+    ag = _agentes(g)["agy-a1"]
+    assert ag["status"] == "blocked" and ag["pane_id"] == "w2:p1", "el estado real no llega al stream"
+    assert ag["activity"] == "esperando confirmación", "estado y actividad se contradicen (T2)"
+    assert set(g) == keys | {"events"}, "la oficina pedida paga `state_ws` + `events`"
+    assert dt2 < 1.5, "el evento de w2 llego tarde"
+    assert len(_snaps(server)) - n == 1, "el evento de w2 costo mas de una lectura de snapshot"
+    sse.close()
+
+    server.mod.CACHE.update(data=None, at=0.0)
+    assert server.state_ws("w2")["agents"][0]["status"] == "blocked"
+
+
+def test_un_cliente_que_mira_A_no_recibe_el_estado_de_B(server, herdr_socket):
+    """TRIANGULAR: cada conexion esta confinada a la oficina que pidio."""
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()
+    server.add_agent(name="agy-a1", kind="agy", status="idle", workspace_id="w2", pane_id="w2:p1")
+    with server.mod.STLOCK: server.mod.SNAP["data"].pop(None, None)   # `crear` envejece el snapshot (T6)
+    a = _SSE(server, path="/api/events?ws=w2")
+    b = _SSE(server)
+    fa, _ = a.first(2.0)
+    fb, _ = b.first(2.0)
+    assert fa and fb
+    assert {x["name"] for x in fa["agents"]} == {"agy-a1"}, "el stream de w2 lleva solo w2"
+    assert "agy-a1" not in {x["name"] for x in fb["agents"]}, "el stream de Strata no debe ver w2"
+    sock.emit(sock.event_status("w2:p1", "blocked", "w2"))
+    g, dt = a.first(3.0)
+    assert g and _agentes(g)["agy-a1"]["status"] == "blocked", "el blocked de w2 no llego"
+    assert b.frames(3.0) == [], "el cambio de w2 llego a Strata"
+    a.close()
+    b.close()
+
+
+def test_un_ws_desconocido_en_events_se_refusa_y_no_sirve_el_estado_local(server, herdr_socket):
+    """Requisito 1 y la regla de T8: el dominio de `ws` es `WSRE`, y un label desconocido es un error.
+
+    El stream refusado no puede servir el estado local: el payload de error dice lo que se pidio, y no
+    lleva `agents`, asi la UI no puede pintar la oficina de Strata creyendo que mira la otra.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    http = _HTTP(server)
+    code, r = http.get("/api/events?ws=no-existe:w9")
+    assert code == 404 and r.get("ws") == "no-existe:w9" and r.get("maquina") == "no-existe"
+    assert "agents" not in r, "un ws refusado no sirve el estado local"
+    code, r = http.get("/api/events?ws=W9")
+    assert code == 400 and r.get("ws") == "W9" and "agents" not in r, "el label malformado se refusa"
+    assert code == http.get("/api/state?ws=W9")[0], "el dominio de `ws` es el mismo que `/api/state?ws`"
+    http.close()
+
+
+def test_el_handler_SSE_sale_al_irse_el_cliente_y_deja_de_sondear(server, herdr_socket, monkeypatch):
+    """Requisito 3: el bucle sale cuando el cliente se va, sin esperar a que una escritura reviente.
+
+    La definicion de "hilo del servidor" es la de T28 (`conftest.py:_server_threads`): los objetivos de
+    `server.py` y los handlers de `ThreadingHTTPServer` cuya pila esta dentro del `Handler`. El bucle de
+    hoy solo salia cuando una escritura contra el cliente cerrado daba `BrokenPipe`, y eso puede tardar un
+    latido entero: medido en T28, 25 pedidos de `api snapshot` llegaban tras el teardown y la guardia de
+    sesion drenaba `HEARTBEAT_DRAIN` = 35 s. Aqui el handler vuelve al baseline en menos de 6 s y no
+    construye nada despues de irse el cliente.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()
+    builds = []
+    real = server.mod.build_state
+    monkeypatch.setattr(server.mod, "build_state", lambda: (builds.append(1), real())[1])
+    n0 = len(server.server_threads())
+    sse = _SSE(server)
+    f, dt = sse.first(2.0)
+    assert f and f["events"] == "live"
+    assert len(_handlers(server, sse.srv)) == 1, "el handler del SSE es un hilo del servidor"
+    n1 = n0 + 1
+    sse.close()   # el navegador cierra el `EventSource`: solo se cierra el cliente
+    assert _espera(lambda: not _handlers(server, sse.srv), 6.0), \
+            "handler vivo 6 s despues de irse el cliente: %s" % _handlers(server, sse.srv)
+    assert _espera(lambda: len(server.server_threads()) < n1, 6.0), \
+            "el conteo del proceso no volvio al baseline: %s" % server.server_threads()
+    n = len(builds)
+    time.sleep(2.0)   # mas de un latido: el bucle viejo construia estado aqui
+    assert not _handlers(server, sse.srv), "el handler revivio"
+    assert len(builds) == n, "un cliente muerto siguio construyendo: %d" % (len(builds) - n)
+
+
+def test_sin_canal_live_el_respaldo_de_la_UI_sigue_con_el_quantum_de_hoy(server, herdr_socket):
+    """Requisito 5: sin `live` el handler cae al quantum de 5 s y al latido de ~30 s de hoy.
+
+    La UI sondea solo cuando `events` no es `live` (`index.html`), asi que el respaldo tiene que seguir
+    sondeando el estado: en 10 s de stream hay 2 construcciones y ningun frame nuevo. Con BENCH el
+    quantum del stream es 30 s, el ciclo lento que T9 ya usa.
+    """
+    sock = herdr_socket("refused.sock", refuse=True)
+    assert server.start_events(sock) == "unavailable"
+    sse = _SSE(server)
+    f0, dt0 = sse.first(1.0)
+    assert f0 and f0["events"] == "unavailable" and f0["interval"] == 5
+    n = len(_snaps(server))
+    mas = sse.frames(10.0)
+    assert mas == [], "el polling empujo sin cambio: el latido se acorto"
+    assert len(_snaps(server)) - n >= 2, "el quantum de 5 s se acorto: el respaldo de la UI deja de sondear"
+    sse.close()
+    server.bench(True)
+    server.mod.CACHE.update(data=None, at=0.0)
+    sse2 = _SSE(server)
+    f1, dt1 = sse2.first(1.0)
+    assert f1 and f1["interval"] == 30, "con BENCH el quantum del stream es 30 s"
+    sse2.close()
+
+
+def test_un_cliente_de_una_oficina_remota_no_recibe_eventos_locales(server, herdr_socket):
+    """TRIANGULAR: el socket de eventos es el de bazzite, y los eventos no llegan de la maquina remota.
+
+    `raw_agents` solo superpone el overlay en la maquina local (T9), asi que el stream remoto se refresca
+    en el latido, no en el evento. La confinacion por `ws` se mantiene: el evento local de `w2` no
+    despierta al stream de `mac-mini:w2`, que es otra oficina.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()
+    server.set_remote_agents("mac-mini", [{"name": "agy-rem", "agent": "agy", "agent_status": "idle",
+                                           "pane_id": "w2:p1", "tab_id": "w2:t1", "workspace_id": "w2",
+                                           "focused": False}])
+    sse = _SSE(server, path="/api/events?ws=mac-mini:w2")
+    f, dt = sse.first(2.0)
+    assert f and f["ws"] == "mac-mini:w2" and f["maquina"] == "mac-mini", "el stream remoto no es el de la oficina pedida"
+    assert [a["name"] for a in f["agents"]] == ["agy-rem"], "el roster remoto no es el de la maquina pedida"
+    sock.emit(sock.event_status("w2:p1", "blocked", "w2"))
+    time.sleep(1.0)
+    g, dt2 = sse.first(1.0)
+    assert g is None, "un evento local no debe llegar al stream remoto"
+    assert _agentes(f)["agy-rem"]["status"] == "idle", "el overlay local no se aplica a la maquina remota"
+    sse.close()
+
+
+def test_en_repojo_el_stream_de_otra_oficina_no_lanza_subproceso(server, herdr_socket):
+    """El criterio 2 de la feature por la oficina pedida: 10 s de stream en reposo, 0 subproceso.
+
+    La oficina pedida lee el mismo snapshot cacheado que construyo el estado (`SNAP["ttl"]` = RECONCILE en
+    `live`), y su bandera de suciedad es la suya (`dirty_ws`): sin evento suyo duerme el quantum entero, y
+    el latido (`quiet >= 6`) sigue siendo ~30 s, asi que no empuja frames.
+    """
+    sock = herdr_socket("herdr.sock")
+    assert server.start_events(sock) == "live"
+    server.get_state()
+    server.add_agent(name="agy-a1", kind="agy", status="idle", workspace_id="w2", pane_id="w2:p1")
+    with server.mod.STLOCK: server.mod.SNAP["data"].pop(None, None)   # `crear` envejece el snapshot (T6)
+    sse = _SSE(server, path="/api/events?ws=w2")
+    f, dt = sse.first(2.0)
+    assert f and f["ws"] == "w2"
+    n = len(server.stub.calls)
+    mas = sse.frames(10.0)
+    assert mas == [], "sin evento no hay frame"
+    assert len(server.stub.calls) == n, "10 s de stream de w2 en reposo lanzaron %d subproceso(s)" % (len(server.stub.calls) - n)
+    sse.close()

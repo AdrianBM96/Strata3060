@@ -409,9 +409,12 @@ EV_TICK = 1.0
 # `agent_names` es la correspondencia pane_id -> NOMBRE de la oficina que pone el snapshot (T10: el titulo
 # del aviso). `names` es la que ponen los eventos de deteccion y trae el `agent` (el tipo, p. ej. `agy`),
 # que no es el nombre de la oficina: las dos se mantienen separadas para no inventar nombres.
+# `dirty_ws` (T27) es la suciedad POR OFICINA: cada stream SSE esta confinado a la `ws` que pidio, asi que
+# un cambio en `w2` tiene que despertar a quien mira `w2`, no solo a la oficina de Strata. La bandera global
+# `dirty` sigue siendo la que consume `get_state` (T9), y es la unica fuente de la oficina de Strata.
 EV = {"mode": "unavailable", "dirty": True, "subs": [], "panes": set(), "status": {}, "names": {},
-      "agent_names": {}, "thread": None, "stop": threading.Event()}
-# `ELOCK` protege `EV` (`mode`, `dirty`, `subs`, `panes`, `status`, `names`). Orden de adquisicion
+      "agent_names": {}, "dirty_ws": {}, "thread": None, "stop": threading.Event()}
+# `ELOCK` protege `EV` (`mode`, `dirty`, `dirty_ws`, `subs`, `panes`, `status`, `names`). Orden de adquisicion
 # (T7, server.py:44-50): `MLOCK` -> `STLOCK` -> `ELOCK`, que es lo que hacen `agmap` -> `raw_agents` ->
 # `ev_overlay` y `get_state` -> `build_state` -> `raw_agents`. `ELOCK` nunca toma `STLOCK` ni `MLOCK`
 # (el hilo de eventos los toma por separado), asi que no hay ciclo y no hay deadlock.
@@ -436,9 +439,28 @@ def ev_health():
     """Salud del canal de eventos, para la UI: `live` | `polling` | `unavailable`."""
     with ELOCK: return EV["mode"]
 
-def ev_dirty():
-    """True si hay que reconstruir YA. Solo en modo `live`: el polling no necesita bandera."""
-    with ELOCK: return EV["mode"] == "live" and EV["dirty"]
+def ev_dirty(oid=None):
+    """True si hay que empujar YA. Solo en modo `live`: el polling no necesita bandera.
+
+    `oid` es la oficina del stream (None = la de Strata, la que construye `get_state`). T27: un stream
+    mirando `w2` se despierta con el evento de `w2`, no con el de otra oficina; y al reves, el evento de
+    `w2` no mantiene despierto indefinidamente al stream de Strata, que solo consume la bandera global.
+    La separacion por oficina es lo que evita el spin: la bandera que mira el stream es la que se consume
+    en su propio bucle (`ev_take`).
+    """
+    with ELOCK:
+        if EV["mode"] != "live": return False
+        return EV["dirty"] if oid is None else bool(EV["dirty_ws"].get(oid))
+
+def ev_take(oid):
+    """Consumir la suciedad de la oficina `oid` despues de empujar (T27).
+
+    `get_state` consume la bandera global dentro de `STLOCK` (T9), y la oficina de Strata se construye por
+    ahi. `state_ws` no pasa por `get_state`, asi que un stream de otra oficina tiene que consumir SU
+    bandera: sin consumo `ev_cycle` devuelve al instante en cada vuelta y el bucle gira sin dormir.
+    Se consume solo la de la oficina pedida: la global queda intacta para el stream de Strata.
+    """
+    with ELOCK: EV["dirty_ws"][oid] = False
 
 def ev_resub_needed():
     """El set crecio (aparecio un panel nuevo): hay que re-suscribir. Idempotente por comparacion."""
@@ -480,6 +502,14 @@ def ev_event(line):
     kind = str(d.get("event") or "").replace(".", "_")
     data = d.get("data") if isinstance(d.get("data"), dict) else {}
     pane = data.get("pane_id") or (data["pane"].get("pane_id") if isinstance(data.get("pane"), dict) else None)
+    # T27: el evento pertenece a una oficina, y cada stream SSE esta confinado a la que pidio, asi que hay
+    # que marcar sucia LA suya. El `workspace_id` esta verbatim en la captura del evento de estado; para los
+    # eventos de panel que no lo traen, el `pane_id` (`w2:p3`) dice la oficina. Una oficina remota nunca se
+    # marca: el socket es el de bazzite y sus eventos no llegan (ver `raw_agents`), asi que su stream se
+    # refresca en el latido, no en el evento.
+    wsid = data.get("workspace_id") or (data["workspace"].get("workspace_id")
+                                        if isinstance(data.get("workspace"), dict) else None)
+    if not wsid and pane and ":" in pane: wsid = pane.split(":")[0]
     if kind == "pane_agent_detected":
         if pane and data.get("agent"):
             with ELOCK: EV["names"][pane] = data["agent"]
@@ -502,6 +532,7 @@ def ev_event(line):
     with ELOCK:
         if pane: EV["panes"].add(pane)
         EV["dirty"] = True
+        if wsid: EV["dirty_ws"][wsid] = True   # T27: la oficina del evento, para su stream
     if wide:
         with STLOCK: SNAP["data"].pop(None, None)   # el snapshot local envejece: pane->nombre al ciclo
     return wide
@@ -619,27 +650,32 @@ def ev_start():
 
     Los dos hilos comparten `EV["stop"]`, asi `ev_stop()` apaga el canal y el worker en el mismo paso
     (el teardown de los tests y el cierre del servicio).
+
+    `dirty_ws` se limpia aqui, no en el `reset` de la fixture: el canal que arranca ahora es el que pone
+    la suciedad, y una marca de un test anterior despertaria a un stream nuevo sin evento suyo.
     """
     with ELOCK:
         if EV["thread"] and EV["thread"].is_alive(): return EV["thread"]
-        EV["stop"].clear()
+        EV["stop"].clear(); EV["dirty_ws"].clear()   # T27: la suciedad por oficina es del canal nuevo
         t = threading.Thread(target=ev_client, daemon=True, name="oficina-events")
         n = threading.Thread(target=notif_client, daemon=True, name="oficina-notif")
         EV["thread"] = t; NOTIF["thread"] = n
         t.start(); n.start(); return t
 
-def ev_cycle(interval):
+def ev_cycle(interval, oid=None):
     """El sueno del bucle SSE: un quantum de `interval` segundos, cortado cuando un evento ensucia.
 
+    `oid` (T27) es la oficina del stream: en `live` el sueno se corta solo si hay evento PARA ESA oficina.
     En `polling`/`unavailable` es el `time.sleep(interval)` de hoy, asi que el latido (`quiet >= 6`) sigue
-    siendo ~30 s. En `live` se despierta a los `EV_WAKE` s: un cambio de estado se empuja en menos de
-    0.2 s, y un reposo completo duerme el quantum entero, asi que la condicion de latido no cambia.
+    siendo ~30 s y el respaldo de la UI (el sondeo de 5 s) es el mismo de hoy. En `live` se despierta a los
+    `EV_WAKE` s: un cambio de estado se empuja en menos de 0.2 s, y un reposo completo duerme el quantum
+    entero, asi que la condicion de latido no cambia.
     """
     if ev_health() != "live":
         time.sleep(interval); return
     end = time.monotonic() + interval
     while time.monotonic() < end:
-        if ev_dirty(): return   # hay evento: el bucle empuja ahora
+        if ev_dirty(oid): return   # hay evento PARA esta oficina: el bucle empuja ahora
         time.sleep(min(EV_WAKE, end - time.monotonic()))
 
 # ---------- T10: `herdr notification show` cuando un agente pasa a `blocked` ----------
@@ -866,6 +902,40 @@ def state_for(ws):
     if mach == "bazzite": return 200, state_ws(wid)   # bazzite es la maquina local: `bazzite:wN` es la misma oficina
     if mach and not target(mach): return 404, {"error": "máquina desconocida: " + mach, "ws": ws, "maquina": mach}
     return 200, state_ws(ws)
+
+# ---------- T27: `/api/events` lleva LA oficina pedida, y el bucle sale cuando el cliente se va ----------
+# El stream de hoy construye `build_state`, que filtra a la oficina de Strata (`wsS` = el workspace de
+# `opencode2`), asi que un cambio en otra oficina no genera frame (medido en vivo: 16 frames, los mismos
+# 5 agentes de `w1`, y ningun frame ante un cambio real en `wJ`). El dominio de `ws` que `/api/events`
+# acepta es el MISMO que `/api/state?ws` (T8, `WSRE`), y la regla es la misma: sin `ws` es la oficina de
+# Strata exactamente como hoy, y un label desconocido es un error explicito, nunca el estado local.
+# Cada conexion esta confinada a la oficina que pidio: no se envia a todos los clientes el dato de todas.
+# `ev_scope` devuelve (code, oid) con `oid` None para la oficina de Strata, que es la unica que construye
+# `get_state` (metrics, cola, ticker, tareas); las demas se construyen con `state_ws`, que lee el snapshot
+# de su maquina y el overlay de eventos por `pane_id`.
+def ev_scope(ws):
+    if not ws: return 200, None
+    mach, wid = split_id(ws)
+    if not re.match(WSRE, ws):
+        return 400, {"error": "oficina inválida: usa wN o máquina:wN", "ws": ws}   # el mismo error que `state_for`
+    if not mach: return 200, (None if wid == strata_ws(fld(snapshot(), "workspaces")) else wid)
+    if mach == "bazzite":   # `bazzite:wN` es la maquina local, como en `state_for`
+        return 200, (None if wid == strata_ws(fld(snapshot(), "workspaces")) else wid)
+    if not target(mach):
+        return 404, {"error": "máquina desconocida: " + mach, "ws": ws, "maquina": mach}
+    return 200, ws
+# `SSE_MAX` es la cota del bucle: un handler de SSE nunca es eterno. La condicion de salida principal es
+# `_sse_alive` (el cliente se ve en un quantum, ~5 s), y esta cota es el respaldo para el caso que `select`
+# no ve: un cliente que sigue conectado, no lee nada y no se va (un proxy que mantiene la conexion abierta,
+# o una pestaña suspendida). 30 min son 60 latidos (`quiet >= 6` con quantum de `interval` = 5 s, ~30 s), y
+# la navegacion de la oficina no tiene un hueco de 30 min: el `EventSource` del navegador se reabre solo
+# (`es.onerror` -> `connect()` en 4 s), asi que cortar a la cota es una renovacion de la conexion, no un
+# corte visible. Son eleccion de la oficina, no una medida del binario.
+# `SSE_TIMEOUT` es el tiempo maximo de una escritura: `wfile` es un fichero de socket sin buffer
+# (`BaseHTTPRequestHandler.wbufsize` = 0), asi que un `send` con la ventana TCP llena se cuelga y el hilo
+# queda colgado para siempre, sin cota y sin `select` que lo vea. Con timeout, la escritura falla y el
+# `except` del bucle la trata como lo que es: el cliente no consume, la conexion se acaba.
+SSE_MAX = 1800.0; SSE_TIMEOUT = 2.0
 def slug(t): return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")[:12] or "ofi"
 KINDS = {"claude": "Claude Code", "opencode": "opencode", "pi": "pi", "ada-cli": "ada-cli", "agy": "Antigravity (agy)"}
 KCACHE = {}
@@ -1124,23 +1194,31 @@ class Handler(BaseHTTPRequestHandler):
             r = api_offices(); r["events"] = ev_health()   # T9: clave aditiva, nunca renombrada
             self._json(200, r)
         elif u.path == "/api/events":
+            ws = parse_qs(u.query).get("ws", [""])[0]
+            code, oid = ev_scope(ws)   # T27: el mismo dominio de label que `/api/state?ws` (T8)
+            if code != 200:
+                self._json(code, oid)   # un label desconocido es un error explicito, nunca el estado local
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream"); self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            try:
-                prev = None; quiet = 0
-                while True:
-                    st = get_state()
-                    payload = dict(st); payload["events"] = ev_health()   # T9: clave aditiva en el stream
-                    body = json.dumps({k: v for k, v in payload.items() if k != "updated"}, ensure_ascii=False)
-                    if body != prev or quiet >= 6:   # solo si cambia; latido cada ~30 s para mantener viva la conexión
-                        self.wfile.write(("data: " + json.dumps(payload, ensure_ascii=False) + "\n\n").encode()); self.wfile.flush()
+            prev = None; quiet = 0; t0 = time.monotonic()
+            self.connection.settimeout(SSE_TIMEOUT)   # T27: la escritura esta acotada, no es un bloqueo eterno
+            while time.monotonic() - t0 < SSE_MAX and self._sse_alive():
+                st = get_state() if oid is None else state_ws(oid)   # T27: la oficina pedida, no solo `w1`
+                payload = dict(st); payload["events"] = ev_health()   # T9: clave aditiva en el stream
+                body = json.dumps({k: v for k, v in payload.items() if k != "updated"}, ensure_ascii=False)
+                if body != prev or quiet >= 6:   # solo si cambia; latido cada ~30 s para mantener viva la conexión
+                    try:
+                        self.wfile.write(("data: " + json.dumps(payload, ensure_ascii=False) + "\n\n").encode())
+                        self.wfile.flush()
                         prev = body; quiet = 0
-                    else:
-                        quiet += 1
-                    ev_cycle(st.get("interval", 5))   # T9: en `live` el sueno se corta cuando un evento ensucia
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break   # T27: el fallo de escritura se comprueba DENTRO del bucle, no envolviendolo
+                else:
+                    quiet += 1
+                if oid is not None: ev_take(oid)   # T27: consumir la suciedad de ESTA oficina: sin consumo, spin
+                ev_cycle(st.get("interval", 5), oid)   # T9: en `live` el sueno se corta cuando un evento ensucia
         else: self.send_error(404)
     def do_POST(self):
         p = urlparse(self.path).path
@@ -1167,6 +1245,27 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/office": self._json(*api_office(body))
         elif p == "/api/office/delete": self._json(*api_office_delete(body))
         else: self.send_error(404)
+    def _sse_alive(self):
+        """El cliente y el servidor, mirados SIN esperar a que una escritura reviente (T27, requisito 3).
+
+        El bucle de hoy solo salia cuando una escritura contra el cliente cerrado da `BrokenPipe`, y eso
+        puede tardar un latido entero (`quiet >= 6` con quantum de `interval` = 5 s, ~30 s): medido en T28,
+        25 pedidos de `api snapshot` llegaban despues del teardown de los tests y la guardia de sesion tenia
+        que drenar `HEARTBEAT_DRAIN` = 35 s. `select` con timeout 0 sobre `self.connection`: si el peer cerro
+        el socket esta legible y `recv(1)` da `b''` (EOF), que es lo que hace un `EventSource` al cerrarse y
+        lo que hizo el binario en el probe vivo (conexion cortada a mitad). Comprobado al inicio de cada
+        quantum, el handler sale en <= 1 quantum (~5 s) en vez de <= 1 latido (~30 s).
+        `self.server.socket.fileno() == -1` es `server_close()` en curso: el servidor cerro su socket de
+        escucha, asi que los hilos de handler tienen que salir. Un socket cerrado o destruido reventa: ese
+        cliente tampoco esta.
+        """
+        if self.server.socket.fileno() == -1: return False
+        try:
+            rd, _, _ = select.select([self.connection], [], [], 0)
+            if not rd: return True   # nada pendiente: el cliente sigue alli
+            return bool(self.connection.recv(1))   # b'' = el peer cerro; datos = el cliente sigue
+        except (OSError, ValueError):
+            return False
     def log_message(self, *a): pass
 def serve(ip): ThreadingHTTPServer((ip, PORT), Handler).serve_forever()
 if __name__ == "__main__":

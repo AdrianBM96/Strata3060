@@ -927,20 +927,30 @@ document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'){if(e.key=
 function clock(){$('#clock').textContent=new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}setInterval(clock,10000);clock();
 new ResizeObserver(()=>$('#stage').classList.toggle('compact',$('#stage').clientWidth<1150)).observe($('#stage'));
 
-/* datos: SSE con reconexión y respaldo por sondeo */
-let wsTimer=null;
-function setOffice(id){if(!id)return;WS=id;clearInterval(wsTimer);sel=null;$('#stage').classList.toggle('other',!!OTHER());to=OTHER()?'':'claude';
-  if(OTHER()){const go=()=>api('/api/state?ws='+encodeURIComponent(id)).then(st=>{if(WS===id)apply(st,true)}).catch(()=>{});go();wsTimer=setInterval(go,5000)}
-  else api('/api/state').then(st=>apply(st,true)).catch(()=>{});renderSide()}
-function apply(st,force){if(!force&&OTHER())return;const prevW=JSON.stringify(S?.agents?.map(a=>[a.name,a.status,a.activity]));S=st;
+/* datos: SSE confinado a la oficina elegida (T27) y respaldo por sondeo solo sin canal `live` */
+let wsTimer=null, ES=null, gen=0;
+const urlState=id=>'/api/state'+(OTHER()?'?ws='+encodeURIComponent(id):'');
+function startPoll(){   /* T27: el sondeo de 5 s es RESPALDO: solo cuando `events` no es `live` (clave de T9) */
+  if(wsTimer){clearInterval(wsTimer);wsTimer=null}
+  if(S&&S.events==='live')return;
+  const go=()=>api(urlState(WS)).then(st=>{if(st.ws&&st.ws!==WS)return;apply(st,true)}).catch(()=>{});
+  wsTimer=setInterval(go,5000)}
+function setOffice(id){if(!id)return;WS=id;clearInterval(wsTimer);wsTimer=null;sel=null;$('#stage').classList.toggle('other',!!OTHER());to=OTHER()?'':'claude';
+  api(urlState(id)).then(st=>{apply(st,true);startPoll()}).catch(()=>{});   /* carga inicial, la misma de hoy */
+  connect();renderSide()}
+function apply(st,force){if(!force&&st.ws&&st.ws!==WS)return;   /* T27: el stream es de la oficina que se pidio; un frame de otra se descarta */
+  const prevW=JSON.stringify(S?.agents?.map(a=>[a.name,a.status,a.activity]));S=st;
   let wi=0;for(const a of S.agents)if(OTHER()||!LOOK[a.name])workerIdx[a.name]=wi++;
   if(OTHER()&&!S.agents.find(a=>a.name===to))to=(S.agents.find(a=>/arquit/i.test(a.role||''))||S.agents[0]||{name:''}).name;
   if(!sel||!S.agents.find(a=>a.name===sel))sel=S.agents[0]?.name||null;
-  scene3d.sync(S.agents);renderAll();if(prevW!==JSON.stringify(S.agents.map(a=>[a.name,a.status,a.activity])))scene3d.request()}
+  scene3d.sync(S.agents);renderAll();if(prevW!==JSON.stringify(S.agents.map(a=>[a.name,a.status,a.activity])))scene3d.request();
+  startPoll()}
 async function loadOffices(){try{const r=await api('/api/offices');OFFICES=r.offices||[];STRATA_WS=r.strata;MACHS=r.maquinas||MACHS;if(!WS)WS=STRATA_WS;if(S)renderSide()}catch(_){}}
-function connect(){const es=new EventSource('/api/events');es.onmessage=e=>{try{apply(JSON.parse(e.data))}catch(_){}};
-  es.onerror=()=>{es.close();$('#live').className='live off';$('#live').textContent='reconectando…';setTimeout(connect,4000)}}
-api('/api/state').then(apply).catch(()=>{});loadOffices();setInterval(loadOffices,60000);connect();
+function connect(){   /* T27: el `EventSource` se crea con el `ws` de la oficina elegida, y se re-crea al cambiar */
+  if(ES)ES.close();const g=++gen;const es=new EventSource('/api/events'+(OTHER()?'?ws='+encodeURIComponent(WS):''));ES=es;
+  es.onmessage=e=>{if(g!==gen)return;try{apply(JSON.parse(e.data))}catch(_){}};
+  es.onerror=()=>{es.close();if(g!==gen)return;ES=null;$('#live').className='live off';$('#live').textContent='reconectando…';setTimeout(connect,4000)}}
+api('/api/state').then(st=>{apply(st);startPoll()}).catch(()=>{});loadOffices();setInterval(loadOffices,60000);connect();
 </script>
 </body>
 </html>
