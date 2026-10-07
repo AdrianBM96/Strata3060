@@ -600,7 +600,7 @@ const scene3d=(()=>{
       if(pe.userData.target!==want){pe.userData.target=want;goTo(pe,atDesk?deskSeat(d):tableSeat(a.name),want,fresh)}
       drawCode(d,a,atDesk?st:'idle',performance.now());
     }
-    drawScreen();drawBoard();request();
+    drawScreen();drawBoard();syncBubble();request();   /* la burbuja se refresca AQUÍ, en el cambio de estado */
   }
 
   /* pantalla de métricas de la pared */
@@ -670,26 +670,53 @@ const scene3d=(()=>{
   }
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)request()});
 
-  /* etiquetas HTML proyectadas con anti-colisión */
+  /* etiquetas HTML proyectadas con anti-colisión. Las pills siguen reconstruyéndose aquí (eso es T15).
+   La burbuja de aprobación NO: es un elemento PERSISTENTE, hijo directo de #labels, y su CONTENIDO
+   solo se escribe en sync() (cambio de estado). placeLabels la mueve de coordenadas, y solo cuando
+   cambian: nada se reconstruye ni se re-enlaza dentro del bucle de render. */
   const v=new THREE.Vector3();
+  const lab=$('#labels'),pillBox=document.createElement('div'),bub=document.createElement('div');
+  pillBox.id='pills';bub.className='bub';bub.hidden=true;
+  bub.onclick=()=>{if(bub.dataset.a)select(bub.dataset.a)};   /* la misma ruta de selección de las pills */
+  lab.append(pillBox,bub);
+  /* Regla de selección, determinista y documentada: entre los agentes cuyo `statusOf` es `blocked`
+   se elige el de MAYOR `state_change_seq`, o sea el bloqueo más reciente. Un agente cuyo seq no viene
+   (Herdr no lo trae → null) queda detrás de los que sí lo traen. Los empates se resuelven por
+   `pane_id` y luego por nombre, así la elección no depende del orden de `agent list`. */
+  const seqOf=a=>Number.isFinite(a.state_change_seq)?+a.state_change_seq:-Infinity;
+  const blockedOf=()=>(S?S.agents:[]).filter(a=>statusOf(a)==='blocked');
+  function pickBlocked(){const b=blockedOf();if(!b.length)return null;
+    return b.slice().sort((x,y)=>seqOf(y)-seqOf(x)||String(x.pane_id||'').localeCompare(String(y.pane_id||''))||String(x.name).localeCompare(String(y.name)))[0]}
+  function headPoint(n){const p=people[n];if(!p)return null;p.userData.head.getWorldPosition(v);v.y+=.34;v.project(cam);
+    return{x:(v.x+1)/2*host.clientWidth,y:(1-v.y)/2*host.clientHeight-26}}
+  function syncBubble(){
+    const b=pickBlocked();
+    if(!b){bub.hidden=true;bub.dataset.a='';bub.innerHTML='';return}   /* nadie bloqueado: la burbuja no aparece */
+    const n=blockedOf().length,o=OFFICES.find(x=>x.id===WS)||{nombre:'Strata3060'};
+    bub.dataset.a=b.name;
+    /* el panel es el que trajo Herdr; si no viene, se dice, nunca se inventa */
+    bub.innerHTML=`<b>TE NECESITA</b>${esc(b.name)} · ${esc(o.nombre)} · ${b.pane_id?esc(b.pane_id):'panel sin identificar'}${n>1?' · '+n+' bloqueados':''}`;
+    bub.hidden=false;moveBubble();
+  }
+  function moveBubble(){
+    if(bub.hidden)return;const it=headPoint(bub.dataset.a);
+    if(!it){bub.hidden=true;return}
+    const l=it.x+'px',t=(it.y-8)+'px';
+    if(bub.style.left!==l)bub.style.left=l;
+    if(bub.style.top!==t)bub.style.top=t;
+  }
   function placeLabels(){
-    const box=$('#labels'),w=host.clientWidth,h=host.clientHeight;if(!S)return;
+    if(!S)return;
     const items=[];
     for(const a of S.agents){const p=people[a.name];if(!p||a.name!==hovered)continue;
-      p.userData.head.getWorldPosition(v);v.y+=.34;v.project(cam);
-      items.push({a,x:(v.x+1)/2*w,y:(1-v.y)/2*h-26})}
+      const it=headPoint(a.name);if(it)items.push({a,x:it.x,y:it.y})}
     items.sort((p,q)=>q.y-p.y);
     for(let i=0;i<items.length;i++)for(let j=0;j<i;j++){const p=items[i],q=items[j];if(Math.abs(p.x-q.x)<140&&Math.abs(p.y-q.y)<26)p.y=q.y-26}
-    box.innerHTML=items.map(({a,x,y})=>{const st=statusOf(a);const L=lookOf(a.name,workerIdx[a.name]||0);
-      return`<div class="pill${a.name===sel?' sel':''}" data-a="${esc(a.name)}" style="left:${x}px;top:${y}px"><i class="led" style="background:${LED[st]}"></i>${esc(a.name)} <em>${esc(L.role)}</em></div>`}).join('')
-      + bubbles(items);
-    box.querySelectorAll('[data-a]').forEach(el=>el.onclick=()=>select(el.dataset.a));
+    pillBox.innerHTML=items.map(({a,x,y})=>{const st=statusOf(a);const L=lookOf(a.name,workerIdx[a.name]||0);
+      return`<div class="pill${a.name===sel?' sel':''}" data-a="${esc(a.name)}" style="left:${x}px;top:${y}px"><i class="led" style="background:${LED[st]}"></i>${esc(a.name)} <em>${esc(L.role)}</em></div>`}).join('');
+    pillBox.querySelectorAll('[data-a]').forEach(el=>el.onclick=()=>select(el.dataset.a));
+    moveBubble();   /* coordenadas nada más: el contenido se escribió en sync() */
   }
-  function bubbles(items){
-    const need=pendingAdrian();if(!need.length)return'';
-    const p=people.opencode2;if(!p)return'';const w=host.clientWidth,h=host.clientHeight;p.userData.head.getWorldPosition(v);v.y+=.34;v.project(cam);
-    const it={x:(v.x+1)/2*w,y:(1-v.y)/2*h-26};
-    return`<div class="bub" data-a="opencode2" style="left:${it.x}px;top:${it.y-8}px"><b>TE NECESITA</b>${esc(need[0].id)} · ${esc(need[0].titulo)}</div>`}
 
   function applyTheme(){const dark=palette();hemi.color.set(theme.sky);hemi.groundColor.set(theme.ground);hemi.intensity=theme.hemiI;sun.intensity=theme.sunI;R.toneMappingExposure=theme.exp;
     for(const l of lamps)sc.remove(l);lamps.length=0;
