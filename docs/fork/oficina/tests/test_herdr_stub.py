@@ -416,7 +416,7 @@ def test_herdr_cmd_parsea_el_sobre_de_exit0(server):
     server.set_state("explorer", "idle")
     r = server.mod.herdr_cmd(["agent", "prompt", "explorer", "hola"], 30)
     assert r["rc"] == 0 and r["code"] is None and r["type"] == "agent_prompted"
-    assert r["env"]["agent"]["name"] == "explorer" and r["dead"] is False
+    assert r["env"]["result"]["agent"]["name"] == "explorer" and r["dead"] is False
 
 
 def test_herdr_cmd_socket_muerto_es_dead(server):
@@ -579,7 +579,8 @@ def test_office_delete_superficie_el_error_de_herdr(server):
 def test_office_delete_ok_con_el_sobre_emulado(server):
     server.add_agent(name="agy-obrero", kind="agy", status="idle", mach="mac-mini", workspace_id="w9")
     code, r = server.mod.api_office_delete(json.dumps({"id": "mac-mini:w9", "confirm": "w9"}))
-    assert code == 200 and r["ok"] is True and "workspace_close" in r["output"]
+    assert code == 200 and r["ok"] is True and '"type":"ok"' in r["output"], \
+        "la forma verificada de `workspace close` es {\"type\":\"ok\"}; el `workspace_close` era inventado"
 
 
 def test_hj_usa_el_helper_y_devuelve_result(server):
@@ -1834,3 +1835,30 @@ def test_columnas_viajan_en_el_payload(server):
                                                            ensure_ascii=False), encoding="utf-8")
     assert server.mod.tasks_cols() is None
     assert server.build_state()["columnas"] is None
+
+
+def test_stub_emite_las_formas_capturadas_en_vivo(server):
+    """T21: los fixtures son capturas verbatim del binario, y el stub emitia `type` inventados
+    (`workspace_create`, `pane_split`, `workspace_close`) y `matched_status`, campos que el binario
+    no trae. Un campo inventado puede hacer pasar un test que lo lee, asi que el stub se compara
+    contra la captura: `id`, claves de `result`, `type` y las claves del pane/root_pane.
+    """
+    from pathlib import Path
+    fx = Path(__file__).parent / "fixtures"
+    casos = [("workspace_create.json", ["workspace", "create", "--cwd", "/tmp/x", "--label", "L", "--no-focus"]),
+             ("pane_split.json", ["pane", "split", "w1:p1", "--direction", "right", "--no-focus"]),
+             ("workspace_close.json", ["workspace", "close", "w9"])]
+    for name, cmd in casos:
+        real = json.loads((fx / name).read_text(encoding="utf-8"))
+        r = server.mod.herdr_cmd(cmd)
+        assert r["env"]["id"] == real["id"], name
+        assert set(r["res"]) == set(real["result"]), name
+        assert r["res"]["type"] == real["result"]["type"], name
+        for k in ("pane", "root_pane"):
+            if k in real["result"]:
+                assert set(r["res"][k]) == set(real["result"][k]), "%s: %s" % (name, k)
+    server.add_agent(name="agy-t21", kind="agy", status="idle", workspace_id="w1")
+    r = server.mod.herdr_cmd(["agent", "prompt", "agy-t21", "hola", "--wait", "--timeout", "5000"])
+    assert r["res"], "el prompt a un agente existente debe devolver el sobre verificado"
+    assert "matched_status" not in r["res"], "el binario no devolvio `matched_status` en la captura de T25"
+    assert r["res"]["type"] == "agent_prompted"

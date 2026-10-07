@@ -237,7 +237,8 @@ class HerdrStub:
             pane = next((args[i + 1] for i, v in enumerate(args) if v == "--pane"), None)
             a["pane_id"] = pane or a["pane_id"]
             argv = [a["agent"]] + [v for v in args[args.index("--") + 1:]] if "--" in args else [a["agent"]]
-            return _cp(["herdr"] + args, _dump({"type": "agent_started", "agent": copy.deepcopy(a), "argv": argv}))
+            # Forma VERIFICADA en vivo (T25): {"id":"cli:agent:start","result":{"agent":{...},"argv":[...],"type":"agent_started"}}
+            return self._ok("cli:agent:start", {"type": "agent_started", "agent": copy.deepcopy(a), "argv": argv})
         if key == ("agent", "prompt"):
             a = self.find(args[2], mach)
             if not a:
@@ -246,30 +247,41 @@ class HerdrStub:
             self._seq += 1
             a["state_change_seq"] = self._seq
             res = {"type": "agent_prompted", "agent": copy.deepcopy(a)}
-            if "--wait" in args:   # forma de --wait no verificada en vivo; T5 la ajustara
-                res["matched_status"] = a["agent_status"]
-            return _cp(["herdr"] + args, _dump(res))
-        if key == ("workspace", "create"):   # forma INFERIDA: server.py:275 lee r["workspace"]["workspace_id"] y r["root_pane"]["pane_id"]
+            # `matched_status` NO existe en la forma capturada en vivo (T25). Se emite el sobre
+            # verificado: {"id":"cli:agent:prompt","result":{"agent":{...},"type":"agent_prompted"}}.
+            return self._ok("cli:agent:prompt", {"type": "agent_prompted", "agent": copy.deepcopy(a)})
+        if key == ("workspace", "create"):   # forma VERIFICADA en vivo (2026-10-06): result = {root_pane, tab, type:"workspace_created", workspace}
             wid = "w%d" % self._ws
             self._ws += 1
             label = next((args[i + 1] for i, v in enumerate(args) if v == "--label"), wid)
             w = {"workspace_id": wid, "label": label, "number": self._ws, "active_tab_id": wid + ":t1",
                  "agent_status": "unknown", "focused": False, "pane_count": 1, "tab_count": 1}
             self.workspaces.setdefault(mach, []).append(w)
-            pane = {"pane_id": wid + ":p1", "tab_id": wid + ":t1", "workspace_id": wid}
-            return self._ok("cli:workspace:create", {"type": "workspace_create", "workspace": w, "root_pane": pane})
-        if key == ("pane", "split"):   # forma INFERIDA: server.py:287 lee sp["pane"]["pane_id"]
+            tab = {"tab_id": wid + ":t1", "workspace_id": wid, "label": "1", "number": 1,
+                   "agent_status": "unknown", "focused": False, "pane_count": 1}
+            pane = {"pane_id": wid + ":p1", "tab_id": wid + ":t1", "workspace_id": wid,
+                    "agent_status": "unknown", "focused": False, "revision": 0,
+                    "cwd": next((args[i + 1] for i, v in enumerate(args) if v == "--cwd"), ""),
+                    "foreground_cwd": next((args[i + 1] for i, v in enumerate(args) if v == "--cwd"), ""),
+                    "terminal_id": "term_stub_%s_p1" % wid, "scroll": copy.deepcopy(SCROLL)}
+            return self._ok("cli:workspace:create", {"type": "workspace_created", "workspace": w,
+                                                      "root_pane": pane, "tab": tab})
+        if key == ("pane", "split"):   # forma VERIFICADA: result = {pane, type:"pane_info"}; un pane nuevo no trae `name`
             base = args[2] if len(args) > 2 and not args[2].startswith("--") else "w1:p1"
             self._pane += 1
             wid = base.split(":")[0]
             pane = {"pane_id": "%s:p%d" % (wid, self._pane), "tab_id": "%s:t1" % wid, "workspace_id": wid,
-                    "agent_status": "unknown", "focused": False}
-            return self._ok("cli:pane:split", {"type": "pane_split", "pane": pane})
-        if key == ("workspace", "close"):   # el id cli:workspace:close esta en el binario; el result es INFERIDO (server.py:368 solo usa out[-200:])
+                    "agent_status": "unknown", "focused": False, "revision": 0,
+                    "cwd": next((args[i + 1] for i, v in enumerate(args) if v == "--cwd"), ""),
+                    "foreground_cwd": next((args[i + 1] for i, v in enumerate(args) if v == "--cwd"), ""),
+                    "terminal_id": "term_stub_%s_p%d" % (wid, self._pane),
+                    "scroll": copy.deepcopy(SCROLL)}
+            return self._ok("cli:pane:split", {"type": "pane_info", "pane": pane})
+        if key == ("workspace", "close"):   # forma VERIFICADA en vivo: result = {type:"ok"}
             wid = args[2]
             self.workspaces[mach] = [w for w in self.workspaces.get(mach, []) if w["workspace_id"] != wid]
             self.agents[mach] = [a for a in self.agents.get(mach, []) if a.get("workspace_id") != wid]
-            return self._ok("cli:workspace:close", {"type": "workspace_close", "workspace_id": wid, "closed": True})
+            return self._ok("cli:workspace:close", {"type": "ok"})
         return self._err("cli:stub", "usage", "stub: comando no emulado: " + " ".join(args))
 
     def _ok(self, cid, result):
