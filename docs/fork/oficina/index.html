@@ -135,6 +135,11 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 .pill{position:absolute;transform:translate(-50%,0);pointer-events:auto;cursor:pointer;display:flex;align-items:center;gap:6px;
   background:var(--ink);color:var(--inkText);font-size:11.5px;font-weight:650;padding:4px 9px 4px 7px;border-radius:999px;white-space:nowrap;
   box-shadow:0 4px 14px rgba(0,0,0,.18);transition:transform .15s,opacity .2s}
+/* T18: la pill se puede alcanzar con Tab, así necesita anillo de foco. La burbuja comparte la ruta
+   de selección (role="button"), y `#insp` recibe el foco cuando el cajón se abre en compacto. */
+.pill:focus-visible{transform:translate(-50%,-2px);outline:2px solid var(--accent);outline-offset:2px}
+.bub:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#insp:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .pill:hover{transform:translate(-50%,-2px)}
 .pill.sel{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--accent)}
 .pill em{font-style:normal;font-weight:500;opacity:.65;text-transform:uppercase;font-size:10px;letter-spacing:.05em}
@@ -355,24 +360,27 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
         <button type="button" id="to"><i class="led"></i><span>@claude</span></button>
         <div id="menu" class="card" role="menu"></div>
       </div>
-      <input id="msg" maxlength="4000" placeholder="Escribe una tarea… claude la convierte en contrato y la pone en la cola">
+      <input id="msg" maxlength="4000" aria-label="Mensaje para el agente" placeholder="Escribe una tarea… claude la convierte en contrato y la pone en la cola">
       <button id="send" type="submit" aria-label="Enviar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg></button>
     </form>
   </main>
 
-  <aside id="insp" class="card">
-    <button id="closeInsp" aria-label="Cerrar inspector">✕</button>
-    <div class="tabs" role="tablist">
-      <button class="tab on" data-tab="inspector">Inspector</button>
-      <button class="tab" data-tab="salida">Salida</button>
-      <button class="tab" data-tab="hilo">Hilo</button>
+  <!-- T18: el cajón compacto se abre con `select()`/`openChat()`. `tabindex="-1"` lo hace focoable
+       (programático, no en la secuencia de Tab) y el botón de cierre es un botón real, alcanzable con
+       Tab y activable con Enter o Espacio. -->
+  <aside id="insp" class="card" aria-label="Inspector" tabindex="-1">
+    <button id="closeInsp" type="button" aria-label="Cerrar inspector">✕</button>
+    <div class="tabs" role="tablist" aria-label="Vistas del inspector">
+      <button class="tab on" id="tab-inspector" type="button" role="tab" aria-selected="true" aria-controls="ipane" data-tab="inspector">Inspector</button>
+      <button class="tab" id="tab-salida" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="ipane" data-tab="salida">Salida</button>
+      <button class="tab" id="tab-hilo" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="ipane" data-tab="hilo">Hilo</button>
     </div>
-    <div id="ipane"></div>
+    <div id="ipane" role="tabpanel" aria-labelledby="tab-inspector" tabindex="-1"></div>
   </aside>
 </div>
 
-<div id="modal"><div class="card" role="dialog" aria-modal="true"><h3 id="mt"></h3><p id="mp"></p><div id="mb"></div><div class="row"><button class="btn" id="mc">Cancelar</button><button class="btn pri" id="mo">Aceptar</button></div></div></div>
-<div id="toasts" aria-live="polite"></div>
+<div id="modal"><div class="card" role="dialog" aria-modal="true" aria-labelledby="mt" aria-describedby="mp"><h3 id="mt"></h3><p id="mp"></p><div id="mb"></div><div class="row"><button class="btn" id="mc">Cancelar</button><button class="btn pri" id="mo">Aceptar</button></div></div></div>
+<div id="toasts" role="status" aria-live="polite"></div>
 <div id="rotate"><div><svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg><h3>La oficina está diseñada en horizontal</h3><p>En vertical se ve estrecha, pero sigue usable: oficinas, KPIs, cola, estado e inspector están arriba.</p></div></div>
 
 <script type="module">
@@ -384,7 +392,8 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const fmt=(v,d=1)=>v==null||isNaN(v)?'—':Number(v).toLocaleString('es-ES',{minimumFractionDigits:d,maximumFractionDigits:d});
 const rel=ts=>{if(!ts)return'';const s=Math.max(0,Date.now()/1000-ts);if(s<60)return'hace unos segundos';if(s<3600)return`hace ${Math.round(s/60)} min`;if(s<86400)return`hace ${Math.round(s/3600)} h`;return`hace ${Math.round(s/86400)} d`};
 const store={get(k){try{return localStorage.getItem(k)}catch(_){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(_){}}};
-function toast(t,bad){const d=document.createElement('div');d.className='toast'+(bad?' bad':'');d.textContent=t;$('#toasts').append(d);setTimeout(()=>d.remove(),4200)}
+function toast(t,bad){const d=document.createElement('div');d.className='toast'+(bad?' bad':'');d.setAttribute('role',bad?'alert':'status');   /* T18: `#toasts` ya es aria-live; el role dice qué aviso es y se lee al aparecer */
+  d.textContent=t;$('#toasts').append(d);setTimeout(()=>d.remove(),4200)}
 async function api(path,opt){const r=await fetch(path,opt);if(r.status===401){location.href='/login';throw new Error('login')}return r.json()}
 
 const ICX='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
@@ -434,6 +443,13 @@ const scene3d=(()=>{
   const sc=new THREE.Scene();
   const cam=new THREE.OrthographicCamera(-1,1,1,-1,0.1,100);
   let az=0.58, zoom=1, el=0.62;
+  /* T18: `prefers-reduced-motion` solo apagaba CSS; la caminata y el tecleo seguían animando. La
+     preferencia se lee UNA vez y se escucha con un listener que dispara UN render (no un frame, no un
+     temporizador). Con la preferencia puesta: `goTo` planta al agente en su destino, `tick` no recorre
+     la caminata, el tecleo se fija en una pose, la pantalla no se repinta y el rack deja de parpadear.
+     `animating()` queda false, así el bucle se para en el mismo estado quieto que sin la preferencia. */
+  const rmq=matchMedia('(prefers-reduced-motion: reduce)');let RM=rmq.matches;
+  rmq.addEventListener('change',()=>{RM=rmq.matches;request()});
   const hemi=new THREE.HemisphereLight(0xffffff,0xd8cfc2,1.15);sc.add(hemi);
   const sun=new THREE.DirectionalLight(0xffffff,1.55);sun.position.set(6,11,7);sun.castShadow=true;
   sun.shadow.mapSize.set(1024,1024);Object.assign(sun.shadow.camera,{left:-8,right:8,top:8,bottom:-8,near:1,far:30});sun.shadow.radius=4;sun.shadow.bias=-0.0006;sc.add(sun);
@@ -557,9 +573,15 @@ const scene3d=(()=>{
     g.add(box(.45,.62,.75,'#f3f4f6',.5,.31,0));
     for(const [x,z] of[[-.74,-.36],[.74,-.36],[-.74,.36]])g.add(box(.06,.72,.06,theme.wood,x,.36,z));
     g.add(box(.08,.28,.06,'#2b2f36',0,.93,.24));g.add(box(.36,.02,.2,'#2b2f36',0,.8,.24));
-    g.add(box(.86,.52,.04,'#1f2937',0,1.25,.25));
-    const cv=document.createElement('canvas');cv.width=320;cv.height=192;const tex=new THREE.CanvasTexture(cv);tex.colorSpace=THREE.SRGBColorSpace;
-    const scr=new THREE.Mesh(new THREE.PlaneGeometry(.8,.46),new THREE.MeshBasicMaterial({map:tex,toneMapped:false}));own(scr,scr.geometry,scr.material,tex);scr.position.set(0,1.25,.228);scr.rotation.y=Math.PI;g.add(scr);
+    /* T29: la franja se medía en Chromium y daba texto de 1.7 px de pantalla a zoom 47.21. El tamaño
+       de pantalla de un glifo es `fuente / alto_del_lienzo * alto_del_plano * px_por_unidad`, así que la
+       única palanca honesta es la fracción del plano que ocupa la franja. El monitor pasa a 1.5x0.6
+       (plano y marco, MISMA cantidad de geometrías, un solo Mesh por puesto) y el lienzo a 480x192
+       (MISMO número de canvas, misma altura: la relación fuente→plano se dobla en ancho para que la
+       palabra quepa). Con esto la cabecera de 68 px rinde 10.03 px de pantalla a 47.21 y 19.06 px a 89.7. */
+    g.add(box(1.62,.72,.04,'#1f2937',0,1.26,.25));
+    const cv=document.createElement('canvas');cv.width=480;cv.height=192;const tex=new THREE.CanvasTexture(cv);tex.colorSpace=THREE.SRGBColorSpace;
+    const scr=new THREE.Mesh(new THREE.PlaneGeometry(1.5,.6),new THREE.MeshBasicMaterial({map:tex,toneMapped:false}));own(scr,scr.geometry,scr.material,tex);scr.position.set(0,1.25,.228);scr.rotation.y=Math.PI;g.add(scr);
     g.add(box(.55,.025,.18,'#e5e7eb',0,.8,-.12));
     g.add(box(.09,.02,.13,'#e5e7eb',.42,.8,-.12));
     g.add(cyl(.045,.09,look.shirt,-.55,.84,-.05));
@@ -572,7 +594,10 @@ const scene3d=(()=>{
     /* marcador de señal: UNA esfera compartida (G.sph) por puesto, creada al construir el escritorio.
        Se enciende solo con `blocked` (rojo) y `done` (azul); `visible=false` no se renderiza ni proyecta
        sombra, así un agente en reposo cuesta cero. Se reutiliza la geometría y el material memoizado. */
-    const mark=sph(.075,'#9ca3af',-.42,1.5,-.42,{emissive:'#9ca3af',emissiveIntensity:1.4,roughness:.4});
+    /* T29: `sph()` reutiliza `G.sph` (geometría compartida, 0 construcciones nuevas). Radio 0.075 →
+       6.73 px de pantalla a zoom 89.7 y 3.54 a 47.21; con 0.12 da 10.76 y 5.67 px: unmistakable sin
+       añadir geometría, luz ni textura. */
+    const mark=sph(.12,'#9ca3af',-.42,1.55,-.42,{emissive:'#9ca3af',emissiveIntensity:1.4,roughness:.4});
     mark.visible=false;mark.castShadow=false;g.add(mark);
     g.userData={scr,cv,tex,led,hit,mark,seed,code:codeLines(seed)};return g}
 
@@ -582,10 +607,15 @@ const scene3d=(()=>{
   /* franja de señal por estado, pintada SOLO cuando cambia el estado (la llama `sync`, nunca `tick`):
      `blocked` rojo, `done` azul con la `completion_seq` verificada, `unknown` ámbar. `idle` sale por su
      propio ramo antes de llegar aquí, y `working` no lleva franja: sigue animando la pantalla. */
-  const STRIP={blocked:['#dc2626','ESPERA APROBACIÓN',null],
-    done:['#3b82f6','TURNO TERMINADO',a=>a.completion_seq!=null?'secuencia '+a.completion_seq:'secuencia no observada'],
-    unknown:['#d97706','HERDR NO CLASIFICA',a=>a.pane_id?'panel '+a.pane_id:'panel desconocido']};
-  function drawCode(d,a,st,t){const u=d.userData,name=a.name,act=a.activity,c=u.cv.getContext('2d'),W2=320,H2=192;
+  /* T29: la cabecera se lee a 10 px de pantalla, así cada palabra tiene que caber en 480 px de lienzo
+     con fuente de 68 px (≈10 glifos). Las frases completas viven en el DOM (`.st`, la ficha, la leyenda);
+     la franja dice la palabra corta y el dato verificado. `blocked` lleva el `pane_id` en la cabecera
+     porque el panel es el dato que el humano necesita para ir a aprobar. Nunca se inventa: si el dato no
+     viene, la línea lo dice. Colores y palabras de `LED`/`STTXT` intactos. */
+  const STRIP={blocked:['#dc2626','APROBACIÓN',a=>a.pane_id?'panel '+a.pane_id:'panel sin identificar'],
+    done:['#3b82f6','LISTO',a=>a.completion_seq!=null?'secuencia '+a.completion_seq:'secuencia no observada'],
+    unknown:['#d97706','SIN CLASIF.',a=>a.pane_id?'panel '+a.pane_id:'panel desconocido']};
+  function drawCode(d,a,st,t){const u=d.userData,name=a.name,act=a.activity,c=u.cv.getContext('2d'),W2=480,H2=192;
     c.fillStyle='#0b1220';c.fillRect(0,0,W2,H2);c.fillStyle='#111a2e';c.fillRect(0,0,W2,22);
     for(const [i,col] of['#f87171','#fbbf24','#34d399'].entries()){c.fillStyle=col;c.beginPath();c.arc(12+i*12,11,4,0,7);c.fill()}
     c.fillStyle='#94a3b8';c.font='600 11px ui-monospace,monospace';c.fillText(name+' · '+String(act||'').slice(0,30),52,15);
@@ -597,9 +627,14 @@ const scene3d=(()=>{
     for(let k=0;k<11;k++){const ln=u.code[(off+k)%40];const y=34+k*14;c.fillStyle='#334155';c.fillRect(6,y,10,6);for(const sg of ln){c.fillStyle=sg.c;c.globalAlpha=.85;c.fillRect(22+sg.x,y,sg.w,7);c.globalAlpha=1}}
     if(active&&Math.floor(t/450)%2){c.fillStyle='#e2e8f0';c.fillRect(22+((off*37)%180),34+10*14,7,9)}
     const sp=st!=='working'&&STRIP[st];
-    if(sp){c.globalAlpha=.16;c.fillStyle=sp[0];c.fillRect(0,156,W2,36);c.globalAlpha=1;c.fillStyle=sp[0];c.fillRect(0,156,4,36);
-      c.fillStyle='#e2e8f0';c.font='700 15px Inter,system-ui,sans-serif';c.fillText(sp[1],12,171);
-      if(sp[2]){c.fillStyle='#94a3b8';c.font='500 11px ui-monospace,monospace';c.fillText(sp[2](a),12,185)}}
+    /* La banda ocupa de y=92 a 192 (52 % del plano: 0.3125 unidades → 14.8 px de pantalla a 47.21).
+       Cabecera 68 px → 10.03 px de pantalla a 47.21, 19.06 a 89.7. Detalle 44 px monoespaciado →
+       6.49 px a 47.21 y 12.33 a 89.7: el dato fino se lee al acercar, la palabra siempre. */
+    if(sp){const BY=92,BH=H2-BY;
+      c.fillStyle='#111a2e';c.fillRect(0,BY,W2,BH);   /* base opaca: la franja no compite con el código que tiene debajo */
+      c.globalAlpha=.16;c.fillStyle=sp[0];c.fillRect(0,BY,W2,BH);c.globalAlpha=1;c.fillStyle=sp[0];c.fillRect(0,BY,6,BH);
+      c.fillStyle='#e2e8f0';c.font='800 68px Inter,system-ui,sans-serif';c.fillText(sp[1],14,BY+54);
+      if(sp[2]){c.fillStyle='#94a3b8';c.font='700 44px ui-monospace,monospace';c.fillText(sp[2](a),14,BY+88)}}
     u.tex.needsUpdate=true}
 
   /* empleado virtual: articulaciones jerárquicas para sentarse, teclear, caminar y tomar café */
@@ -666,7 +701,7 @@ const scene3d=(()=>{
   function deskSeat(d){const v2=d.localToWorld(new THREE.Vector3(0,0,-.72));return{x:v2.x,y:d.position.y,z:v2.z,ry:d.rotation.y}}
   function tableSeat(name){if(seatOf[name]==null){const used=new Set(Object.values(seatOf));let k=0;while(used.has(k)&&k<5)k++;seatOf[name]=k}return tableSeats[seatOf[name]]}
   function goTo(p,tg,mode,instant){const u=p.userData;
-    if(instant||!u.mode){p.position.x=tg.x;p.position.z=tg.z;p.rotation.y=tg.ry;u.base=tg.y||0;pose(p,mode);p.position.y+=u.base;return}
+    if(instant||!u.mode||RM){p.position.x=tg.x;p.position.z=tg.z;p.rotation.y=tg.ry;u.base=tg.y||0;pose(p,mode);p.position.y+=u.base;return}   /* T18: con reduced motion NO se crea `walk`: pose estática en el destino */
     const dx=tg.x-p.position.x,dz=tg.z-p.position.z,dist=Math.hypot(dx,dz);
     u.walk={x0:p.position.x,z0:p.position.z,tg,mode,t0:performance.now(),dur:Math.max(900,Math.min(3200,dist/1.3*1000)),ry:Math.atan2(dx,dz)};request()}
   function sync(agents){
@@ -742,7 +777,7 @@ const scene3d=(()=>{
   /* bucle bajo demanda: solo anima si alguien trabaja o el rack está activo */
   let need=true,last=0,running=false;
   function request(){need=true;if(!running){running=true;requestAnimationFrame(tick)}}
-  function animating(){return Object.values(people).some(p=>p.userData.walk||p.userData.mode==='type')||(S&&S.lock)}
+  function animating(){return!RM&&(Object.values(people).some(p=>p.userData.walk||p.userData.mode==='type')||(S&&S.lock))}   /* T18: con reduced motion nada anima, el bucle se para igual */
   let lastScr=0;
   function tick(t){
     if(document.hidden){running=false;return}
@@ -750,12 +785,14 @@ const scene3d=(()=>{
     if(anim&&t-last<1000/30){requestAnimationFrame(tick);return}
     last=t;const now=performance.now();
     for(const p of Object.values(people)){const u=p.userData;
-      if(u.walk){const w=u.walk,k=Math.min(1,(now-w.t0)/w.dur),e=k<.5?2*k*k:1-Math.pow(-2*k+2,2)/2;
+      if(u.walk){const w=u.walk;
+        if(RM){u.walk=null;p.position.x=w.tg.x;p.position.z=w.tg.z;p.rotation.y=w.tg.ry;u.base=w.tg.y||0;pose(p,w.mode,0);p.position.y+=u.base}   /* T18: la caminata se planta en el destino, sin frames intermedios */
+        else{const k=Math.min(1,(now-w.t0)/w.dur),e=k<.5?2*k*k:1-Math.pow(-2*k+2,2)/2;
         p.position.x=w.x0+(w.tg.x-w.x0)*e;p.position.z=w.z0+(w.tg.z-w.z0)*e;p.rotation.y=w.ry;pose(p,'walk',now);
-        if(k>=1){u.walk=null;p.rotation.y=w.tg.ry;u.base=w.tg.y||0;pose(p,w.mode);p.position.y+=u.base}}
-      else if(u.mode==='type'){pose(p,'type',now);p.position.y+=u.base||0}}
-    if(now-lastScr>250){lastScr=now;for(const [n,d] of Object.entries(desks)){const p=people[n];if(p&&p.userData.mode==='type'&&!p.userData.walk)drawCode(d,d.userData.a,'working',now)}}
-    rackLeds.forEach((l,i)=>{l.visible=!(S&&S.lock)||((Math.floor(t/180)+i)%3!==0)});
+        if(k>=1){u.walk=null;p.rotation.y=w.tg.ry;u.base=w.tg.y||0;pose(p,w.mode);p.position.y+=u.base}}}
+      else if(u.mode==='type'){pose(p,'type',RM?0:now);p.position.y+=u.base||0}   /* T18: con reduced motion el tecleo es una pose fija (t=0), no un ciclo */}
+    if(!RM&&now-lastScr>250){lastScr=now;for(const [n,d] of Object.entries(desks)){const p=people[n];if(p&&p.userData.mode==='type'&&!p.userData.walk)drawCode(d,d.userData.a,'working',now)}}   /* T18: con reduced motion la pantalla no se repinta */
+    rackLeds.forEach((l,i)=>{l.visible=RM||!(S&&S.lock)||((Math.floor(t/180)+i)%3!==0)});   /* T18: con reduced motion el rack queda encendido fijo, sin parpadeo */
     R.render(sc,cam);placeLabels();need=false;
     if(anim)requestAnimationFrame(tick);else running=false;
   }
@@ -768,7 +805,14 @@ const scene3d=(()=>{
   const v=new THREE.Vector3();
   const lab=$('#labels'),pillBox=document.createElement('div'),bub=document.createElement('div');
   pillBox.id='pills';bub.className='bub';bub.hidden=true;
-  bub.onclick=()=>{if(bub.dataset.a)select(bub.dataset.a)};   /* la misma ruta de selección de las pills */
+  /* T18: la burbuja es un `div` clicable, así no era alcanzable con teclado. `role="button"` +
+     `tabindex="0"` la ponen en la secuencia de Tab con el mismo nombre que ya lee un lector de pantalla
+     (su contenido), y Enter o Espacio hacen la MISMA ruta de selección que el clic: `select(dataset.a)`.
+     Se enlaza una sola vez, en la creación, como las pills de T15. */
+  bub.setAttribute('role','button');bub.tabIndex=0;
+  const bubGo=()=>{if(bub.dataset.a)select(bub.dataset.a)};
+  bub.onclick=bubGo;
+  bub.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();bubGo()}});
   lab.append(pillBox,bub);
   /* T15: las pills son ELEMENTOS PERSISTENTES, hijos de `#pills`, con la misma regla de T12: se crean
    UNA vez por agente y su `onclick` se enlaza en la creación. `placeLabels` solo mueve coordenadas,
@@ -777,12 +821,18 @@ const scene3d=(()=>{
   const pills=new Map();   /* nombre -> {el,led,nm,em,st,role,x,y,sel,on} */
   function pillEl(name){
     const had=pills.get(name);if(had)return had;
-    const el=document.createElement('div');el.className='pill';el.dataset.a=name;
+    const el=document.createElement('div');el.className='pill';el.dataset.a=name;   /* T18: `tabindex` y `role` se ponen aquí, una vez, en la creación */
+    el.tabIndex=0;el.setAttribute('role','button');
     const led=document.createElement('i');led.className='led';
     const nm=document.createElement('span');nm.textContent=name;
     const em=document.createElement('em');
     el.append(led,nm,em);
-    el.onclick=()=>select(name);   /* ENLACE UNA SOLA VEZ, en la creación */
+    /* T18: la pill es un `div` clicable, así `role="button"` + `tabindex` NO bastan: un div con role de
+       botón no dispara `click` con Enter ni Espacio. El enlace se hace UNA sola vez, en la creación
+       (la regla de T15 se conserva), y la ruta de selección es la misma que la del clic. */
+    const act=()=>select(name);
+    el.onclick=act;
+    el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();act()}});
     pillBox.append(el);
     const p={el,led,nm,em,st:'',role:'',x:'',y:'',sel:false,on:true};pills.set(name,p);return p}
   function dropPill(name){const p=pills.get(name);if(!p)return;p.el.remove();pills.delete(name)}
@@ -1069,17 +1119,42 @@ function setView(v){view=v;$$('.rb[data-view]').forEach(b=>b.classList.toggle('o
   if(o)scene3d.resize();renderAll()}
 $$('.rb[data-view]').forEach(b=>b.onclick=()=>setView(b.dataset.view));
 $$('[data-goto]').forEach(b=>b.onclick=()=>setView(b.dataset.goto));
-$$('.tab').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;$$('.tab').forEach(x=>x.classList.toggle('on',x===b));renderInspector()});
+/* T18 (tabs): `role="tablist"` existía, pero los botones no eran tabs y no había teclado. `setTab` es
+   la ÚNICA ruta que cambia la pestaña: pinta `aria-selected`, corre el `tabindex` de roving (solo la
+   activada queda en la secuencia de Tab) y enlaza `#ipane` con la pestaña activa. Las flechas mueven el
+   foco y activan, Home/End van a los extremos, como manda el patrón de ARIA. Ninguna ruta nueva de
+   render: `setTab` hace lo mismo que hacía el onclick (renderInspector) y nada más. */
+const TABS=$$('.tab');
+function setTab(name,moveFocus){
+  tab=name;
+  for(const b of TABS){const on=b.dataset.tab===name;
+    b.classList.toggle('on',on);b.setAttribute('aria-selected',on?'true':'false');b.tabIndex=on?0:-1;
+    if(on){$('#ipane').setAttribute('aria-labelledby',b.id);if(moveFocus)b.focus()}}
+  renderInspector();
+}
+TABS.forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
+TABS.forEach(b=>b.addEventListener('keydown',e=>{
+  const i=TABS.indexOf(b),n=e.key==='ArrowRight'?i+1:e.key==='ArrowLeft'?i-1:e.key==='Home'?0:e.key==='End'?TABS.length-1:-1;
+  if(n<0||n>=TABS.length)return;e.preventDefault();setTab(TABS[n].dataset.tab,true);
+}));
 
+/* T18: en compacto el cajón se abre con `select()`/`openChat()` y no había forma de entrar con teclado.
+   `#insp` es `complementary` con nombre y `tabindex="-1"` (focoable de programa, no en la secuencia de
+   Tab), así `focusDrawer()` mete el foco en la región abierta y el botón de cierre queda alcanzable.
+   `openChat` sigue llevando el foco al `#msg` al final: escribir es la intención de abrir el chat. */
+function focusDrawer(){if($('#stage').classList.contains('compact'))$('#insp').focus()}
 $('#closeInsp').onclick=()=>$('#stage').classList.remove('drawer');
-function select(n){sel=n;store.set('sel',n);$('#stage').classList.add('drawer');if(n!=='claude'&&n!=='tester'){to=n}renderInspector();scene3d.request();updateTo()}
+function select(n){sel=n;store.set('sel',n);$('#stage').classList.add('drawer');focusDrawer();if(n!=='claude'&&n!=='tester'){to=n}renderInspector();scene3d.request();updateTo()}
 
 /* chat */
 function renderMenu(){$('#menu').innerHTML=agentList().map(a=>{const st=statusOf(a);   /* el badge consume la clase `.st` (T22): el estado se lee, no solo se colorea */
   return`<button type="button" data-to="${esc(a.name)}" class="${a.name===to?'on':''}"><i class="led" style="background:${LED[st]}"></i>@${esc(a.name)}<span class="st ${st}">${esc(STTXT[st])}</span><small>${a.name==='claude'?'a la cola':'directo'}</small></button>`}).join('');
   $$('#menu [data-to]').forEach(b=>b.onclick=()=>{to=b.dataset.to;updateTo();$('#menu').classList.remove('open');$('#msg').focus()})}
 function updateTo(){const a=agentList().find(x=>x.name===to)||{name:to,status:'idle'};$('#to span').textContent='@'+to;$('#to .led').style.background=LED[statusOf(a)];
-  $('#msg').placeholder=to==='claude'?'Escribe una tarea… claude la convierte en contrato y la pone en la cola':`Mensaje directo a ${to} (lo recibe como orden de Adrián)`;renderBadge()}
+  const ph=to==='claude'?'Escribe una tarea… claude la convierte en contrato y la pone en la cola':`Mensaje directo a ${to} (lo recibe como orden de Adrián)`;
+  $('#msg').placeholder=ph;   /* T18: el placeholder no es nombre accesible. `aria-label` se pone en el HTML y se actualiza aquí con el destinatario real; `title` repite el placeholder para el ratón. */
+  $('#msg').setAttribute('aria-label',to?'Mensaje para '+to:'Mensaje al agente');
+  $('#msg').title=ph;renderBadge()}
 $('#to').onclick=e=>{e.stopPropagation();$('#menu').classList.toggle('open')};
 document.addEventListener('click',()=>$('#menu').classList.remove('open'));
 $('#chat').onsubmit=e=>{e.preventDefault();const t=$('#msg').value.trim();if(!t)return;
@@ -1087,11 +1162,38 @@ $('#chat').onsubmit=e=>{e.preventDefault();const t=$('#msg').value.trim();if(!t)
   if(to==='tester')confirmModal('Mensaje directo a tester','tester comparte el motor con las mediciones: un mensaje ahora puede contaminar las cifras. ¿Enviar igualmente?',go);else go()};
 async function send(agent,mode,text){try{const r=await api('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent,mode,text})});
   if(r.ok){const who=mode==='viaclaude'?'claude':agent;toast(r.confirmed?`Entregado a ${who} ✓ · mira su respuesta en Salida`:'Enviado (sin confirmación de entrega)');
-    sel=who;tab='salida';$$('.tab').forEach(x=>x.classList.toggle('on',x.dataset.tab==='salida'));$('#stage').classList.add('drawer');renderInspector();scene3d.request();return true}toast(r.error||'Error al enviar',true)}catch(_){toast('No se pudo enviar',true)}return false}
+    sel=who;$('#stage').classList.add('drawer');setTab('salida');scene3d.request();return true   /* T18: `setTab` deja aria-selected, tabindex y aria-labelledby sincronizados */}toast(r.error||'Error al enviar',true)}catch(_){toast('No se pudo enviar',true)}return false}
 
-/* modal */
-function confirmModal(t,p,ok,body='',okText='Aceptar'){$('#mo').textContent=okText;$('#mt').textContent=t;$('#mp').textContent=p;$('#mb').innerHTML=body;$('#modal').classList.add('on');
-  $('#mo').onclick=()=>{$('#modal').classList.remove('on');ok()};$('#mc').onclick=()=>$('#modal').classList.remove('on');setTimeout(()=>($('#mb input')||$('#mo')).focus(),30)}
+/* modal — T18: `aria-modal` estaba, pero el foco se iba al primer botón y Tab podía salir del diálogo.
+   `focusables()` lee lo que hay dentro de la tarjeta; el lazo vive en UN `keydown` del `#modal`, sin
+   temporizador y sin listener por frame. Escape cierra, clic en el fondo cierra, y el foco vuelve al
+   elemento que abrió (`document.activeElement` guardado al abrir, `.focus()` nativo al cerrar).
+   `closeModal` es la única ruta de cierre, así Aceptar, Cancelar y Escape devuelven el foco igual. */
+const FOCUSABLE='button,[tabindex]:not([tabindex="-1"]),input,select,textarea';
+const focusables=()=>$('#modal .card').querySelectorAll(FOCUSABLE).filter(e=>!e.hidden&&!e.disabled);
+let opener=null;
+function closeModal(){
+  $('#modal').classList.remove('on');
+  if(opener&&opener.focus)opener.focus();   /* el foco vuelve al que abrió: la ruta de un botón nativo */
+  opener=null;
+}
+function confirmModal(t,p,ok,body='',okText='Aceptar'){
+  $('#mo').textContent=okText;$('#mt').textContent=t;$('#mp').textContent=p;$('#mb').innerHTML=body;
+  opener=document.activeElement;   /* se guarda ANTES de mover el foco, en el mismo tick */
+  $('#modal').classList.add('on');
+  const f=focusables();if(f.length)f[0].focus();   /* T18: el foco entra en el diálogo al abrir, sin temporizador. `#mt` y `#mp` son el título y la descripción, así `aria-labelledby`/`aria-describedby` apuntan a texto que ya está puesto en el mismo tick */
+  $('#mo').onclick=()=>{closeModal();ok()};$('#mc').onclick=closeModal;
+}
+$('#modal').addEventListener('keydown',e=>{
+  if(!$('#modal').classList.contains('on'))return;
+  if(e.key==='Escape'){e.preventDefault();closeModal();return}
+  if(e.key!=='Tab')return;
+  const f=focusables();if(!f.length)return;
+  e.preventDefault();   /* Tab nunca sale del diálogo: el lazo se hace con la lista de la tarjeta */
+  const i=f.indexOf(document.activeElement);
+  f[e.shiftKey?(i<=0?f.length-1:i-1):(i>=f.length-1?0:i+1)].focus();
+});
+$('#modal').addEventListener('mousedown',e=>{if(e.target===e.currentTarget)closeModal()});
 let KINDS=null,KBY={},MACHS=['bazzite'];
 const DEF_ROWS=[{perfil:'Arquitecto',kind:'claude',model:'opus',n:1},{perfil:'Desarrollador',kind:'opencode',model:'litellm-gateway/ada-next',n:2}];
 function rowHTML(r,i){const K=KINDS||{};const ms=(K[r.kind]?.modelos)||[];
@@ -1106,11 +1208,11 @@ async function newOffice(){
   let mach='bazzite';
   try{await loadKinds(mach)}catch(_){toast('No se pudieron cargar los modelos',true);return}
   let rows=DEF_ROWS.map(r=>({...r}));
-  const body=`<div class="fgrid3"><select id="noMach" aria-label="Máquina">${MACHS.map(m=>`<option value="${esc(m)}">${m==='bazzite'?'bazzite (este servidor)':esc(m)}</option>`).join('')}</select><input id="noName" placeholder="Nombre del proyecto (p. ej. Streamia)" maxlength="40"><input id="noDir" placeholder="Carpeta (por defecto ~/nombre)"></div>
+  const body=`<div class="fgrid3"><select id="noMach" aria-label="Máquina">${MACHS.map(m=>`<option value="${esc(m)}">${m==='bazzite'?'bazzite (este servidor)':esc(m)}</option>`).join('')}</select><input id="noName" aria-label="Nombre del proyecto" placeholder="Nombre del proyecto (p. ej. Streamia)" maxlength="40"><input id="noDir" aria-label="Carpeta de la oficina" placeholder="Carpeta (por defecto ~/nombre)"></div>
     <div class="fhead"><span>Perfil</span><span>Tipo de agente</span><span>Modelo</span><span>Nº</span><span></span></div>
     <div id="frows"></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px"><button type="button" class="btn" id="addRow">+ Añadir perfil</button><small id="ftot" style="color:var(--muted)"></small></div>
-    <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:13px;color:var(--muted)"><input type="checkbox" id="noAuto" style="width:auto"> Permisos automáticos (claude y agy no piden confirmación)</label>`;
+    <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:13px;color:var(--muted)"><input type="checkbox" id="noAuto" aria-label="Permisos automáticos" style="width:auto"> Permisos automáticos (claude y agy no piden confirmación)</label>`;
   $('#modal .card').classList.add('wide');
   const draw=()=>{$('#frows').innerHTML=rows.map(rowHTML).join('');const t=rows.reduce((a,r)=>a+r.n,0);$('#ftot').textContent=`${t} agente${t===1?'':'s'} · máximo 8`;
     $$('#frows .frow').forEach(el=>{const i=+el.dataset.i,r=rows[i];
