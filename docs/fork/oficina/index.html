@@ -149,7 +149,10 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 .av{width:46px;height:46px;flex:none}
 .who b{font-size:15px;font-weight:680}
 .who small{display:block;color:var(--muted);font-size:12px;line-height:1.35}
-.st{margin-left:auto;font-size:10.5px;font-weight:700;letter-spacing:.06em;padding:3px 8px;border-radius:7px;text-transform:uppercase;align-self:flex-start}
+/* badge de estado: lo consumen la ficha del inspector y la lista de agentes del chat (T22).
+   `statusOf` solo produce los 5 estados verificados; `waiting` sigue sin productor, la clase queda.
+   `flex:none` y `white-space:nowrap` mantienen la etiqueta legible dentro de las filas flex. */
+.st{margin-left:auto;flex:none;white-space:nowrap;font-size:10.5px;font-weight:700;letter-spacing:.06em;padding:3px 8px;border-radius:7px;text-transform:uppercase;align-self:flex-start}
 .st.working{background:var(--okSoft);color:var(--ok)}.st.idle{background:var(--panel);color:var(--muted);border:1px solid var(--line)}
 .st.waiting{background:var(--warnSoft);color:var(--warn)}.st.blocked{background:var(--badSoft);color:var(--bad)}
 .st.done{background:var(--accentSoft);color:var(--accent)}.st.unknown{background:var(--panel2);color:var(--faint);border:1px solid var(--line)}
@@ -350,11 +353,14 @@ function avatarSVG(name,i){const L=lookOf(name,i);return`<svg class="av" viewBox
 /* ---------- estado global ---------- */
 let WS=null, STRATA_WS=null, S=null, OFFICES=[], sel=store.get('sel')||'opencode2', tab='inspector', view='oficina', to='claude', workerIdx={};
 const OTHER=()=>WS&&STRATA_WS&&WS!==STRATA_WS;
-const workersOf=st=>st.agents.filter(a=>!LOOK[a.name]);
 function agentList(){return S?S.agents:[]}
 
 /* ======================================================================
-   ESCENA 3D estilo arcilla: render bajo demanda, sombras suaves, ≤ ~60 mallas.
+   ESCENA 3D estilo arcilla: render bajo demanda, sombras suaves. La escena medida en Chromium
+   tiene ~350–400 mallas: ~130 de la sala, ~90 de los escritorios, ~140 de los empleados
+   (el arnés T11 contó 129 CONSTRUCCIONES de geometría: casi todo comparte las geometrías
+   cacheadas de `G`). El arnés de este cambio midió 422 mallas vivas con 5 agentes y 38 geometrías
+   distintas, por el mismo motivo: 152 de sala + 120 de escritorios + 150 de empleados.
    ====================================================================== */
 const scene3d=(()=>{
   const host=$('#scene');
@@ -370,8 +376,19 @@ const scene3d=(()=>{
   const lamps=[];
 
   /* materiales arcilla */
-  const M={};const mat=(c,o={})=>M[c+JSON.stringify(o)]||(M[c+JSON.stringify(o)]=new THREE.MeshStandardMaterial({color:c,roughness:.88,metalness:0,...o}));
-  const G={box:new THREE.BoxGeometry(1,1,1),sph:new THREE.SphereGeometry(1,28,20),cyl:new THREE.CylinderGeometry(1,1,1,24),cap:(r,l)=>new THREE.CapsuleGeometry(r,l,6,14)};
+  const shared=new Set();   /* geometrías y materiales compartidos: nunca se disposing en `disposeOwned` */
+  const M={};const mat=(c,o={})=>{const k=c+JSON.stringify(o);if(!M[k]){M[k]=new THREE.MeshStandardMaterial({color:c,roughness:.88,metalness:0,...o});shared.add(M[k])}return M[k]};
+  const G={box:new THREE.BoxGeometry(1,1,1),sph:new THREE.SphereGeometry(1,28,20),cyl:new THREE.CylinderGeometry(1,1,1,24),caps:{}};
+  /* `cap` queda cacheado por (r,l) como box/sph/cyl. Antes era una CapsuleGeometry NUEVA por llamada
+     (5 por empleado: torso, dos brazaos, dos antebrazos, dos muslos, dos pantorrillas). */
+  for(const g of[G.box,G.sph,G.cyl])shared.add(g);
+  G.cap=(r,l)=>{const k=r+'x'+l;if(!G.caps[k]){G.caps[k]=new THREE.CapsuleGeometry(r,l,6,14);shared.add(G.caps[k])}return G.caps[k]};
+  /* registro de lo PROPIO de cada nodo (geometría, material, textura no compartidos) para poder
+     liberarlo cuando `applyTheme` quita la sala o un puesto. `own` filtra lo que está en `shared`.
+     `dispose()` solo sobre lo registrado; nunca sobre una geometría compartida en uso. */
+  function own(n,...x){n.userData.owned=x.filter(o=>o&&!shared.has(o));return n}
+  function disposeOwned(root){const acc=[];root.traverse(n=>{if(n.userData.owned)acc.push(...n.userData.owned)});
+    for(const o of acc)if(o&&typeof o.dispose==='function')o.dispose()}
   function box(w,h,d,c,x,y,z,o){const m=new THREE.Mesh(G.box,mat(c,o));m.scale.set(w,h,d);m.position.set(x,y,z);m.castShadow=m.receiveShadow=true;return m}
   function sph(r,c,x,y,z,o){const m=new THREE.Mesh(G.sph,mat(c,o));m.scale.setScalar(r);m.position.set(x,y,z);m.castShadow=true;return m}
   function cyl(r,h,c,x,y,z,o){const m=new THREE.Mesh(G.cyl,mat(c,o));m.scale.set(r,h,r);m.position.set(x,y,z);m.castShadow=m.receiveShadow=true;return m}
@@ -379,13 +396,13 @@ const scene3d=(()=>{
   /* losa redondeada (suelo de la isla y alfombras) */
   function slab(w,d,h,r,c){const s=new THREE.Shape();const x=-w/2,y=-d/2;s.moveTo(x+r,y);s.lineTo(x+w-r,y);s.quadraticCurveTo(x+w,y,x+w,y+r);s.lineTo(x+w,y+d-r);s.quadraticCurveTo(x+w,y+d,x+w-r,y+d);s.lineTo(x+r,y+d);s.quadraticCurveTo(x,y+d,x,y+d-r);s.lineTo(x,y+r);s.quadraticCurveTo(x,y,x+r,y);
     const g=new THREE.ExtrudeGeometry(s,{depth:h,bevelEnabled:true,bevelSize:Math.min(.06,h*.5),bevelThickness:Math.min(.06,h*.5),bevelSegments:3,curveSegments:10});g.rotateX(-Math.PI/2);
-    const m=new THREE.Mesh(g,mat(c));m.receiveShadow=true;m.castShadow=true;return m}
+    const m=new THREE.Mesh(g,mat(c));own(m,g);m.receiveShadow=true;m.castShadow=true;return m}
 
   const world=new THREE.Group();sc.add(world);
   const theme={};
   function palette(){const d=themeNow()==='dark';Object.assign(theme,d?{
-      floor:'#3a3f48',edge:'#272b33',wall:'#3b414d',wood:'#8a6a4a',desk:'#a8835e',rug:'#3a4152',rug2:'#373d4c',metal:'#4b5363',screen:'#0f172a',sky:0x8fa3c7,ground:0x1a1d26,hemiI:.6,sunI:.5,exp:1.0,glass:'#7fa6d9',board:'#e9edf2'}:{
-      floor:'#c9ccd0',edge:'#aeb2b8',wall:'#f3f3f1',wood:'#c99a66',desk:'#c99a66',rug:'#e9dfd0',rug2:'#e3e8ee',metal:'#d3d7dd',screen:'#1f2937',sky:0xffffff,ground:0xbfc3c8,hemiI:1.2,sunI:1.45,exp:1.05,glass:'#d6e7f7',board:'#fbfcfd'});return d}
+      floor:'#3a3f48',edge:'#272b33',wall:'#3b414d',wood:'#8a6a4a',desk:'#a8835e',rug:'#3a4152',metal:'#4b5363',screen:'#0f172a',sky:0x8fa3c7,ground:0x1a1d26,hemiI:.6,sunI:.5,exp:1.0,glass:'#7fa6d9'}:{
+      floor:'#c9ccd0',edge:'#aeb2b8',wall:'#f3f3f1',wood:'#c99a66',desk:'#c99a66',rug:'#e9dfd0',metal:'#d3d7dd',screen:'#1f2937',sky:0xffffff,ground:0xbfc3c8,hemiI:1.2,sunI:1.45,exp:1.05,glass:'#d6e7f7'});return d}
   palette();
 
   /* ---- sala ---- */
@@ -395,10 +412,16 @@ const scene3d=(()=>{
   const screenTex=new THREE.CanvasTexture(screenCanvas);screenTex.colorSpace=THREE.SRGBColorSpace;screenTex.anisotropy=4;
   const boardCanvas=document.createElement('canvas');boardCanvas.width=1024;boardCanvas.height=624;
   const boardTex=new THREE.CanvasTexture(boardCanvas);boardTex.colorSpace=THREE.SRGBColorSpace;boardTex.anisotropy=4;
-  function drawBoard(){const c=boardCanvas.getContext('2d'),w=1024,h=624;c.fillStyle='#fbfcfd';c.fillRect(0,0,w,h);
+  /* los dos lienzos de la sala leen el tema activo a través de las variables CSS (--panel2, --muted,
+     --line, --text, --faint, --accent), que ya cambian con `applyTheme`. Se leen una vez por pintura:
+     `drawBoard` y `drawScreen` se llaman en `sync()` (cambio de estado) y en `applyTheme`, nunca
+     dentro de `tick()`. El color de los pósits es papel: no depende del tema. */
+  const cssVars=()=>{const cs=getComputedStyle(document.documentElement);return n=>cs.getPropertyValue(n).trim()};
+  function drawBoard(){const c=boardCanvas.getContext('2d'),w=1024,h=624,V=cssVars();
+    c.fillStyle=V('--panel2');c.fillRect(0,0,w,h);
     const cols=['EN COLA','EN CURSO','ESPERA OK','HECHO'];const T=(S&&S.tareas)||[];const cw=w/4;
-    cols.forEach((k,i)=>{c.fillStyle='#64748b';c.font='700 26px Inter,system-ui,sans-serif';c.fillText(k,i*cw+22,44);
-      c.strokeStyle='#e2e8f0';c.lineWidth=3;if(i){c.beginPath();c.moveTo(i*cw,14);c.lineTo(i*cw,h-14);c.stroke()}
+    cols.forEach((k,i)=>{c.fillStyle=V('--muted');c.font='700 26px Inter,system-ui,sans-serif';c.fillText(k,i*cw+22,44);
+      c.strokeStyle=V('--line');c.lineWidth=3;if(i){c.beginPath();c.moveTo(i*cw,14);c.lineTo(i*cw,h-14);c.stroke()}
       T.filter(t=>t.columna===k).slice(0,8).forEach((t,j)=>{const x=i*cw+18+(j%2)*118,y=70+Math.floor(j/2)*132;const L=lookOf(t.responsable,0);
         c.save();c.translate(x+55,y+55);c.rotate(((j*7)%5-2)*.025);c.fillStyle='#fde68a';c.shadowColor='rgba(0,0,0,.18)';c.shadowBlur=8;c.shadowOffsetY=3;c.fillRect(-55,-55,110,110);c.shadowColor='transparent';
         c.fillStyle=L.shirt;c.fillRect(-55,-55,110,12);c.fillStyle='#1f2937';c.font='800 30px Inter,system-ui,sans-serif';c.fillText(t.id,-45,-8);
@@ -414,7 +437,7 @@ const scene3d=(()=>{
     for(let i=0;i<=6;i++)room.add(box(.1,2.5,.07,'#2b2f36',-W/2+.25,1.25,-D/2+.3+i*(D-.6)/6));
     room.add(box(.12,.07,D-.6,'#2b2f36',-W/2+.25,2.5,0));room.add(box(.12,.07,D-.6,'#2b2f36',-W/2+.25,1.2,0));
     // pantalla de métricas en la pared del fondo
-    const scr=new THREE.Mesh(new THREE.PlaneGeometry(3.6,1.97),new THREE.MeshBasicMaterial({map:screenTex,toneMapped:false}));scr.position.set(2.75,1.5,-D/2+.37);room.add(scr);
+    const scr=new THREE.Mesh(new THREE.PlaneGeometry(3.6,1.97),new THREE.MeshBasicMaterial({map:screenTex,toneMapped:false}));own(scr,scr.geometry,scr.material);scr.position.set(2.75,1.5,-D/2+.37);room.add(scr);
     room.add(box(3.78,2.12,.06,'#111827',2.75,1.5,-D/2+.33));
     // estantería (explorer)
     const sh=new THREE.Group();sh.add(box(.4,1.9,1.7,theme.wood,0,.95,0));
@@ -425,12 +448,12 @@ const scene3d=(()=>{
     for(const p of[[W/2-.7,D/2-.7],[-W/2+.75,-D/2+.75],[W/2-.7,-D/2+.75]])room.add(plant(p[0],p[1]));
     // pizarra con pósits (las tareas reales)
     const wb=new THREE.Group();wb.add(box(2.0,1.25,.05,'#e5e7eb',0,1.45,0));
-    const wbm=new THREE.Mesh(new THREE.PlaneGeometry(1.92,1.17),new THREE.MeshBasicMaterial({map:boardTex,toneMapped:false}));wbm.position.set(0,1.45,.03);wb.add(wbm);
+    const wbm=new THREE.Mesh(new THREE.PlaneGeometry(1.92,1.17),new THREE.MeshBasicMaterial({map:boardTex,toneMapped:false}));own(wbm,wbm.geometry,wbm.material);wbm.position.set(0,1.45,.03);wb.add(wbm);
     for(const x of[-.85,.85]){wb.add(box(.05,.85,.05,theme.metal,x,.42,0));wb.add(box(.05,.05,.5,theme.metal,x,.03,0))}
     wb.position.set(-.7,0,-D/2+.75);room.add(wb);
     // mesa redonda (zona de café): 6 sillas mirando al centro, tazas delante de cada sitio
     const rt=new THREE.Group();rt.add(cyl(.7,.05,'#f3f4f6',0,.74,0));rt.add(cyl(.05,.7,theme.metal,0,.37,0));rt.add(cyl(.3,.03,theme.metal,0,.02,0));
-    const rug=new THREE.Mesh(new THREE.CircleGeometry(1.75,48),mat(theme.edge));rug.rotation.x=-Math.PI/2;rug.position.y=.012;rug.receiveShadow=true;rt.add(rug);
+    const rug=new THREE.Mesh(new THREE.CircleGeometry(1.75,48),mat(theme.edge));own(rug,rug.geometry);rug.rotation.x=-Math.PI/2;rug.position.y=.012;rug.receiveShadow=true;rt.add(rug);
     tableSeats.length=0;
     for(let i=0;i<6;i++){const a=i/6*Math.PI*2+.25,cx=Math.cos(a),cz=Math.sin(a),ry=Math.atan2(-cx,-cz);
       const c=new THREE.Group();c.add(box(.42,.06,.42,'#6b7280',0,.5,0));c.add(box(.42,.42,.06,'#6b7280',0,.74,-.2));c.add(cyl(.03,.46,theme.metal,0,.24,0));c.add(cyl(.17,.03,theme.metal,0,.02,0));
@@ -453,7 +476,7 @@ const scene3d=(()=>{
     rk.position.set(2.6,0,3.55);room.add(rk);
     // sombra suave bajo la isla
     const g=document.createElement('canvas');g.width=g.height=128;const c=g.getContext('2d');const gr=c.createRadialGradient(64,64,4,64,64,64);gr.addColorStop(0,'rgba(0,0,0,.28)');gr.addColorStop(1,'rgba(0,0,0,0)');c.fillStyle=gr;c.fillRect(0,0,128,128);
-    const sh2=new THREE.Mesh(new THREE.PlaneGeometry(W*1.3,D*1.3),new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(g),transparent:true,depthWrite:false}));sh2.rotation.x=-Math.PI/2;sh2.position.y=-.9;room.add(sh2);
+    const sh2=new THREE.Mesh(new THREE.PlaneGeometry(W*1.3,D*1.3),new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(g),transparent:true,depthWrite:false}));own(sh2,sh2.geometry,sh2.material,sh2.material.map);sh2.rotation.x=-Math.PI/2;sh2.position.y=-.9;room.add(sh2);
   }
   const rackLeds=[],tableSeats=[],TX=3.6,TZ=1.0;
   function plant(x,z){const g=new THREE.Group();g.add(cyl(.2,.36,'#c47a4f',0,.18,0));g.add(cyl(.17,.04,'#5b3a24',0,.36,0));
@@ -469,7 +492,7 @@ const scene3d=(()=>{
     g.add(box(.08,.28,.06,'#2b2f36',0,.93,.24));g.add(box(.36,.02,.2,'#2b2f36',0,.8,.24));
     g.add(box(.86,.52,.04,'#1f2937',0,1.25,.25));
     const cv=document.createElement('canvas');cv.width=320;cv.height=192;const tex=new THREE.CanvasTexture(cv);tex.colorSpace=THREE.SRGBColorSpace;
-    const scr=new THREE.Mesh(new THREE.PlaneGeometry(.8,.46),new THREE.MeshBasicMaterial({map:tex,toneMapped:false}));scr.position.set(0,1.25,.228);scr.rotation.y=Math.PI;g.add(scr);
+    const scr=new THREE.Mesh(new THREE.PlaneGeometry(.8,.46),new THREE.MeshBasicMaterial({map:tex,toneMapped:false}));own(scr,scr.geometry,scr.material,tex);scr.position.set(0,1.25,.228);scr.rotation.y=Math.PI;g.add(scr);
     g.add(box(.55,.025,.18,'#e5e7eb',0,.8,-.12));
     g.add(box(.09,.02,.13,'#e5e7eb',.42,.8,-.12));
     g.add(cyl(.045,.09,look.shirt,-.55,.84,-.05));
@@ -478,7 +501,7 @@ const scene3d=(()=>{
     ch.add(box(.5,.08,.48,'#374151',0,.5,0));ch.add(box(.48,.55,.07,'#374151',0,.84,-.25));
     ch.add(cyl(.035,.42,theme.metal,0,.27,0));for(let i=0;i<5;i++){const a=i/5*Math.PI*2;const sp=box(.26,.035,.04,theme.metal,Math.cos(a)*.13,.06,Math.sin(a)*.13);sp.rotation.y=-a;ch.add(sp)}
     ch.position.set(0,0,-.72);g.add(ch);
-    const hit=new THREE.Mesh(new THREE.BoxGeometry(1.7,1.6,2.1),new THREE.MeshBasicMaterial({visible:false}));hit.position.set(0,.8,-.3);g.add(hit);
+    const hit=new THREE.Mesh(new THREE.BoxGeometry(1.7,1.6,2.1),new THREE.MeshBasicMaterial({visible:false}));own(hit,hit.geometry,hit.material);hit.position.set(0,.8,-.3);g.add(hit);
     /* marcador de señal: UNA esfera compartida (G.sph) por puesto, creada al construir el escritorio.
        Se enciende solo con `blocked` (rojo) y `done` (azul); `visible=false` no se renderiza ni proyecta
        sombra, así un agente en reposo cuesta cero. Se reutiliza la geometría y el material memoizado. */
@@ -529,8 +552,8 @@ const scene3d=(()=>{
     if(style==='bob'){const b=sph(.215,hairC,0,-.04,-.03);b.scale.set(.225,.17,.2);head.add(b)}
     for(const x of[-.07,.07])head.add(sph(.022,'#1f2937',x,.0,.186));
     const mouth=box(.06,.012,.01,'#9a4a3a',0,-.075,.19);head.add(mouth);
-    if(L.glasses)for(const x of[-.07,.07]){const r=new THREE.Mesh(new THREE.TorusGeometry(.045,.008,6,18),mat('#111827'));r.position.set(x,0,.195);head.add(r)}
-    const band=new THREE.Mesh(new THREE.TorusGeometry(.215,.012,6,24,Math.PI),mat('#1f2937'));band.position.y=.02;head.add(band);   // auriculares
+    if(L.glasses)for(const x of[-.07,.07]){const r=new THREE.Mesh(new THREE.TorusGeometry(.045,.008,6,18),mat('#111827'));own(r,r.geometry);r.position.set(x,0,.195);head.add(r)}
+    const band=new THREE.Mesh(new THREE.TorusGeometry(.215,.012,6,24,Math.PI),mat('#1f2937'));own(band,band.geometry);band.position.y=.02;head.add(band);   // auriculares
     for(const x of[-.21,.21])head.add(cyl(.055,.04,'#1f2937',x,0,0).rotateZ(Math.PI/2));
     const mic=box(.012,.012,.14,'#1f2937',-.2,-.07,.08);mic.rotation.y=.35;head.add(mic);
     const arms=[],legs=[];
@@ -547,7 +570,7 @@ const scene3d=(()=>{
       legs.push({lg,kn});
     }
     const mug=cyl(.045,.09,'#ffffff',0,-.05,.06);mug.add(box(.012,.04,.03,'#ffffff',0,0,0).translateX(.05));arms[1].hand.add(mug);
-    const hit=new THREE.Mesh(new THREE.CapsuleGeometry(.3,.8,4,8),new THREE.MeshBasicMaterial({visible:false}));hit.position.y=.65;root.add(hit);
+    const hit=new THREE.Mesh(G.cap(.3,.8),new THREE.MeshBasicMaterial({visible:false}));own(hit,hit.material);hit.position.y=.65;root.add(hit);
     root.userData={name,hips,head,arms,legs,mug,hit,mode:'',walk:null};return root}
   function pose(p,mode,t=0){const u=p.userData;u.mode=mode;u.mug.visible=mode==='coffee';
     const A=u.arms,Lg=u.legs;u.head.rotation.set(0,0,0);
@@ -605,10 +628,11 @@ const scene3d=(()=>{
 
   /* pantalla de métricas de la pared */
   function drawScreen(){
+    const V=cssVars();
     const c=screenCanvas.getContext('2d'),w=1024,h=560,m=(S&&S.metrics)||{},b=m.base||{},p=m.produccion||{};
-    const g=c.createLinearGradient(0,0,0,h);g.addColorStop(0,'#111827');g.addColorStop(1,'#0b1220');c.fillStyle=g;c.fillRect(0,0,w,h);
-    if(OTHER()){const o=OFFICES.find(x=>x.id===WS)||{nombre:'Oficina'};c.fillStyle='#94a3b8';c.font='600 30px Inter,system-ui,sans-serif';c.fillText('OFICINA',48,70);
-      c.fillStyle='#e5e7eb';c.font='750 96px Inter,system-ui,sans-serif';c.fillText(String(o.nombre).slice(0,16),48,190);
+    const g=c.createLinearGradient(0,0,0,h);g.addColorStop(0,V('--panel2'));g.addColorStop(1,V('--panel'));c.fillStyle=g;c.fillRect(0,0,w,h);
+    if(OTHER()){const o=OFFICES.find(x=>x.id===WS)||{nombre:'Oficina'};c.fillStyle=V('--muted');c.font='600 30px Inter,system-ui,sans-serif';c.fillText('OFICINA',48,70);
+      c.fillStyle=V('--text');c.font='750 96px Inter,system-ui,sans-serif';c.fillText(String(o.nombre).slice(0,16),48,190);
       const ag=(S&&S.agents)||[],ct=st=>ag.filter(a=>statusOf(a)===st).length;const SCOL={working:'#34d399',blocked:'#f87171',done:'#60a5fa',unknown:'#fbbf24',idle:'#64748b'};
       /* los cinco estados se cuentan SEPARADOS: `unknown` ya no se lee como «en pausa» */
       const SEG=[['trabajando',ct('working'),'#34d399'],['bloqueado',ct('blocked'),'#f87171'],['terminado',ct('done'),'#60a5fa'],['sin clasificar',ct('unknown'),'#fbbf24'],['en pausa',ag.length-ct('working')-ct('blocked')-ct('done')-ct('unknown'),'#94a3b8']];
@@ -616,16 +640,16 @@ const scene3d=(()=>{
       for(const[lab,n,col]of SEG){if(n){const t=n+' '+lab;c.fillStyle=col;c.fillText(t,sx,270);sx+=c.measureText(t).width+28}}
       c.font='500 22px Inter,system-ui,sans-serif';ag.slice(0,6).forEach((a,i)=>{const st=statusOf(a);c.fillStyle=SCOL[st];c.fillText('● '+a.name+' · '+STTXT[st],48+(i%2)*480,350+Math.floor(i/2)*44)});
       screenTex.needsUpdate=true;return}
-    c.fillStyle='#94a3b8';c.font='600 30px Inter,system-ui,sans-serif';c.fillText('PRODUCCIÓN · STRATA3060',48,70);
+    c.fillStyle=V('--muted');c.font='600 30px Inter,system-ui,sans-serif';c.fillText('PRODUCCIÓN · STRATA3060',48,70);
     const dB=p.B1&&b.B1?(p.B1/b.B1-1)*100:null, dP=p.P3_s&&b.P3_s?(b.P3_s/p.P3_s-1)*100:null;
-    const big=(lab,val,unit,d,x)=>{c.fillStyle='#e5e7eb';c.font='600 26px Inter,system-ui,sans-serif';c.fillText(lab,x,140);
-      c.font='750 116px Inter,system-ui,sans-serif';c.fillText(val,x,262);const vw=c.measureText(val).width;c.font='600 34px Inter,system-ui,sans-serif';c.fillStyle='#94a3b8';c.fillText(unit,x+vw+12,262);
-      c.font='700 36px Inter,system-ui,sans-serif';c.fillStyle=d==null?'#94a3b8':d>0.05?'#34d399':d<-0.05?'#f87171':'#94a3b8';c.fillText(d==null?'—':(d>=0?'+':'')+fmt(d)+' % vs base',x,318)};
+    const big=(lab,val,unit,d,x)=>{c.fillStyle=V('--text');c.font='600 26px Inter,system-ui,sans-serif';c.fillText(lab,x,140);
+      c.font='750 116px Inter,system-ui,sans-serif';c.fillText(val,x,262);const vw=c.measureText(val).width;c.font='600 34px Inter,system-ui,sans-serif';c.fillStyle=V('--muted');c.fillText(unit,x+vw+12,262);
+      c.font='700 36px Inter,system-ui,sans-serif';c.fillStyle=d==null?V('--muted'):d>0.05?'#34d399':d<-0.05?'#f87171':V('--muted');c.fillText(d==null?'—':(d>=0?'+':'')+fmt(d)+' % vs base',x,318)};
     big('ESCRITURA · B1',fmt(p.B1),'t/s',dB,48);big('LECTURA 32K · P3',fmt(p.P3_s),'s',dP,540);
     const hist=(m.historial||[]).map(x=>x.B1).filter(v=>v!=null);
-    if(hist.length>1){const lo=Math.min(...hist)-1,hi=Math.max(...hist)+1;c.strokeStyle='#60a5fa';c.lineWidth=6;c.lineJoin='round';c.beginPath();
+    if(hist.length>1){const lo=Math.min(...hist)-1,hi=Math.max(...hist)+1;c.strokeStyle=V('--accent');c.lineWidth=6;c.lineJoin='round';c.beginPath();
       hist.forEach((v,i)=>{const x=48+i*(928/(hist.length-1)),y=500-(v-lo)/(hi-lo)*120;i?c.lineTo(x,y):c.moveTo(x,y)});c.stroke();
-      c.fillStyle='#64748b';c.font='500 22px Inter,system-ui,sans-serif';c.fillText('historial B1',48,540)}
+      c.fillStyle=V('--faint');c.font='500 22px Inter,system-ui,sans-serif';c.fillText('historial B1',48,540)}
     screenTex.needsUpdate=true;
   }
 
@@ -721,10 +745,18 @@ const scene3d=(()=>{
   function applyTheme(){const dark=palette();hemi.color.set(theme.sky);hemi.groundColor.set(theme.ground);hemi.intensity=theme.hemiI;sun.intensity=theme.sunI;R.toneMappingExposure=theme.exp;
     for(const l of lamps)sc.remove(l);lamps.length=0;
     if(dark){for(const p of[[.2,1.6,-.6],[-3.5,1.7,-2.2],[3.4,1.6,-1]]){const l=new THREE.PointLight(0xffc98a,6,5,1.6);l.position.set(...p);sc.add(l);lamps.push(l)}}
-    for(const k in M)delete M[k];
-    for(const n of Object.keys(desks)){world.remove(desks[n]);delete desks[n]}
-    for(const n of Object.keys(people)){world.remove(people[n]);delete people[n]}
-    buildRoom();if(S)sync(S.agents);resize()}
+    /* lo que se quita se libera: `own` registró la geometría, el material y la textura de canvas de
+       cada puesto, de cada empleado y de la sala; `M` son los materiales memoizados, que se vacía.
+       Las geometrías cacheadas de `G` y las dos texturas de pared (`screenTex`, `boardTex`) NO se
+       liberan: las reutiliza la sala nueva. Los dos lienzos se repintan UNA vez con el tema nuevo:
+       un cambio de tema no es un frame, y `sync` solo repinta si hay estado. */
+    for(const n of Object.keys(desks)){world.remove(desks[n]);disposeOwned(desks[n]);delete desks[n]}
+    for(const n of Object.keys(people)){world.remove(people[n]);disposeOwned(people[n]);delete people[n]}
+    if(room){world.remove(room);disposeOwned(room);room=null}
+    for(const k in M){M[k].dispose();shared.delete(M[k]);delete M[k]}
+    buildRoom();
+    if(S)sync(S.agents);else{drawScreen();drawBoard()}
+    resize()}
   applyTheme();
   return{sync,applyTheme,request,resize,drawScreen};
 })();
@@ -763,7 +795,7 @@ function renderInspector(){
   const L=lookOf(a.name,workerIdx[a.name]||0);
   const need=pendingAdrian(),wc=waitingClaude(),tl=tasksOf(a.name);
   pane.innerHTML=`
-    <div class="ficha">${avatarSVG(a.name,workerIdx[a.name]||0)}<div><b>${esc(a.name)}</b><small>${esc(a.role||L.role)} <span class="kindchip">${esc(kindOf(a.name))}</span></small><small title="${esc(a.since||'')}">${esc(stTxt)} · ${esc(rel(a.ts))}</small><small>${esc(a.activity||'')}</small></div></div>
+    <div class="ficha">${avatarSVG(a.name,workerIdx[a.name]||0)}<div><b>${esc(a.name)}</b><small>${esc(a.role||L.role)} <span class="kindchip">${esc(kindOf(a.name))}</span></small><small title="${esc(a.since||'')}">${esc(rel(a.ts))}</small><small>${esc(a.activity||'')}</small></div><span class="st ${st}">${esc(stTxt)}</span></div>
     <button class="btn" id="openChat" type="button">Abrir chat</button>
     <p class="act">Ahora: <b>${esc(a.activity||'—')}</b></p>
     <div class="sec">Te necesita <span>${need.length||''}</span></div>
@@ -772,8 +804,10 @@ function renderInspector(){
       :'<div class="empty">✓ Nada pendiente para ti</div>'}
     ${wc.length?`<div class="sec">Esperando a claude <span>${wc.length}</span></div>${wc.map(t=>`<div class="wait"><i class="led" style="background:#f59e0b;margin-top:6px"></i><div><b>${esc(t.id)} · ${esc(t.titulo)}</b><br><span style="color:var(--muted)">${esc(t.nota||'')}</span></div></div>`).join('')}`:''}
     <div class="sec">Qué está haciendo de verdad</div>
-    ${tl.length?tl.map(t=>`<div class="task"><p class="tt">${esc(t.id)} <span>· ${esc(t.titulo)}</span></p><div class="tl">${(t.pasos||[{nombre:t.nota||'en curso',estado:'curso',pct:50}]).map(s=>
-      `<div class="step ${s.estado==='hecho'?'hecho':s.estado==='curso'?'curso':''}"><b>${esc(s.nombre)}</b><small>${s.estado==='hecho'?'hecho':s.estado==='curso'?'en curso · '+(s.pct||0)+' %':'pendiente'}</small>${s.estado==='curso'?`<div class="bar"><i style="width:${s.pct||0}%"></i></div>`:''}</div>`).join('')}</div></div>`).join('')
+    ${tl.length?tl.map(t=>`<div class="task"><p class="tt">${esc(t.id)} <span>· ${esc(t.titulo)}</span></p><div class="tl">${(t.pasos||[{nombre:t.nota||'sin pasos registrados',estado:'curso',pct:null}]).map(s=>
+      /* `pasos` no existe en TAREAS.json: la única línea es la `nota` real, en curso, SIN porcentaje
+         inventado. Si Herdr/claude llegara a traer pasos, la barra y el % se pintan como antes. */
+      `<div class="step ${s.estado==='hecho'?'hecho':s.estado==='curso'?'curso':''}"><b>${esc(s.nombre)}</b><small>${s.estado==='hecho'?'hecho':s.estado==='curso'?'en curso'+(s.pct!=null?' · '+s.pct+' %':' · sin porcentaje registrado'):'pendiente'}</small>${s.estado==='curso'&&s.pct!=null?`<div class="bar"><i style="width:${s.pct}%"></i></div>`:''}</div>`).join('')}</div></div>`).join('')
       :'<div class="empty">Sin tareas asignadas ahora mismo</div>'}`;
   pane.querySelector('#openChat').onclick=()=>openChat(a.name);
   pane.querySelectorAll('[data-ok]').forEach(b=>b.onclick=()=>confirmModal('Aprobar '+b.dataset.ok,'Se enviará a claude: “OK a '+b.dataset.ok+'”. claude lo comunicará a quien corresponda.',()=>send('claude','viaclaude','OK a '+b.dataset.ok)));
@@ -811,7 +845,11 @@ function renderMetrics(){
     return`<div class="card mcard"><small>${lab}</small><div class="v">${fmt(p[k])}<span>${unit}</span></div><div class="d ${d>0.05?'up':d<-0.05?'down':'flat'}">${d==null?'—':(d>=0?'+':'')+fmt(d)+' % vs base'} <span style="color:var(--muted);font-weight:500">· base ${fmt(b[k])}</span></div>${spark(vals)}</div>`};
   const goal=(lab,cur,base,target,lower,unit)=>{const pr=cur==null?0:Math.max(0,Math.min(1,lower?(base-cur)/(base-target):(cur-base)/(target-base)));
     return`<div class="card goal"><b>${lab}</b><div class="bar"><i style="width:${(pr*100).toFixed(0)}%"></i></div><small>${fmt(cur)} ${unit} ahora · objetivo ${fmt(target,0)} ${unit} · ${(pr*100).toFixed(0)} %</small></div>`};
-  const boss=m.jefe||{nombre:'Espera del bus PCIe (waitB)',ms:8.5,suelo:3.0};const hp=Math.max(0,Math.min(1,(boss.ms-boss.suelo)/(8.5-boss.suelo)));
+  /* `jefe` NO existe en METRICAS.json (sus claves son base, candidato, historial, produccion), así que
+     esta tarjeta siempre cae en el objetivo fijo. Se etiqueta como objetivo, no como métrica: la barra
+     de vida queda vacía porque no hay medición que la llene. Si `jefe` llegara, se pinta como jefe. */
+  const BOSS={nombre:'Espera del bus PCIe (waitB)',ms:8.5,suelo:3.0};   /* objetivo declarado por la oficina, no medido */
+  const medido=!!m.jefe;const boss=m.jefe||BOSS;const hp=medido?Math.max(0,Math.min(1,(boss.ms-boss.suelo)/(8.5-boss.suelo))):0;
   $('#pv-metricas').innerHTML=`
     <div class="grid g5">${card('B1','Escritura · B1','t/s')}${card('B2','Escritura · B2','t/s')}${card('B4','Código copiado · B4','t/s')}${card('P3_s','Lectura 32K · P3','s',true)}${card('P4_s','Lectura 86K · P4','s',true)}</div>
     <div class="grid g3" style="margin-top:12px">
@@ -819,7 +857,7 @@ function renderMetrics(){
       ${goal('Misión: leer 32K en 10 s',p.P3_s,b.P3_s,10,true,'s')}
       <div class="card goal"><b>Candidato en prueba</b><p style="margin:8px 0 0;color:var(--muted)">${esc(m.candidato?.nombre||'ninguno')} · ${esc(m.candidato?.IC||'')}</p></div>
     </div>
-    <div class="card boss" style="margin-top:12px"><div><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c-4 0-7 3-7 7v8l2-2 2 2 3-2 3 2 2-2 2 2v-8c0-4-3-7-7-7z"/><circle cx="9.5" cy="10" r="1.3" fill="#ef4444"/><circle cx="14.5" cy="10" r="1.3" fill="#ef4444"/></svg></div><div class="hp"><b>Jefe actual: ${esc(boss.nombre)}</b><div class="bar"><i style="width:${(hp*100).toFixed(0)}%"></i></div><small style="color:var(--muted)">${fmt(boss.ms)} ms perdidos por paso · suelo físico ${fmt(boss.suelo)} ms. Cada mejora adoptada le quita vida.</small></div></div>
+    <div class="card boss" style="margin-top:12px"><div><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c-4 0-7 3-7 7v8l2-2 2 2 3-2 3 2 2-2 2 2v-8c0-4-3-7-7-7z"/><circle cx="9.5" cy="10" r="1.3" fill="#ef4444"/><circle cx="14.5" cy="10" r="1.3" fill="#ef4444"/></svg></div><div class="hp"><b>${medido?'Jefe actual:':'Objetivo fijo, no medido:'} ${esc(boss.nombre)}</b><div class="bar"><i style="width:${(hp*100).toFixed(0)}%"></i></div><small style="color:var(--muted)">${medido?`${fmt(boss.ms)} ms perdidos por paso · suelo físico ${fmt(boss.suelo)} ms. Cada mejora adoptada le quita vida.`:`Punto de partida ${fmt(boss.ms)} ms · suelo físico ${fmt(boss.suelo)} ms. Es un objetivo que fija la oficina: METRICAS.json no trae \`jefe\`, así que no es una métrica medida.`}</small></div></div>
     <div class="card" style="margin-top:12px;padding:16px"><b>Historial</b><div style="margin-top:8px">${h.slice(-8).reverse().map(x=>`<div style="display:flex;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-size:12.5px"><span class="mono" style="color:var(--muted);flex:none">${esc(x.fecha)}</span><span style="flex:1">${esc(x.cambio)}</span><b>${x.B1!=null?fmt(x.B1)+' t/s':''}</b></div>`).join('')}</div></div>`;
 }
 function renderBoard(){
@@ -834,7 +872,7 @@ function renderCampus(){
   $('#newOff2').onclick=newOffice;
   $$('#pv-campus [data-off]').forEach(b=>b.onclick=()=>{setOffice(b.dataset.off);setView('oficina')});
 }
-function renderAll(){if(!S)return;renderHeader();renderSide();if(view==='oficina'||tab!=='inspector')renderInspector();else renderInspector();
+function renderAll(){if(!S)return;renderHeader();renderSide();renderInspector();   /* rama idéntica: se llama igual en los dos casos */
   if(view==='metricas')renderMetrics();if(view==='tablero')renderBoard();if(view==='campus')renderCampus();renderMenu();updateTo()}
 
 /* vistas */
@@ -850,7 +888,8 @@ $('#closeInsp').onclick=()=>$('#stage').classList.remove('drawer');
 function select(n){sel=n;store.set('sel',n);$('#stage').classList.add('drawer');if(n!=='claude'&&n!=='tester'){to=n}renderInspector();scene3d.request();updateTo()}
 
 /* chat */
-function renderMenu(){$('#menu').innerHTML=agentList().map(a=>`<button type="button" data-to="${esc(a.name)}" class="${a.name===to?'on':''}"><i class="led" style="background:${LED[statusOf(a)]}"></i>@${esc(a.name)}<small>${a.name==='claude'?'a la cola':'directo'}</small></button>`).join('');
+function renderMenu(){$('#menu').innerHTML=agentList().map(a=>{const st=statusOf(a);   /* el badge consume la clase `.st` (T22): el estado se lee, no solo se colorea */
+  return`<button type="button" data-to="${esc(a.name)}" class="${a.name===to?'on':''}"><i class="led" style="background:${LED[st]}"></i>@${esc(a.name)}<span class="st ${st}">${esc(STTXT[st])}</span><small>${a.name==='claude'?'a la cola':'directo'}</small></button>`}).join('');
   $$('#menu [data-to]').forEach(b=>b.onclick=()=>{to=b.dataset.to;updateTo();$('#menu').classList.remove('open');$('#msg').focus()})}
 function updateTo(){const a=agentList().find(x=>x.name===to)||{name:to,status:'idle'};$('#to span').textContent='@'+to;$('#to .led').style.background=LED[statusOf(a)];
   $('#msg').placeholder=to==='claude'?'Escribe una tarea… claude la convierte en contrato y la pone en la cola':`Mensaje directo a ${to} (lo recibe como orden de Adrián)`}
