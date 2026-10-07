@@ -1,17 +1,31 @@
 [Unit]
-Description=Oficina agentica v4 (monitor visual herdr, solo lectura + envios con token)
+Description=Oficina agentica v5 (monitor visual herdr: solo lectura + envios con sesion)
 After=network-online.target
 
 [Service]
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-Environment=HERDR_SOCKET_PATH=%h/.config/herdr/herdr.sock
 Type=simple
-ExecStart=/usr/bin/python3 /tmp/opencode/wt-C30/oficina/server.py 8095
-WorkingDirectory=/tmp/opencode/wt-C30/oficina
+# La unidad instalada apunta a este mismo arbol. Medido 2026-10-07 con
+# `systemctl --user show strata-oficina.service -p ExecStart -p FragmentPath`:
+#   FragmentPath=/home/bazzite/.config/systemd/user/strata-oficina.service
+#   ExecStart=/usr/bin/python3 /tmp/opencode/Strata3060/docs/fork/oficina/server.py 8095
+ExecStart=/usr/bin/python3 /tmp/opencode/Strata3060/docs/fork/oficina/server.py 8095
+WorkingDirectory=/tmp/opencode/Strata3060/docs/fork/oficina
 Restart=on-failure
-# El token vive en ~/.config/strata-oficina/token (modo 600); la UI lo pide una vez.
-# Puerto 8090 por defecto (arg 1 = otro puerto). NO arrancar si el bench tiene lock
-# y el motor esta midiendo: el estado pasa solo a intervalo 30 s.
+# En la instalacion estas dos variables viven en el drop-in
+# ~/.config/systemd/user/strata-oficina.service.d/herdr.conf (128 bytes, medido con
+# `systemctl --user show strata-oficina.service -p DropInPaths`). Aqui van inline para que la
+# unidad del repo sea autocontenida.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# HERDR_SOCKET_PATH es OBLIGATORIA para el canal de eventos: el hilo de eventos conecta al socket
+# Unix de herdr (server.py:433 `ev_path`); sin la variable cae en `~/.config/herdr/herdr.sock`. Si no
+# hay socket en la ruta, la salud del canal pasa a `polling` y la oficina sigue sirviendo (clave
+# `events` en `/api/state` y `/api/offices`), con backoff de 1 a 30 s.
+Environment=HERDR_SOCKET_PATH=%h/.config/herdr/herdr.sock
+# No hay token en disco ni variable de contrasena: la autenticacion es un hash scrypt en
+# ~/.config/strata-oficina/password.scrypt (modo 600) y la cookie `sid` HttpOnly/SameSite=Strict.
+# La ruta del hash se puede cambiar con `STRATA_OFICINA_PW` (server.py:15), que es lo que usan los tests.
+# El puerto es el argumento 1 (aqui 8095). NO arrancar si el bench tiene lock y el motor esta
+# midiendo: el estado pasa solo a intervalo 30 s.
 
 [Install]
 WantedBy=default.target

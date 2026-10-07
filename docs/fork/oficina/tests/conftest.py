@@ -69,10 +69,14 @@ def _server_threads():
       - el objetivo del hilo es una funcion de `server.py`: `ev_client`, `notif_client`, `_crear`
         (server.py:626, 627, 1024) y `serve` (server.py:1175);
       - el objetivo es de `socketserver` y la pila esta DENTRO del `Handler` de `server.py`: los hilos
-        que `ThreadingHTTPServer` crea para `_HTTP` / `_SSE` (test_events.py:131, 172). El bucle del SSE
-        (`server.py:1126-1141`) llama `get_state` -> `build_state` -> `api snapshot`, y solo sale cuando
-        una escritura contra el cliente cerrado da `BrokenPipeError`, asi que un handler puede vivir hasta
-        el siguiente latido (~30 s) despues de `sse.close()`: esa es la fuente de los 25 lanzamientos.
+        que `ThreadingHTTPServer` crea para `_HTTP` / `_SSE` (test_events.py:145, 188). El bucle del SSE
+        (`server.py:1213-1228`) llama `get_state` -> `build_state` -> `api snapshot`. T27 le puso una
+        condicion de salida DENTRO del bucle: `_sse_alive` (`server.py:1256`) mira la conexion con `select`
+        de timeout 0 y el `fileno()` del socket de escucha al inicio de cada quantum, y el fallo de la
+        escritura se comprueba en el `try` del `wfile.write`, asi que el handler sale en <= 1 quantum
+        (~5 s) tras irse el cliente. En la base el bucle solo salia cuando una escritura contra el cliente
+        cerrado daba `BrokenPipeError`, y eso podia tardar un latido entero (~30 s) despues de
+        `sse.close()`: esa era la fuente de los 25 lanzamientos.
 
     `sys._current_frames()` da la pila viva de cada hilo y `f_back` recorre el stack. El hilo del test no
     cuenta aunque este dentro de una funcion de `server.py`: es el que hace la llamada, no un hilo
@@ -100,7 +104,8 @@ def _owned_threads():
 
     Son los unicos que el servidor puede parar (`ev_stop`) o esperar (`_crear` termina sola). Los
     handlers de `ThreadingHTTPServer` no estan aqui: su objetivo es `socketserver`, y esperarles no
-    sirve, porque el bucle del SSE solo sale al escribir contra un cliente ya cerrado.
+    sirve. Con la condicion de salida de T27 (`_sse_alive`) el handler sale solo, en <= 1 quantum, al
+    irse el cliente; la guardia de sesion (`hermetic`) es la que comprueba que no queda ninguno.
     """
     me = threading.current_thread()
     out = []
@@ -387,9 +392,12 @@ def hermetic():
     sondea despues de la restauracion es la fuga medida en la base (25 lanzamientos de `api snapshot`).
     """
     yield _SHIMS
-    # `HEARTBEAT_DRAIN`: el handler de un SSE que quedo vivo sale cuando una escritura contra el cliente
-    # cerrado da `BrokenPipe`, y eso puede ser hasta el siguiente latido (`quiet >= 6` con quantum de
-    # `interval` = 5 s, server.py:1136-1141): 30 s + margen, una sola vez al final de la sesion.
+    # `HEARTBEAT_DRAIN`: margen para un handler de SSE que quedo vivo. Con la condicion de salida de T27
+    # (`_sse_alive`, server.py:1256) el handler sale en <= 1 quantum (~5 s) tras irse el cliente, y el
+    # latido (`quiet >= 6` con quantum de `interval` = 5 s, server.py:1219) acota el paso siguiente. 35 s
+    # es la cota de la base, donde el bucle solo salia al dar `BrokenPipe` una escritura contra el cliente
+    # cerrado: se conserva como margen generoso, y la asercion es que no queda ningun hilo. Una sola vez
+    # al final de la sesion.
     end = time.monotonic() + HEARTBEAT_DRAIN
     vivos = _server_threads()
     while vivos and time.monotonic() < end:
@@ -463,8 +471,8 @@ def server(tmp_path, stub, monkeypatch, hermetic):
     # sellar: a partir de aqui un pedido de `subprocess` se registra en `post` y reventa, y nunca llega al
     # binario. El modulo `subprocess` real NO se devuelve al servidor en el teardown: la restauracion es al
     # final de la sesion (`hermetic`). Un handler de SSE que quedo vivo (`_SSE.close` solo cierra el
-    # cliente, y el bucle del SSE sale cuando una escritura da `BrokenPipe`) sigue pidiendo `api snapshot`,
-    # y lo que pide queda registrado: se prueba que es un binario emulado, no un lanzamiento real.
+    # cliente) sale ahora por la condicion de salida de T27 (`_sse_alive`); si se quedara, lo que pide
+    # queda registrado: se prueba que es un binario emulado, no un lanzamiento real.
     shim.sealed = True
     sys.modules.pop("oficina_server", None)
     # ventana de observacion tras el sellado: un pedido de binario real, o un hilo de `server.py` que
