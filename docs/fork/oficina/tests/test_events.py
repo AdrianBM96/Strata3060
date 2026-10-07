@@ -856,3 +856,27 @@ def test_el_aviso_es_aditivo_y_la_linea_base_de_aviso_no_lanza_subproceso(server
     code, r = http.get("/api/state")
     assert code == 200 and r["events"] == "unavailable" and "notif" not in r
     http.close()
+
+
+def test_forma_de_exito_de_notification_show_es_la_capturada_en_vivo(server):
+    """T10, hueco cerrado en vivo (2026-10-07): `herdr notification show ...` responde
+
+        rc=0, stdout: {"id":"cli:notification:show","result":{"reason":"shown","shown":true,
+                       "type":"notification_show"}}
+
+    El worker exige `rc == 0` Y salida no vacia (`notif_client`): un rc=0 con los dos canales
+    vacios es el socket muerto de T4, y ese aviso no se cuenta como enviado. Este ancla fija la
+    forma verbatim y prueba que `herdr_cmd` la parsea: `type` vive dentro de `result` (T25), y
+    `shown` es la confirmacion real de que la notificacion salio en pantalla.
+    """
+    from pathlib import Path
+    raw = (Path(__file__).parent / "fixtures" / "notification_show.json").read_text(encoding="utf-8")
+    server.script_response(["notification", "show"], raw, "", 0)
+    argv = list(server.mod.NOTIF_CMD) + ["titulo", "--body", "x", "--position",
+                                          server.mod.NOTIF_POS, "--sound", server.mod.NOTIF_SOUND]
+    r = server.mod.herdr_cmd(argv, server.mod.NOTIF_TIMEOUT)
+    assert r["rc"] == 0 and r["out"] and not r["err"]
+    assert r["type"] == "notification_show" and r["res"]["shown"] is True
+    assert r["res"]["reason"] == "shown"
+    assert r["code"] is None and r["dead"] is False
+    assert server.mod.herdr_error(r) is None   # sana: no es un error
