@@ -105,3 +105,4 @@ ESTADO: PAUSA (decisión de Adrián) | v0.1.40 + C17-ventana | 2026-10-06 08:55 
 | 2026-10-06 | CUP-ab | Bit-bit OK (ruido); B1/B2/P3/P4 nulos; frío −0,5/−0,7%; aceptación igual; prod intacta | sin motivo perf para desplegar; a tu OK | - | ESPERA OK |
 | 2026-10-06 | CUP-dep | Deploy v0.1.40 (01856e5a): rollback da9a7a9b+config en bench/; flags+FETCH_ADMIT+C34+precarga OK; humo corta+30K por litellm | RESUMEN_FINAL §6, ESTADO_DESPLIEGUE | - | Desplegado+PAUSA |
 | 2026-10-06 | C17-ven | Ventana B4 spec 2/4/8: T≈2,5 siempre (no crece con spec); ~22 ms/token plano; 60-61 tok/s | árbol sin ventanas anchas que lo paguen; MTP-DRAFT en duda | - | Medido |
+| 2026-10-08 | INCIDENCIA | Motor colgado 06:05-06:30 UTC (GPU 100% sin log, 87C, otra sesión encima); reinicio en frío + humo OK (1,4s) | causa sin determinar; producción intacta 01856e5a | - | Recuperado |
