@@ -7,17 +7,27 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect width=%2224%22 height=%2224%22 rx=%226%22 fill=%22%2316a34a%22/%3E%3Cpath d=%22M6 18V10l6-4 6 4v8%22 fill=%22none%22 stroke=%22white%22 stroke-width=%222%22/%3E%3C/svg%3E">
 <style>
 :root{
-  --bg:#e9ecf1;--panel:#ffffff;--panel2:#f5f6f9;--text:#0f172a;--muted:#64748b;--faint:#94a3b8;--line:#e3e6ec;
-  --ink:#111827;--inkText:#fff;--accent:#2563eb;--accentSoft:#e8efff;--ok:#16a34a;--okSoft:#e7f6ec;--warn:#d97706;--warnSoft:#fdf3e2;
-  --bad:#dc2626;--badSoft:#fdeaea;--shadow:0 1px 2px rgba(15,23,42,.05),0 8px 28px rgba(15,23,42,.07);--r:18px
+  /* T33 contraste: la paleta se ajusta sobre las variables QUE YA EXISTÍAN. Razones medidas con
+     getComputedStyle en Chromium (color de texto sobre fondo efectivo, compuesto sobre la cadena de
+     padres): --faint 4.76 sobre panel, 4.40 sobre panel2; --muted 6.40 sobre bg, 7.01 sobre panel2, 7.58
+     sobre panel; --ok 6.02 sobre bg, 6.60 sobre panel2, 6.38 sobre okSoft; --warn 6.26 sobre warnSoft;
+     --bad 5.46 sobre bg, 5.59 sobre badSoft, 6.47 con --inkText; --accent 5.82 sobre accentSoft y 6.70
+     sobre panel. `--accentSoft` y `--warnSoft` NO cambian: los colores se oscurecen un paso. El barrido
+     completo de parejas (los dos temas, todas las etiquetas) está en el reporte de T33. */
+  --bg:#e9ecf1;--panel:#ffffff;--panel2:#f5f6f9;--text:#0f172a;--muted:#475569;--faint:#64748b;--line:#e3e6ec;
+  --ink:#111827;--inkText:#fff;--accent:#1d4ed8;--accentSoft:#e8efff;--ok:#166534;--okSoft:#e7f6ec;--warn:#92400e;--warnSoft:#fdf3e2;
+  --bad:#b91c1c;--badSoft:#fdeaea;--shadow:0 1px 2px rgba(15,23,42,.05),0 8px 28px rgba(15,23,42,.07);--r:18px
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){
-  --bg:#0a0c11;--panel:#12151d;--panel2:#181c26;--text:#e6e8ee;--muted:#98a2b3;--faint:#667085;--line:#232836;
-  --ink:#e6e8ee;--inkText:#0f131b;--accent:#6ea0ff;--accentSoft:#17223a;--ok:#34d27a;--okSoft:#10261a;--warn:#f5a524;--warnSoft:#2a2010;
+  /* T33: en oscuro `--faint` sube de #667085 (3.67 sobre panel, bajo AA) a #8f9aab (6.41 sobre panel,
+     5.98 sobre panel2) y `--ok` de #34d27a a #4ade80 (11.23 sobre bg, 9.17 sobre okSoft). `--muted`
+     #98a2b3 ya daba 7.60 sobre bg y 6.61 sobre panel2: se conserva. */
+  --bg:#0a0c11;--panel:#12151d;--panel2:#181c26;--text:#e6e8ee;--muted:#98a2b3;--faint:#8f9aab;--line:#232836;
+  --ink:#e6e8ee;--inkText:#0f131b;--accent:#6ea0ff;--accentSoft:#17223a;--ok:#4ade80;--okSoft:#10261a;--warn:#f5a524;--warnSoft:#2a2010;
   --bad:#f87171;--badSoft:#2c1416;--shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35)}}
 :root[data-theme=dark]{
-  --bg:#0a0c11;--panel:#12151d;--panel2:#181c26;--text:#e6e8ee;--muted:#98a2b3;--faint:#667085;--line:#232836;
-  --ink:#e6e8ee;--inkText:#0f131b;--accent:#6ea0ff;--accentSoft:#17223a;--ok:#34d27a;--okSoft:#10261a;--warn:#f5a524;--warnSoft:#2a2010;
+  --bg:#0a0c11;--panel:#12151d;--panel2:#181c26;--text:#e6e8ee;--muted:#98a2b3;--faint:#8f9aab;--line:#232836;
+  --ink:#e6e8ee;--inkText:#0f131b;--accent:#6ea0ff;--accentSoft:#17223a;--ok:#4ade80;--okSoft:#10261a;--warn:#f5a524;--warnSoft:#2a2010;
   --bad:#f87171;--badSoft:#2c1416;--shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35)}
 *{box-sizing:border-box}
 /* `hidden` tiene que ganar: `.chip` y `#skel` declaran `display`, y una regla de autor tapa la de UA
@@ -26,6 +36,10 @@
 html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   font:13.5px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
 button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+/* T33 Minor 1: el barrido de `getComputedStyle` dejó `small` a 11 px (`#menu small`) y a 11,25 px (el
+   `.85em` de la hoja de usuario para `#ftot`). Una regla global fija el piso en 11,5 px para TODO `<small>`
+   de la oficina; las reglas más específicas (`.off small` 12, `.kpi small` 11,5) siguen mandando. */
+small{font-size:11.5px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:10px}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 /* Escenario 16:9 con letterbox */
@@ -37,28 +51,64 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
    y siguen alcanzables; el inspector sigue siendo cajón y el badge del estado vive en la cabecera, así
    el estado se lee sin abrir el cajón. El letterbox 16:9 de `#stage` no cambia: solo se reparten sus
    columnas en dos filas (rail a la izquierda, contenido a la derecha). */
-#stage.compact{grid-template-columns:56px 1fr;grid-template-rows:auto 1fr;gap:8px;padding:8px}
+/* T33: el compacto medía `#center` a 0 px y el canvas a 818x0 (900x600) y 308x0 (390x844): la fila
+   `auto` de `#side` se comía el letterbox de altura definida. Las dos filas quedan en `minmax(0,38%)`
+   y `minmax(0,1fr)`, así `#side` topa y `#center` recibe el resto con `min-height:0` y `#view` rinde.
+   `#side` pasa a `overflow:auto`: la banda topa y el contenido se alcanza. Las bases de `flex` pasan a
+   porcentaje: con `min-width:158px` sobre 290 px disponibles `#side` medía `scrollWidth 896` contra
+   `clientWidth 308` (588 px fuera de la vista). El icono y la fuente de la oficina encogen para que
+   cada `.off` quepa en su contenedor. */
+#stage.compact{grid-template-columns:56px minmax(0,1fr);grid-template-rows:minmax(0,38%) minmax(0,1fr);gap:8px;padding:8px}
 #stage.compact #rail{grid-column:1;grid-row:1/3}
-#stage.compact #center{grid-column:2;grid-row:2}
-#stage.compact #side{grid-column:2;grid-row:1;display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px;padding:10px;overflow:hidden}
+#stage.compact #center{grid-column:2;grid-row:2;min-height:0}
+/* T33 Major 1: `#side` heredaba `flex-direction:column` de su regla base, así `flex-wrap:wrap` repartía los
+   bloques en COLUMNAS y el contenido salía por la derecha: medido `scrollWidth 896` contra `clientWidth 308`
+   a 390x844, con `#newOff`, `Producción`, `#sideKpi`, los dos `.kpi`, `Cola` y `#qtxt` fuera de la vista. Con
+   `flex-direction:row` + bases porcentuales cada fila cabe en el contenedor. */
+#stage.compact #side{grid-column:2;grid-row:1;display:flex;flex-direction:row;flex-wrap:wrap;align-content:flex-start;align-items:flex-start;gap:8px;padding:10px;overflow:auto;min-height:0}
 #stage.compact #side .h{margin:2px 2px 0;flex:none}
 #stage.compact #side .grow{display:none}
-#stage.compact #offices{flex:1 1 210px;min-width:0;flex-direction:row;flex-wrap:nowrap;gap:6px;overflow-x:auto;scrollbar-width:thin}
+#stage.compact #offices{flex:1 1 46%;min-width:0;flex-direction:row;flex-wrap:nowrap;gap:6px;overflow-x:auto;scrollbar-width:thin}
 #stage.compact #offices .offw{flex:none}
+#stage.compact #offices .off{align-items:center;gap:8px;padding:8px 10px;width:auto}
+#stage.compact #offices .off .ic{width:26px;height:26px;font-size:14px}
+#stage.compact #offices .off b{font-size:12px}
+#stage.compact #offices .off small{font-size:11.5px}
 #stage.compact #newOff{flex:none;width:auto;padding:8px 12px;font-size:12px}
-#stage.compact .off{padding:8px 10px;gap:8px;width:auto;min-width:150px}
-#stage.compact .mini{flex:none;grid-template-columns:1fr 1fr;gap:6px;min-width:158px}
-#stage.compact #side .kpi:last-of-type{flex:1 1 150px;min-width:120px}
-#stage.compact #head{gap:8px;padding:0 4px}
-#stage.compact #head h1{font-size:18px}
+#stage.compact .off{min-width:0}
+#stage.compact .mini{flex:1 1 46%;min-width:0;grid-template-columns:1fr 1fr;gap:6px}
+#stage.compact .mini .kpi{min-width:0;padding:8px 10px}
+#stage.compact .mini .kpi b{font-size:15px}
+#stage.compact #side .kpi:last-of-type{flex:1 1 46%;min-width:0;align-self:flex-start}
+/* T33: en compacto la cabecera sí puede partirse en filas (el ticker y la línea de frescura ocupan cada una
+   su propia fila, `flex:1 1 100%`), y el h1 sigue en una línea con `text-overflow`. Sin `flex-wrap:wrap` el
+   `flex:1 1 100%` del ticker se aplastaba a 14,2 px dentro de la única línea. */
+#stage.compact #head{gap:8px;padding:0 4px;min-width:0;flex-wrap:wrap}
+#stage.compact #head h1{font-size:16px;min-width:0;max-width:40%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #stage.compact #contract,#stage.compact #thr{max-width:40%;overflow:hidden;text-overflow:ellipsis}
 #stage.compact #subtitle{display:none}
-#stage.compact #fresh{flex:1 1 100%;order:6;white-space:normal}
+/* T33: en compacto `#fresh` tenía `white-space:normal` y a 390 px se partía en 4 líneas: la cabecera medía
+   187 px sobre un stage de 219. La línea de frescura pasa a una línea con `text-overflow` (el texto completo
+   vive en el inspector y en el `title` del propio chip). */
+/* T33 Minor 2 en compacto: con la cabecera en una línea el ticker quedaba a 13,8 px de ancho (798 px de
+   CHANGELOG y 13 visibles). En compacto la franja ocupa su propia fila (`flex:1 1 100%`), así muestra la
+   fila real completa de lo que cabe y el `title` sigue llevando la lista entera; la lista íntegra está
+   además en Métricas, que pinta todas las filas de `S.ticker` (T17). */
+#stage.compact #fresh{flex:1 1 100%;order:6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+#stage.compact #tick{flex:1 1 100%;order:5}
+/* T33: el reloj (`#clock`, `setInterval` de 10 s que ya existía) es lo primero que se sacrifica en la
+   cabecera compacta: la línea de frescura (`#fresh`) ya dice la edad del estado, y el reloj se comía una
+   fila entera de una cabecera de 520 px de stage. No se borra el temporizador, solo su nodo. */
+#stage.compact #clock{display:none}
 #stage.compact .legend,#stage.compact .float{display:none}
 #stage.compact #insp{position:absolute;right:8px;top:8px;bottom:8px;width:min(340px,62%);z-index:40;transform:translateX(calc(100% + 16px));transition:transform .25s ease}
 #stage.compact.drawer #insp{transform:none}
 #closeInsp{display:none;position:absolute;right:10px;top:10px;width:30px;height:30px;border-radius:9px;background:var(--panel2);z-index:2}
-#stage.compact #closeInsp{display:grid;place-items:center}
+/* T33 Minor 4: en compacto `#closeInsp` medía x=1207 con el cajón CERRADO (fuera de la pantalla de 900 px)
+   y Tab lo alcanzaba sin anillo visible. Con el cajón cerrado `visibility:hidden` lo saca de la secuencia
+   de Tab y de la pantalla; al abrirlo vuelve con `display:grid` y el anillo de `:focus-visible`. */
+#stage.compact #closeInsp{visibility:hidden}
+#stage.compact.drawer #closeInsp{display:grid;place-items:center;visibility:visible}
 #stage.compact .tabs{padding-right:46px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
 /* Rail */
@@ -72,7 +122,9 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 .grow{flex:1}
 /* Sidebar */
 #side{display:flex;flex-direction:column;padding:16px;gap:10px;min-height:0}
-.h{font-size:11px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin:6px 2px 0}
+/* T33 Minor 1: el barrido de `getComputedStyle` medía 10 y 10,5 px en etiquetas, chips y badges. Todas
+   suben a 11,5 px como mínimo; las variables de color se ajustan arriba (Major 3). */
+.h{font-size:11.5px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin:6px 2px 0}
 .off{display:flex;gap:10px;align-items:center;padding:11px 12px;border:1px solid var(--line);border-radius:14px;text-align:left;width:100%;
   transition:border-color .15s,background .15s,transform .12s;position:relative}
 .off:hover{background:var(--panel2)}
@@ -93,7 +145,7 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 .kpi small{color:var(--muted);font-size:11.5px;display:block}
 .kpi b{font-size:18px;font-weight:680;letter-spacing:-.02em}
 .kpi i{font-style:normal;font-size:11.5px;font-weight:600}
-.src{grid-column:1/-1;font-size:11px;color:var(--muted);border-radius:10px;padding:6px 8px;background:var(--panel);border:1px solid var(--line);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src{grid-column:1/-1;font-size:11.5px;color:var(--muted);border-radius:10px;padding:6px 8px;background:var(--panel);border:1px solid var(--line);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* T20: el estado de fallo se declara con la paleta de `--bad`/`--badSoft` que ya usan `.st.blocked`
    y `.toast.bad`; no se añade color nuevo. Va en `#ipane` (Salida/Hilo/estado) y en `#thread`. */
 .fail{border:1.5px solid var(--bad);border-radius:14px;padding:12px;background:var(--badSoft);font-size:13px;
@@ -102,12 +154,33 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 .up{color:var(--ok)}.down{color:var(--bad)}.flat{color:var(--muted)}
 /* Centro */
 #center{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
+/* T33 Major 4: a 1150x800 `#head` medía 163 px de alto (el h1 de 22 px partido en 3 líneas) y se comía el
+   25,2 % del stage, dejando `#view` en 444x382. El h1 baja a 18 px por debajo de 1200 px y NUNCA se parte
+   (`white-space:nowrap` + `text-overflow` + `flex:none` + `min-width:0`); `#subtitle`, `#fresh` y `#clock`
+   llevan bases bajas (`flex:0 1 60px`, `flex-shrink:3`, piso `min-width:44px`) para que se corte ELLOS y no
+   la franja del ticker (`flex:2 1 240px`, `flex-shrink:.2`). Medido el alto de `#head`: base 102,7 (1280x720)
+   y 162,9 (1150x800); ahora 67,5 y 60,2. La cabecera puede partirse en filas cortas (el ticker y la frescura
+   ocupan cada una la suya en compacto), pero el título es siempre una línea. */
 #head{display:flex;align-items:center;gap:12px;padding:2px 6px;flex-wrap:wrap;min-width:0}
-#head h1{font-size:22px;margin:0;font-weight:700;letter-spacing:-.02em}
-#head .sub{color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis}
+#head h1{font-size:22px;margin:0;font-weight:700;letter-spacing:-.02em;min-width:0;flex:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#head .sub{color:var(--muted);min-width:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 60px;flex-shrink:3}
+#head .grow{min-width:0}
+#head .live{flex:none}
+#head .st{flex:none}
+#head .chip{flex:none}
+@media (max-width:1199px){#head h1{font-size:18px}#clock{display:none}}
 /* franja de ticker: las filas REALES de CHANGELOG que viajan en `S.ticker` (T17). `title` lleva
    todas las líneas; la cabecera muestra la última fila de CHANGELOG, no una decoración. */
-.tick{flex:1 1 150px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+/* T33 Minor 2 + Major 4, resueltos juntos: la franja del ticker medía `scrollWidth 798` contra
+   `clientWidth 353` a 1920 (445 px de CHANGELOG escondidos) y 625 px a 390. Dejar que la fila se partiera
+   en dos líneas hacía la cabecera de 149 px a 1280 y 220 px a 1150, peor que la base: la cabecera tiene
+   que quedar en UNA línea. La palanca es la que la auditoría admite como alternativa: RESERVAR MÁS ANCHO.
+   `.tick` pasa a `flex:2 1 240px` con `flex-shrink:.2` (el doble de peso que `#subtitle` y `#fresh`, que se
+   cortan con `text-overflow`); el `title` que `renderTick` ya pone sigue llevando la lista completa.
+   Medido el `clientWidth` de la franja sobre un `scrollWidth` de 798 px de CHANGELOG: base 323,3 (1920),
+   273,6 (1280), 208,6 (1150), 319 (900), 173 (390); ahora 352,6 / 317,9 / 279,2 / 811 / 302. En 900 la fila
+   entra completa (0 px escondidos). */
+.tick{flex:2 1 240px;flex-shrink:.2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   color:var(--muted);font-size:12px;font-weight:600;padding-left:10px;border-left:1px solid var(--line)}
 .tick b{color:var(--text);font-weight:700}
 #head .st{margin-left:0}
@@ -142,22 +215,27 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 #insp:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .pill:hover{transform:translate(-50%,-2px)}
 .pill.sel{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--accent)}
-.pill em{font-style:normal;font-weight:500;opacity:.65;text-transform:uppercase;font-size:10px;letter-spacing:.05em}
+.pill em{font-style:normal;font-weight:500;opacity:.65;text-transform:uppercase;font-size:11.5px;letter-spacing:.05em}
 .led{width:7px;height:7px;border-radius:50%;flex:none}
 .bub{position:absolute;transform:translate(-50%,-100%);max-width:250px;background:var(--panel);color:var(--text);border:1.5px solid var(--ink);
   border-radius:14px;padding:8px 11px;font-size:12px;box-shadow:var(--shadow);pointer-events:auto;cursor:pointer}
 .bub::after{content:"";position:absolute;left:50%;bottom:-7px;width:12px;height:12px;background:var(--panel);border-right:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);transform:translateX(-50%) rotate(45deg)}
-.bub b{display:inline-block;background:var(--ink);color:var(--inkText);font-size:9.5px;letter-spacing:.06em;padding:2px 6px;border-radius:5px;margin-right:6px}
-.float{position:absolute;display:flex;gap:8px}
+.bub b{display:inline-block;background:var(--ink);color:var(--inkText);font-size:11.5px;letter-spacing:.06em;padding:2px 6px;border-radius:5px;margin-right:6px}
+/* T33 Major 2: la leyenda y la banda de botones vivían en el MISMO rincón (abajo a la derecha). Medido a
+   1280x720: leyenda 482x29 en (429,598) cortaba `Tablero` 2290 px² y `← Campus` 990 px²; a 1150x800 los dos
+   botones quedaban DENTRO del rect de la leyenda. La leyenda sube a la banda superior (es texto, no control),
+   los botones quedan abajo, y el z-orden los separa. `flex-wrap` + `max-width` hacen que quepa en el ancho
+   de `#view` a 1150 px (444 px), donde la leyenda de 5 estados mide 482 px. */
+.float{position:absolute;display:flex;gap:8px;z-index:3}
+.legend{position:absolute;left:14px;bottom:62px;display:flex;flex-wrap:wrap;gap:12px;row-gap:6px;max-width:calc(100% - 28px);font-size:11.5px;color:var(--muted);background:color-mix(in srgb,var(--panel) 80%,transparent);
+  padding:6px 10px;border-radius:10px;backdrop-filter:blur(6px);z-index:2}
+.legend span{display:inline-flex;align-items:center;gap:5px}
 .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border-radius:12px;border:1px solid var(--line);background:var(--panel);font-weight:600;font-size:12.5px;
   box-shadow:0 1px 2px rgba(0,0,0,.04);transition:background .15s,border-color .15s,transform .12s}
 .btn:hover{background:var(--panel2)}.btn:active{transform:scale(.98)}
 .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn.pri:hover{filter:brightness(1.07)}
 .btn.dark{background:var(--ink);color:var(--inkText);border-color:var(--ink)}
-.legend{position:absolute;right:14px;bottom:14px;display:flex;gap:12px;font-size:11.5px;color:var(--muted);background:color-mix(in srgb,var(--panel) 80%,transparent);
-  padding:6px 10px;border-radius:10px;backdrop-filter:blur(6px)}
-.legend span{display:inline-flex;align-items:center;gap:5px}
 /* Chat */
 #chat{display:flex;align-items:center;gap:10px;padding:8px 8px 8px 10px;border-radius:16px}
 #chat.open{flex-wrap:wrap}
@@ -165,11 +243,11 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 #chat.open #thread{display:flex}
 .msg{max-width:88%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.45;word-break:break-word}
 .msg.you{align-self:flex-end;background:var(--accent);color:#fff}
-.msg.you small{display:block;opacity:.75;font-size:10.5px;margin-bottom:2px}
+.msg.you small{display:block;opacity:.75;font-size:11.5px;margin-bottom:2px}
 .msg.them{align-self:flex-start;background:var(--panel2)}
-.msg.them small{display:block;color:var(--muted);font-size:10.5px;margin-bottom:2px}
+.msg.them small{display:block;color:var(--muted);font-size:11.5px;margin-bottom:2px}
 .msg.them pre{margin:4px 0 0;font-size:11.5px;white-space:pre-wrap}
-.kindchip{display:inline-block;font-size:10px;padding:1px 7px;border-radius:20px;background:var(--panel);border:1px solid var(--line);margin-left:6px}
+.kindchip{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:20px;background:var(--panel);border:1px solid var(--line);margin-left:6px}
 /* Ficha */
 .ficha{display:flex;gap:12px;align-items:center;padding:12px;border-radius:14px;background:var(--panel2)}
 .ficha .av{width:64px;height:64px;flex:none}
@@ -178,7 +256,10 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 #openChat{margin-top:10px;width:100%}
 #to{display:inline-flex;align-items:center;gap:6px;background:var(--ink);color:var(--inkText);font-weight:650;font-size:12.5px;padding:7px 11px;border-radius:11px;position:relative}
 #to .led{width:7px;height:7px}
-#msg{flex:1;border:0;outline:0;background:transparent;font:inherit;color:inherit;padding:8px 2px}
+/* T33 Blocker 2: el input tenía `min-width:auto` (el tamaño por defecto de un `<input>` de texto, medido
+   175 px) y no podía encoger, así la fila del chat desbordaba `#chat` y `#send` salía del stage (x=372+38
+   sobre un viewport de 360). Con `min-width:0` la fila entra en el contenedor. */
+#msg{flex:1;min-width:0;border:0;outline:0;background:transparent;font:inherit;color:inherit;padding:8px 2px}
 #msg::placeholder{color:var(--faint)}
 #send{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:var(--panel2);transition:background .15s,color .15s}
 #send:hover{background:var(--accent);color:#fff}
@@ -186,7 +267,7 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 #menu.open{display:block}
 #menu button{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border-radius:10px;text-align:left}
 #menu button:hover,#menu button.on{background:var(--panel2)}
-#menu small{color:var(--muted);margin-left:auto;font-size:11px}
+#menu small{color:var(--muted);margin-left:auto;font-size:11.5px}
 /* Inspector */
 #insp{display:flex;flex-direction:column;min-height:0;position:relative}
 .tabs{display:flex;gap:4px;padding:10px 10px 0}
@@ -201,15 +282,18 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 /* badge de estado: lo consumen la ficha del inspector y la lista de agentes del chat (T22).
    `statusOf` solo produce los 5 estados verificados; `waiting` sigue sin productor, la clase queda.
    `flex:none` y `white-space:nowrap` mantienen la etiqueta legible dentro de las filas flex. */
-.st{margin-left:auto;flex:none;white-space:nowrap;font-size:10.5px;font-weight:700;letter-spacing:.06em;padding:3px 8px;border-radius:7px;text-transform:uppercase;align-self:flex-start}
+.st{margin-left:auto;flex:none;white-space:nowrap;font-size:11.5px;font-weight:700;letter-spacing:.06em;padding:3px 8px;border-radius:7px;text-transform:uppercase;align-self:flex-start}
 .st.working{background:var(--okSoft);color:var(--ok)}.st.idle{background:var(--panel);color:var(--muted);border:1px solid var(--line)}
 .st.waiting{background:var(--warnSoft);color:var(--warn)}.st.blocked{background:var(--badSoft);color:var(--bad)}
-.st.done{background:var(--accentSoft);color:var(--accent)}.st.unknown{background:var(--panel2);color:var(--faint);border:1px solid var(--line)}
+/* T33: `.st.done` (azul sobre chip azul claro) medía 4.48 y `.st.unknown` (faint sobre panel2) 4.40.
+   `done` refuerza el chip con borde del propio color; `unknown` pasa a `--muted` sobre `--panel2`
+   (7.01) y conserva el borde, que es la señal de que el estado NO viene medido. */
+.st.done{background:var(--accentSoft);color:var(--accent);border:1px solid var(--accent)}.st.unknown{background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
 .act{margin:10px 2px 0;color:var(--muted);font-size:12.5px}
 .act b{color:var(--text);font-weight:600}
-.sec{margin:20px 2px 8px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);display:flex;justify-content:space-between}
+.sec{margin:20px 2px 8px;font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);display:flex;justify-content:space-between}
 .need{border:1.5px solid var(--accent);border-radius:16px;padding:12px;background:linear-gradient(180deg,var(--accentSoft),transparent 70%);margin-bottom:8px}
-.need .tag{display:inline-block;background:var(--ink);color:var(--inkText);font-size:9.5px;font-weight:700;letter-spacing:.06em;padding:2px 6px;border-radius:5px}
+.need .tag{display:inline-block;background:var(--ink);color:var(--inkText);font-size:11.5px;font-weight:700;letter-spacing:.06em;padding:2px 6px;border-radius:5px}
 .need p{margin:8px 0 10px;font-size:13px}
 .need .meta{font-size:11.5px;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
 .empty{color:var(--muted);font-size:13px;padding:10px 12px;border-radius:12px;background:var(--panel2);display:flex;gap:8px;align-items:center}
@@ -230,7 +314,7 @@ button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 .task .tt span{color:var(--muted);font-weight:500}
 pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;line-height:1.5;background:var(--panel2);border-radius:12px;padding:12px;color:var(--text)}
 .msgs .m{padding:9px 11px;border-radius:12px;background:var(--panel2);margin-bottom:6px;font-size:12.5px}
-.msgs .m small{display:block;color:var(--muted);font-size:11px}
+.msgs .m small{display:block;color:var(--muted);font-size:11.5px}
 /* Vistas alternativas (métricas, tablero, campus) */
 .panelview{position:absolute;inset:0;overflow:auto;padding:4px 4px 12px;display:none}
 .panelview.on{display:block}
@@ -251,7 +335,7 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
 .boss .bar i{background:linear-gradient(90deg,#ef4444,#f97316)}
 .kan{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;align-items:start}
 .col{background:var(--panel2);border-radius:16px;padding:10px;min-height:120px}
-.col h4{margin:2px 4px 10px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);display:flex;justify-content:space-between}
+.col h4{margin:2px 4px 10px;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);display:flex;justify-content:space-between}
 .tc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:8px;font-size:12.5px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
 .tc b{display:block;font-weight:650;margin-bottom:4px}
 .tc .who2{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11.5px;margin-top:6px}
@@ -269,9 +353,9 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
 #modal .card.wide{width:min(820px,96vw)}
 .fgrid,.fgrid3{display:grid;grid-template-columns:1fr 1fr;gap:8px}.fgrid3{grid-template-columns:.8fr 1fr 1fr}
 .fgrid3 select{font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:12px;padding:11px 13px}
-.mtag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);background:var(--panel2);border-radius:6px;padding:1px 6px;margin-left:6px}
+.mtag{display:inline-block;font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);background:var(--panel2);border-radius:6px;padding:1px 6px;margin-left:6px}
 .fhead,.frow{display:grid;grid-template-columns:1.1fr 1fr 1.6fr auto 32px;gap:8px;align-items:center}
-.fhead{margin:16px 2px 6px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.fhead{margin:16px 2px 6px;font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
 .frow{padding:6px;border:1px solid var(--line);border-radius:12px;margin-bottom:6px;background:var(--panel)}
 .frow input,.frow select{width:100%;font:inherit;font-size:13px;color:inherit;background:var(--panel2);border:1px solid transparent;border-radius:9px;padding:8px 9px;outline:none;min-width:0}
 .frow input:focus,.frow select:focus{border-color:var(--accent)}
@@ -284,16 +368,18 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
 #modal .row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
 #toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:60}
 .toast{background:var(--ink);color:var(--inkText);padding:10px 14px;border-radius:12px;box-shadow:var(--shadow);font-size:13px;max-width:360px;animation:tin .25s ease-out}
-.toast.bad{background:var(--bad);color:#fff}
+/* T33: `#fff` sobre `--bad` oscuro (claro) da 6.48; sobre `--bad` de tema oscuro (#f87171) daba 2.77.
+   `--inkText` es el texto que ya vive sobre `--ink` en los dos temas: 6.48 claro, 6.72 oscuro. */
+.toast.bad{background:var(--bad);color:var(--inkText)}
 @keyframes tin{from{transform:translateY(8px);opacity:0}}
 #rotate{position:fixed;inset:0;display:none;place-items:center;text-align:center;background:var(--bg);z-index:100;padding:24px}
 #rotate svg{margin-bottom:14px;animation:rot 2.4s ease-in-out infinite}
 #rotate h3{margin:0 0 6px}
 #rotate p{margin:0;color:var(--muted)}
 @keyframes rot{0%,30%{transform:rotate(0)}60%,100%{transform:rotate(-90deg)}}
-/* Retrato: el MURO de «Gira el dispositivo» se quita. El aviso pasa a banda superior y `#stage`
-   sigue visible: el letterbox 16:9 queda como franja y el layout compacto (activado por el
-   ResizeObserver de `#stage`, <1150 px) deja oficinas, KPIs, cola, badge e inspector usables. */
+/* Retrato: el MURO de «Gira el dispositivo» se quita (T19). El aviso pasa a banda superior y `#stage`
+   sigue visible: el layout compacto (activado por el ResizeObserver de `#stage`, <1150 px) deja oficinas,
+   KPIs, cola, badge e inspector usables. En vertical el letterbox NO es 16:9: ver T33 Blocker 2 abajo. */
 @media (orientation:portrait) and (max-width:900px){
   #rotate{display:flex;inset:0 0 auto 0;bottom:auto;place-items:initial;text-align:left;align-items:center;
     justify-content:center;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 14px}
@@ -301,7 +387,15 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
   #rotate svg{margin:0;width:22px;height:22px;animation:none}
   #rotate h3{font-size:13px;margin:0}
   #rotate p{font-size:11.5px;margin:0}
-  #stage{top:calc(50% + 27px)}
+  /* T33 Blocker 2: en vertical el letterbox 16:9 dejaba un stage de 219,4 px (390x844), `#center` de 118 px
+     y `#view` de 2 px, con el canvas a 308x0 y `#msg`/`#send` salidos del stage. El 16:9 es la proporción
+     equivocada para un teléfono: el stage pasa a proporción 3:4 sobre el área LIBRE debajo de la banda
+     (844-78 = 766 px) y queda 390x520. Sigue siendo letterbox (el stage es más chico que la ventana); solo
+     cambia la proporción, y el diorama y el chat entran. La banda de aviso mide 77,5 px de alto, así `top`
+     es la mitad de la banda (39 px) y el stage queda centrado en el área libre, no en toda la pantalla.
+     Medido: canvas 308x148 (390x844) y 278x123 (360x640), `#msg` y `#send` dentro del stage, cajón
+     alcanzable con la tecla 1-9 y botón de cierre visible. */
+  #stage{width:min(100vw,calc((100vh - 78px)*3/4));height:min(calc(100vh - 78px),calc(100vw*4/3));top:calc(50% + 39px)}
   #stage.compact #head{padding-top:4px}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -379,7 +473,7 @@ pre.log{margin:0;white-space:pre-wrap;word-break:break-word;font-size:11.5px;lin
   </aside>
 </div>
 
-<div id="modal"><div class="card" role="dialog" aria-modal="true" aria-labelledby="mt" aria-describedby="mp"><h3 id="mt"></h3><p id="mp"></p><div id="mb"></div><div class="row"><button class="btn" id="mc">Cancelar</button><button class="btn pri" id="mo">Aceptar</button></div></div></div>
+<div id="modal"><div class="card" role="dialog" aria-modal="true" aria-labelledby="mt" aria-describedby="mp" tabindex="-1"><h3 id="mt"></h3><p id="mp"></p><div id="mb"></div><div class="row"><button class="btn" id="mc">Cancelar</button><button class="btn pri" id="mo">Aceptar</button></div></div></div>
 <div id="toasts" role="status" aria-live="polite"></div>
 <div id="rotate"><div><svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg><h3>La oficina está diseñada en horizontal</h3><p>En vertical se ve estrecha, pero sigue usable: oficinas, KPIs, cola, estado e inspector están arriba.</p></div></div>
 
@@ -937,6 +1031,7 @@ function renderFresh(){
   const wv=S.ws?' · ws '+S.ws:' · ws no declarado';
   const mc=S.maquina?' · '+S.maquina:'';
   f.textContent=(u?'estado '+u:'estado sin sello')+` · ${age}${wv}${mc}`;
+  f.title=f.textContent;   /* T33: la línea de frescura se corta con `text-overflow` en la cabecera; el `title` lleva el texto completo, la misma regla que `renderTick` aplica a la franja */
 }
 function renderLive(){
   const l=$('#live'),e=S.events;
@@ -946,7 +1041,11 @@ function renderLive(){
   else{l.className='live'+(S.herdr?'':' off');l.textContent='canal no declarado'+(S.herdr?' · herdr responde':'')}
 }
 function renderBadge(){   /* el badge del estado también en la cabecera: legible sin abrir el cajón compacto */
-  const b=$('#badge'),a=agentList().find(x=>x.name===sel)||agentList()[0];
+  const b=$('#badge');
+  /* T33 Pol: en carga fría el badge se pintaba `class="st"` con texto vacío. Sin estado (`S` null) el
+     chip se declara oculto; nunca un chip vacío. El resto de la ruta no cambia. */
+  if(!S){b.hidden=true;return}
+  const a=agentList().find(x=>x.name===sel)||agentList()[0];
   if(!a){b.hidden=true;return}
   const st=statusOf(a);b.hidden=false;b.className='st '+st;b.textContent=STTXT[st];
 }
@@ -1170,7 +1269,15 @@ async function send(agent,mode,text){try{const r=await api('/api/send',{method:'
    elemento que abrió (`document.activeElement` guardado al abrir, `.focus()` nativo al cerrar).
    `closeModal` es la única ruta de cierre, así Aceptar, Cancelar y Escape devuelven el foco igual. */
 const FOCUSABLE='button,[tabindex]:not([tabindex="-1"]),input,select,textarea';
-const focusables=()=>$('#modal .card').querySelectorAll(FOCUSABLE).filter(e=>!e.hidden&&!e.disabled);
+/* T33 Blocker 1: `querySelectorAll` devuelve un NodeList y `NodeList.filter` no es una función: el registro
+   del navegador daba `$(...).querySelectorAll(...).filter is not a function` (8 errores de página en la
+   primera apertura, 7 en la tercera), el `keydown` de Tab reventaba y el foco seguía el orden natural de
+   la página: `#newOff` (fuera del diálogo) al abrir y 8 pulsaciones de Tab por la página antes de entrar.
+   La lista se construye como ARRAY y el predicado es `Array.prototype.filter`; `hiddenFor` saca lo que
+   está dentro de un contenedor `[hidden]`, y `type==='hidden'` saca inputs ocultos. */
+const hiddenFor=e=>{for(let n=e;n&&n.nodeType===1;n=n.parentElement)if(n.hidden)return true;return false};
+const focusables=()=>{const card=$('#modal .card');if(!card)return[];
+  return [...card.querySelectorAll(FOCUSABLE)].filter(e=>e.tagName!=='INPUT'||e.type!=='hidden').filter(e=>!hiddenFor(e)&&!e.disabled)};
 let opener=null;
 function closeModal(){
   $('#modal').classList.remove('on');
@@ -1181,17 +1288,20 @@ function confirmModal(t,p,ok,body='',okText='Aceptar'){
   $('#mo').textContent=okText;$('#mt').textContent=t;$('#mp').textContent=p;$('#mb').innerHTML=body;
   opener=document.activeElement;   /* se guarda ANTES de mover el foco, en el mismo tick */
   $('#modal').classList.add('on');
-  const f=focusables();if(f.length)f[0].focus();   /* T18: el foco entra en el diálogo al abrir, sin temporizador. `#mt` y `#mp` son el título y la descripción, así `aria-labelledby`/`aria-describedby` apuntan a texto que ya está puesto en el mismo tick */
+  const f=focusables();(f.length?f[0]:$('#modal .card')).focus();   /* T18 + T33: el foco entra en el diálogo al abrir, sin temporizador. Si la tarjeta no tiene ningún focoable (diálogo solo de texto), la tarjeta misma es el foco: `tabindex="-1"` la hace focoable de programa y el lazo de Tab entra por ahí */
   $('#mo').onclick=()=>{closeModal();ok()};$('#mc').onclick=closeModal;
 }
 $('#modal').addEventListener('keydown',e=>{
   if(!$('#modal').classList.contains('on'))return;
   if(e.key==='Escape'){e.preventDefault();closeModal();return}
   if(e.key!=='Tab')return;
-  const f=focusables();if(!f.length)return;
+  const f=focusables();
   e.preventDefault();   /* Tab nunca sale del diálogo: el lazo se hace con la lista de la tarjeta */
+  if(!f.length){$('#modal .card').focus();return}
   const i=f.indexOf(document.activeElement);
-  f[e.shiftKey?(i<=0?f.length-1:i-1):(i>=f.length-1?0:i+1)].focus();
+  /* `i<0` = el foco estaba fuera de la tarjeta (blur, clic en el fondo): Tab entra por el principio y
+     Shift+Tab por el final. El lazo no depende de dónde estaba el foco. */
+  f[e.shiftKey?(i<=0?f.length-1:i-1):(i<0||i>=f.length-1?0:i+1)].focus();
 });
 $('#modal').addEventListener('mousedown',e=>{if(e.target===e.currentTarget)closeModal()});
 let KINDS=null,KBY={},MACHS=['bazzite'];
@@ -1247,7 +1357,12 @@ $('#newOff').onclick=newOffice;
 
 /* teclado */
 document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'){if(e.key==='Escape')e.target.blur();return}
-  const k=e.key.toLowerCase();if(k==='escape'){$('#stage').classList.remove('drawer');$('#modal').classList.remove('on');$('#menu').classList.remove('open');setView('oficina')}
+  const k=e.key.toLowerCase();
+  /* T33 Blocker 1: el `keydown` global de `document` cerraba el diálogo con
+     `$('#modal').classList.remove('on')`, una ruta de cierre sin `closeModal`, y el foco se quedaba en
+     `body` (medido tras Escape: activeElement = body). `closeModal` es la única ruta: el `keydown` del
+     `#modal` ya cerró y devolvió el foco al opener, así el global no vuelve a cerrar. */
+  if(k==='escape'){$('#stage').classList.remove('drawer');$('#menu').classList.remove('open');setView('oficina')}
   else if(k==='t')setView('tablero');else if(k==='m')setView('metricas');else if(k==='c')setView('campus');else if(k==='o')setView('oficina');
   else if(k==='/'){e.preventDefault();$('#msg').focus()}else if(/^[1-9]$/.test(k)){const a=agentList()[+k-1];if(a)select(a.name)}});
 
