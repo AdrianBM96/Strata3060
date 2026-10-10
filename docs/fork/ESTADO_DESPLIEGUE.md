@@ -1,6 +1,12 @@
 # Estado de despliegue de bazzite (para recuperación)
 
-Última revisión: **2026-10-04**. Sirve para reconstruir todo tras un reinicio o una caída de sesión.
+Última revisión: **2026-10-10** (motor 0.1.41+fork.1). Sirve para reconstruir todo tras un reinicio o una caída de sesión.
+
+## Motor desplegado (2026-10-10): 0.1.41+fork.1
+
+- `~/Strata/engine/strata` md5 **6feee00c4e7258ac0cc8c1b2dcb4e4e3**, `strata-vision` ee37205883dc8a40ab2048a1c1b50c67; `serve/`, `tools/` y `setup.py` del árbol `strata-upgrade/v041` (rama `fork/v041`); `engine/BUILD.json` con version `0.1.41+fork.1`.
+- Config y unidad sin cambios (PF_FUSED=1, FETCH_ADMIT=1, PROFILE_HEAT_MIN=200000; CPU_SHARE por defecto; IQ2S_BLOCK apagado).
+- Vuelta atrás: `bench/rollback-01856e5a/RESTORE.md` (md5 01856e5a) o la copia `bench/pre-v041-20261010/`. Resumen: `ACTUALIZACION_v0.1.41.md`.
 
 ## La máquina
 
