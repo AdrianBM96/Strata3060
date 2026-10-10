@@ -16,7 +16,7 @@ Producción pasa de 0.1.40 (md5 01856e5a) a 0.1.41+fork.1 (md5 6feee00c, rama `f
 B1 54,5 / 56,9 tok/s; B4 53,8 / 53,0 (aceptación 0,97 / 0,95); turno de agente 2,40 / 2,16 s (527 nuevos, 34.350 cacheados). Precarga 30 s, GPU 11.291 MiB (11.411 tras imágenes, como en F2).
 
 ## Vuelta atrás
-Dos vías, ambas verificadas con md5 01856e5a:
+Dos vías (no ejecutadas; el SHA256SUMS de rollback y la copia previa contienen el md5 01856e5a):
 1. `bench/rollback-01856e5a/RESTORE.md` (SHA256SUMS, restaura motor, serve/, config, unidad y drop-ins).
 2. Copia previa a F4 en `~/Strata/bench/pre-v041-20261010/` (engine/{strata,strata-vision,BUILD.json}, serve/, tools/, serve-strata.sh, JSON, setup.py): `systemctl --user stop strata.service`, copiar de vuelta, `start`.
 Comprobar: `md5sum /proc/<pid>/exe` = 01856e5a6dbcde136e99723604705cdc y /health `loaded: true`.
