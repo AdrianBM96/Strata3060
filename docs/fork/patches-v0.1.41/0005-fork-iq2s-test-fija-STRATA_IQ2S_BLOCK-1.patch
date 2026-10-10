@@ -1,0 +1,47 @@
+From ac244631de92d40cea0ceb29639c3e27fe3375fb Mon Sep 17 00:00:00 2001
+From: ada <ada@local>
+Date: Sat, 10 Oct 2026 16:10:41 +0000
+Subject: [PATCH 05/13] fork: iq2s test fija STRATA_IQ2S_BLOCK=1
+
+---
+ CMakeLists.txt                | 2 +-
+ tests/core/iq2s_avx2_test.cpp | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 51f2a5a6..df571fa8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -256,7 +256,7 @@ if(STRATA_BUILD_TESTS)
+       target_compile_options(iq2s_avx2_test PRIVATE -mavx2 -mfma -mf16c)
+     endif()
+     add_test(NAME iq2s_avx2_test COMMAND iq2s_avx2_test)
+-    set_tests_properties(iq2s_avx2_test PROPERTIES SKIP_RETURN_CODE 77)
++    set_tests_properties(iq2s_avx2_test PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT STRATA_IQ2S_BLOCK=1)
+   endif()
+ 
+   # the hipBLASLt tuning header's architecture gate: RDNA4 siblings share solution IDs, RDNA3 siblings share
+diff --git a/tests/core/iq2s_avx2_test.cpp b/tests/core/iq2s_avx2_test.cpp
+index 95709ea8..e22147ba 100644
+--- a/tests/core/iq2s_avx2_test.cpp
++++ b/tests/core/iq2s_avx2_test.cpp
+@@ -85,7 +85,7 @@ int check_all(std::mt19937_64& rng) {
+ }
+ 
+ // The public entries (iq256_rows, and iq256_gu_rows_v in each variant this build has) go through the block
+-// kernel for type 22 unless STRATA_IQ2S_BLOCK=0.
++// kernel for type 22 only when STRATA_IQ2S_BLOCK=1 (the ctest sets it).
+ int check_dispatch(std::mt19937_64& rng) {
+     constexpr int rows = 8, nt = 3;
+     const size_t gu_row = (size_t) kBlocks * kBlockBytes;
+@@ -202,6 +202,6 @@ int main(int argc, char** argv) {
+     if (iq2s_block_on()) bad |= check_dispatch(rng);
+     if (bad) return 1;
+     std::printf("iq2s_avx2_test: block kernel bit-identical to the generic one (NT 1-8, 3 seeds, 4 patterns)%s\n",
+-                iq2s_block_on() ? "" : " [STRATA_IQ2S_BLOCK=0: dispatch not checked]");
++                iq2s_block_on() ? "" : " [STRATA_IQ2S_BLOCK!=1: dispatch not checked]");
+     return 0;
+ }
+-- 
+2.43.0
+

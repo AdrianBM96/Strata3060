@@ -1,0 +1,126 @@
+From 19f24552599c06a83c6f65ddab72dbad019d5ad4 Mon Sep 17 00:00:00 2001
+From: ada <ada@local>
+Date: Sat, 10 Oct 2026 16:16:31 +0000
+Subject: [PATCH 13/13] fork: tests de servidor para
+ strata_lpids/strata_logprobs/cachelog/health
+
+---
+ serve/test_fork_patches.py | 106 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 106 insertions(+)
+ create mode 100644 serve/test_fork_patches.py
+
+diff --git a/serve/test_fork_patches.py b/serve/test_fork_patches.py
+new file mode 100644
+index 00000000..a18b5766
+--- /dev/null
++++ b/serve/test_fork_patches.py
+@@ -0,0 +1,106 @@
++"""Fork patches of the server (System One strata_lpids / strata_logprobs, cachelog): no engine, no GPU.
++
++    python -m unittest serve.test_fork_patches
++"""
++from __future__ import annotations
++
++import io
++import json
++import queue
++import sys
++import threading
++import unittest
++import urllib.request
++from pathlib import Path
++from unittest import mock
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++from serve.frontend import ChatTemplate  # noqa: E402
++from serve.server import ByteTokenizer, MockEngine, Service, StrataEngine, serve  # noqa: E402
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++class LogprobEngine(MockEngine):
++    """Like the real engine after a `strata logprobs:` line: last_logprobs is set during the request."""
++
++    def generate(self, ids, max_new, sampling, cancel, embeddings=None):
++        self.last_sampling = sampling
++        self.last_logprobs = {7: -0.5, 8: -1.25}
++        yield from super().generate(ids, max_new, sampling, cancel, embeddings)
++
++
++def bare():
++    engine = StrataEngine.__new__(StrataEngine)
++    engine.proc = mock.Mock()
++    engine.proc.stdin = io.StringIO()
++    engine.proc.poll.return_value = None
++    engine.lines, engine.can_stop, engine.max_context = queue.Queue(), False, 4096
++    engine.silence_s, engine.log_path = 300.0, None
++    return engine
++
++
++class ForkPatches(unittest.TestCase):
++    def test_strata_lpids_become_the_lpids_key(self):
++        keys = StrataEngine.sampling_keys({"strata_lpids": [11, 22, -1, 33]})
++        self.assertIn(" lpids=11,22,33", keys)
++        self.assertNotIn("lpids", StrataEngine.sampling_keys({}))
++        self.assertNotIn("lpids", StrataEngine.sampling_keys({"strata_lpids": ["x"]}))   # junk: ignored
++
++    def test_the_gen_line_carries_lpids(self):
++        engine = bare()
++        engine.lines.put("DONE 0 1 0 0 length")
++        list(engine.generate([1, 2], 1, {"strata_lpids": [7, 8]}, threading.Event()))
++        self.assertRegex(engine.proc.stdin.getvalue(), r"GEN 1 .*lpids=7,8")
++
++    def test_the_engine_logprobs_line_is_read_and_cachelog_counters_set(self):
++        engine = bare()
++        for line in ("RESUME 5", "strata logprobs: 7:-0.5 8:-1.25", "conversation cache: evictions=3, x", "T 7",
++                     "DONE 1 2 0 0 length"):
++            engine.lines.put(line)
++        self.assertEqual([t for t in engine.generate([1, 2], 1, {"strata_lpids": [7, 8]}, threading.Event())
++                          if t is not None], [7])
++        self.assertEqual(engine.last_logprobs, {7: -0.5, 8: -1.25})
++        self.assertEqual((engine.last_resume, engine.last_evictions), (5, 3))
++        list(self._again(engine))
++        self.assertIsNone(engine.last_logprobs)                     # a request without the line does not inherit it
++
++    @staticmethod
++    def _again(engine):
++        engine.lines.put("DONE 0 1 0 0 length")
++        return engine.generate([1], 1, {}, threading.Event())
++
++
++class SystemOneHttp(unittest.TestCase):
++    """What ada-decide reads: strata_lpids in the request reaches the engine, strata_logprobs comes back (stream or not)."""
++
++    @classmethod
++    def setUpClass(cls):
++        tok = ByteTokenizer()
++        cls.engine = LogprobEngine(tok, "a", max_context=4096)
++        cls.svc = Service(cls.engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
++        cls.httpd = serve(cls.svc, port=0)
++        cls.base = f"http://127.0.0.1:{cls.httpd.server_address[1]}"
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.httpd.shutdown()
++        cls.httpd.server_close()
++
++    def test_lpids_in_logprobs_out_and_health_keys(self):
++        body = {"model": "m", "max_tokens": 1, "temperature": 0, "strata_lpids": [7, 8],
++                "messages": [{"role": "user", "content": "q"}]}
++        req = urllib.request.Request(self.base + "/v1/chat/completions", data=json.dumps(body).encode(),
++                                     headers={"Content-Type": "application/json"})
++        with urllib.request.urlopen(req, timeout=30) as r:
++            out = json.loads(r.read())
++        self.assertEqual(self.engine.last_sampling["strata_lpids"], [7, 8])
++        self.assertEqual({int(k): v for k, v in out["strata_logprobs"].items()}, {7: -0.5, 8: -1.25})
++        with urllib.request.urlopen(self.base + "/health", timeout=10) as r:   # the gateway greps these two literally
++            raw = r.read().decode()
++        self.assertIn('"loaded": true', raw)
++        self.assertIn('"images": false', raw)       # no vision in this fake; "images": true is `svc.vision is not None`
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.43.0
+

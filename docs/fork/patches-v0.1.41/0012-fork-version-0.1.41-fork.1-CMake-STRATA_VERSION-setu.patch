@@ -1,0 +1,136 @@
+From 031401fb4d0c0a66010ee38917e3b488a52c1bf9 Mon Sep 17 00:00:00 2001
+From: ada <ada@local>
+Date: Sat, 10 Oct 2026 16:14:20 +0000
+Subject: [PATCH 12/13] fork: version 0.1.41+fork.1 (CMake STRATA_VERSION;
+ setup.py version_tuple ignora el sufijo +)
+
+---
+ CMakeLists.txt                 |  3 ++-
+ setup.py                       | 23 ++++++++++++++---------
+ tools/test_setup_hotfix_tag.py |  3 +++
+ 3 files changed, 19 insertions(+), 10 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index df571fa8..2c2269f9 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -20,7 +20,8 @@ if(STRATA_ENABLE_SYCL)
+   add_subdirectory(sycl)
+   return()
+ endif()
+-add_compile_definitions(STRATA_VERSION="${PROJECT_VERSION}")
++# fork build suffix: the number stays 0.1.41 (setup.py version_tuple drops what follows the +)
++add_compile_definitions(STRATA_VERSION="${PROJECT_VERSION}+fork.1")
+ # issue #31: release builds keep a PDB beside the exe (not shipped in it), so a minidump from a stalled engine can
+ # be read back to the exact source line
+ if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Release")
+diff --git a/setup.py b/setup.py
+index 8a3cb96e..2469609c 100644
+--- a/setup.py
++++ b/setup.py
+@@ -2295,7 +2295,7 @@ def get_prebuilt_hip(url_base, gpu, updating=False) -> Path | None:
+             meta = json.loads(info.read_text(encoding="utf-8"))
+         except ValueError:
+             meta = {}
+-        ver = tuple(int(x) for x in str(meta.get("version", "0")).split(".")[:4] if x.isdigit())
++        ver = version_tuple(meta.get("version", "0"))
+         if meta.get("backend") == "hip" and meta.get("source") == "prebuilt" and ver >= WIN_HIP_MIN_ENGINE and \
+                 gpu["arch"] in meta.get("archs", []) and not updating:
+             ok("ready-made AMD engine already installed")
+@@ -2333,7 +2333,7 @@ def get_prebuilt_hip(url_base, gpu, updating=False) -> Path | None:
+         meta = json.loads((tmp / "BUILD.json").read_text(encoding="utf-8"))
+     except (OSError, ValueError):
+         meta = {}
+-    ver = tuple(int(x) for x in str(meta.get("version", "0")).split(".")[:4] if x.isdigit())
++    ver = version_tuple(meta.get("version", "0"))
+     why = None
+     if meta.get("backend") != "hip" or not (tmp / EXE).exists():
+         why = "it is not a HIP engine"
+@@ -2809,7 +2809,7 @@ def get_prebuilt(url_base, gpu, vision, updating=False, toolkit=13) -> Path | No
+     info = eng / "BUILD.json"
+     if info.exists() and (eng / EXE).exists() and json.loads(info.read_text(encoding="utf-8")).get("backend") != "hip":
+         meta = json.loads(info.read_text(encoding="utf-8"))
+-        ver = tuple(int(x) for x in str(meta.get("version", "0")).split(".")[:4] if x.isdigit())
++        ver = version_tuple(meta.get("version", "0"))
+         if meta.get("source") == "local":              # compiled here: build_engine checks its source and cards
+             return None
+         have = [int(a) for a in meta.get("archs", [])]
+@@ -2858,7 +2858,7 @@ def get_prebuilt(url_base, gpu, vision, updating=False, toolkit=13) -> Path | No
+         drop_archive(z)                                # every later run fail on it instead of downloading it again
+         raise
+     meta = json.loads((tmp / "BUILD.json").read_text(encoding="utf-8"))
+-    if tuple(int(x) for x in str(meta.get("version", "0")).split(".")[:4] if x.isdigit()) < MIN_ENGINE:
++    if version_tuple(meta.get("version", "0")) < MIN_ENGINE:
+         need = ".".join(map(str, MIN_ENGINE))
+         if updating:                                   # these files are newer than the published release (#58)
+             warn(f"engine {need} is not published yet (the release may still be uploading): run this again "
+@@ -2909,7 +2909,7 @@ def update_installed_engine(url_base, toolkit=None) -> None:
+     meta_text = info.read_text(encoding="utf-8")
+     meta = json.loads(meta_text)
+     if meta.get("backend") == "hip" and WIN:           # AMD on Windows: the ready-made HIP engine, when older
+-        ver = tuple(int(x) for x in str(meta.get("version", "0")).split(".")[:4] if x.isdigit())
++        ver = version_tuple(meta.get("version", "0"))
+         if meta.get("source") == "prebuilt" and ver < WIN_HIP_MIN_ENGINE:
+             try:
+                 g = next((x for x in amd_gpus() if amd_problem(x) is None), None)
+@@ -2937,7 +2937,7 @@ def update_installed_engine(url_base, toolkit=None) -> None:
+                 warn(f"could not compile the updated engine{'' if isinstance(e, SystemExit) else f' ({e})'}: "
+                      "starting the installed one")
+         return
+-    ver = tuple(int(x) for x in str(meta.get("version", "0")).split(".")[:4] if x.isdigit())
++    ver = version_tuple(meta.get("version", "0"))
+     local = meta.get("source") == "local"
+     vision = meta.get("vision") or "none"
+     if local:                                          # compiled here: is it older than the source (a git pull)?
+@@ -3850,6 +3850,11 @@ def source_version() -> str:
+     return m.group(1) if m else "0"
+ 
+ 
++def version_tuple(v) -> tuple:
++    """"0.1.41+fork.1" -> (0, 1, 41): the fork's build suffix (after '+') is not part of the number."""
++    return tuple(int(x) for x in str(v).split("+")[0].split(".")[:4] if x.isdigit())
++
++
+ def engine_version(exe: Path) -> tuple:
+     """The version in the engine folder's BUILD.json, or else the one compiled into the binary.  A locally compiled
+     engine is not necessarily the source's version: when compiling a `git pull` fails, the previous engine is kept
+@@ -3861,11 +3866,11 @@ def engine_version(exe: Path) -> tuple:
+     v = str(meta.get("version") or "")
+     if not v:                                          # the version compiled into the binary: 0.1.13 and newer
+         try:                                           # carry it, so a binary without it is older
+-            m = re.search(rb"engine=(\d+\.\d+\.\d+(?:\.\d+)?)\n", Path(exe).read_bytes())
++            m = re.search(rb"engine=(\d+\.\d+\.\d+(?:\.\d+)?)(?:\+[\w.]+)?\n", Path(exe).read_bytes())
+             v = m.group(1).decode() if m else "0.1.12"
+         except OSError:
+             v = "0"
+-    return tuple(int(x) for x in v.split(".")[:4] if x.isdigit())
++    return version_tuple(v)
+ 
+ 
+ def is_wsl() -> bool:
+@@ -5239,7 +5244,7 @@ def main() -> int:
+         lib_dirs = [str(d) for d in hip_lib_dirs(eng)]
+     else:
+         lib_dirs = meta.get("lib_dirs") or meta.get("cuda_dirs") or cuda_lib_dirs(cuda_tk)
+-    engine_ver = tuple(int(x) for x in str(meta.get("version", "0")).split(".")[:4] if x.isdigit())
++    engine_ver = version_tuple(meta.get("version", "0"))
+     need_engine = MODELS[model].get("engine", UNSLOTH_ENGINE)
+     if budget is not None and engine_ver < need_engine:      # checked before the 94-111 GB download
+         fail(f"{model} needs engine {'.'.join(map(str, need_engine))} or newer; this one is {meta.get('version')}",
+diff --git a/tools/test_setup_hotfix_tag.py b/tools/test_setup_hotfix_tag.py
+index bbffbb22..e5ad7459 100644
+--- a/tools/test_setup_hotfix_tag.py
++++ b/tools/test_setup_hotfix_tag.py
+@@ -43,6 +43,9 @@ class HotfixTag(unittest.TestCase):
+             self.assertEqual(setup.engine_version(exe), (0, 1, 40, 2))
+             exe.write_bytes(b"MZ\x00engine=0.1.40\n\x00")
+             self.assertEqual(setup.engine_version(exe), (0, 1, 40))
++            exe.write_bytes(b"MZ\x00engine=0.1.41+fork.1\n\x00")   # the fork's build suffix is not part of the number
++            self.assertEqual(setup.engine_version(exe), (0, 1, 41))
++            self.assertGreaterEqual(setup.version_tuple("0.1.41+fork.1"), setup.MIN_ENGINE)
+ 
+ 
+ if __name__ == "__main__":
+-- 
+2.43.0
+

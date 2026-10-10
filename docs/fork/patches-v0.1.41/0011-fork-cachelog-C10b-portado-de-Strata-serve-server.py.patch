@@ -1,0 +1,74 @@
+From 712fdc30747c4adc5a9c27d436f59c35589408ac Mon Sep 17 00:00:00 2001
+From: ada <ada@local>
+Date: Sat, 10 Oct 2026 16:13:19 +0000
+Subject: [PATCH 11/13] fork: cachelog C10b (portado de Strata/serve/server.py
+ de produccion, sin commitear)
+
+---
+ serve/server.py | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/serve/server.py b/serve/server.py
+index fba7e431..2bb73c85 100644
+--- a/serve/server.py
++++ b/serve/server.py
+@@ -1490,6 +1490,8 @@ class StrataEngine:
+         self.progress, self.progress_ms, self.reused = None, 0, 0
+         self.prefill_tok_s_mean = None
+         self.last_logprobs = None      # --logprobs N: the prompt's last-position distribution
++        self.last_resume = 0             # C10b: RESUME n of this request (reused prefix length)
++        self.last_evictions = 0          # C10b: conversation-cache evictions seen so far (global counter)
+         # an image request takes the same sampling keys as text (#75: it used to decode greedily whatever was asked)
+         head = f"GENI {int(max_new)}{self.sampling_keys(sampling or {})} {embeddings}" if embeddings else \
+             f"GEN {int(max_new)}{self.sampling_keys(sampling or {})}"
+@@ -1573,6 +1575,12 @@ class StrataEngine:
+                 elif line.startswith("RESUME "):          # the reused tokens: the first chunk starts after them
+                     try:
+                         read_to = self.reused = int(line.split()[1])
++                        self.last_resume = read_to       # C10b: reused prefix length of this request
++                    except (IndexError, ValueError):
++                        pass
++                elif "evictions=" in line:                # C10b: conversation-cache evictions (global counter)
++                    try:
++                        self.last_evictions = int(line.split("evictions=")[1].split()[0].rstrip(","))
+                     except (IndexError, ValueError):
+                         pass
+                 elif line.startswith("DONE"):
+@@ -3749,6 +3757,18 @@ class Service:
+                                 hit_msg += f" (+{pcie_share*100:.1f}% of the routed experts over PCIe)"
+                             print(f"[strata] done: {n} tokens in {el:.0f} s ({rate:.1f} tok/s) "
+                                   f"({finish}, cancel={cancel.is_set()}){hit_msg}", flush=True)
++                            try:  # C10b: one cache-reuse line per finished request for the prefix-reuse audit
++                                _cl = getattr(self, "_cachelog_ctx", None) or (None, None, None)
++                                _rs = int(getattr(self.engine, "last_resume", 0) or 0)
++                                _ev = int(getattr(self.engine, "last_evictions", 0) or 0)
++                                _pt = int(len(ids))
++                                _fd = _rs if _pt > _rs else -1   # first token not covered by the reused prefix
++                                _ph = hashlib.sha256(struct.pack(f"<{_pt}i", *[int(t) for t in ids])).hexdigest()[:16]
++                                print(f"[strata] cachelog: api={_cl[0]} model={_cl[1]} ua={str(_cl[2])[:40]} "
++                                      f"prompt={_pt} reused={int(last.get('reused') or 0)} resume={_rs} "
++                                      f"evictions={_ev} first_diff={_fd} phash={_ph}", flush=True)
++                            except Exception:
++                                pass
+                             if finish == "length" and parser.state in ("reasoning", "rcall"):   # #530
+                                 print("[strata] the reply reached max tokens while still thinking, so it has no "
+                                       "answer: a thinking budget (reasoning_budget_tokens, in the request or in "
+@@ -4967,6 +4987,7 @@ def make_handler(svc: Service):
+ 
+         def _openai(self, req):
+             req = svc.with_shared(req, "openai")
++            svc._cachelog_ctx = ("openai", req.get("model"), self.headers.get("User-Agent"))  # C10b: client identity
+             messages, tools, kw = openai_to_messages(req)
+             self._no_local_images(messages)
+             if tool_choice_of(req.get("tool_choice"))[0] == "none":   # as the Responses route: no tools are offered
+@@ -5196,6 +5217,7 @@ def make_handler(svc: Service):
+         def _anthropic(self, req):
+             svc.load()
+             req = svc.with_shared(req, "anthropic")
++            svc._cachelog_ctx = ("anthropic", req.get("model"), self.headers.get("User-Agent"))  # C10b
+             messages, tools, kw = anthropic_to_messages(req, svc.anthropic_think_unasked)
+             self._no_local_images(messages)
+             if tool_choice_of(req.get("tool_choice"))[0] == "none":   # Anthropic's {"type": "none"}: no tools offered
+-- 
+2.43.0
+

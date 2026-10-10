@@ -1,0 +1,158 @@
+From cbe676056b7e9668415b522d48bb8a8a342716eb Mon Sep 17 00:00:00 2001
+From: ada <ada@local>
+Date: Sat, 10 Oct 2026 16:11:56 +0000
+Subject: [PATCH 09/13] fork: suffix-draft-stats + STRATA_SFX_OOV (portado de
+ wt/CUP e8b26e2, parte suffix-stats)
+
+---
+ include/strata/core/mtp.hpp |  6 ++++
+ src/core/mtp.cpp            |  6 ++++
+ src/program/generate.cpp    | 56 +++++++++++++++++++++++++++++++++----
+ 3 files changed, 62 insertions(+), 6 deletions(-)
+
+diff --git a/include/strata/core/mtp.hpp b/include/strata/core/mtp.hpp
+index d2266e55..5f566ad5 100644
+--- a/include/strata/core/mtp.hpp
++++ b/include/strata/core/mtp.hpp
+@@ -62,6 +62,11 @@ public:
+     /// STRATA_MTP_TOP2=1 (diagnostic): draft j's runner-up token in the last draft() (-1 = unknown)
+     static bool top2_env();
+     int32_t top2(int j) const { return j >= 0 && j < (int) top2_.size() ? top2_[(size_t) j] : -1; }
++    /// whether the draft head can propose this token: always without rt/draft_vocab.bin, else only its subset
++    /// (port of suffix-draft-stats: the gate needs it on the host)
++    bool in_draft_vocab(int32_t id) const {
++        return dvocab_sub_.empty() || (id >= 0 && (size_t) id < dvocab_sub_.size() && dvocab_sub_[(size_t) id]);
++    }
+     int max_t() const { return max_t_; }
+     uint64_t vram_bytes() const { return vram_; }
+     /// The draft layer's K/V state (read-only: --serve's STRATA_STATE_HASH check hashes it)
+@@ -205,6 +210,7 @@ private:
+     bool make_q4_head(std::string& err);
+     void record_top2(int j);
+     std::vector<int32_t> top2_, dvocab_host_;
++    std::vector<bool> dvocab_sub_;   // port of suffix-draft-stats: host subset for in_draft_vocab()
+     std::vector<float> lg_host_;
+     // --pipeline-windows 2 (chain_launch)
+     bool stage_source_R(int T, std::string& err);   ///< set_source_R's rows into the bound buffer
+diff --git a/src/core/mtp.cpp b/src/core/mtp.cpp
+index e73ce24a..33d691a2 100644
+--- a/src/core/mtp.cpp
++++ b/src/core/mtp.cpp
+@@ -644,6 +644,12 @@ bool MtpDrafter::bind(const WeightTable& wt, const NativeHead* head, const float
+             cudaMemcpy(dvocab_, raw.data(), raw.size(), cudaMemcpyHostToDevice);
+             dvocab_host_.resize((size_t) n_dvocab_);
+             std::memcpy(dvocab_host_.data(), raw.data(), raw.size());
++            dvocab_sub_.assign((size_t) n_vocab_, false);   // port of suffix-draft-stats
++            for (int64_t i = 0; i < n_dvocab_; ++i) {
++                int32_t id = 0;
++                std::memcpy(&id, raw.data() + (size_t) 4 * i, 4);
++                if (id >= 0 && id < n_vocab_) dvocab_sub_[(size_t) id] = true;
++            }
+             strata::kernels::gather_rows((const uint8_t*) head->weights(), row_bytes, dvocab_, n_dvocab_, dhead_, nullptr);
+             cudaDeviceSynchronize();
+             vram_ += (uint64_t) (n_dvocab_ * row_bytes) + raw.size();
+diff --git a/src/program/generate.cpp b/src/program/generate.cpp
+index 5f7ecc79..3eeec682 100644
+--- a/src/program/generate.cpp
++++ b/src/program/generate.cpp
+@@ -10082,6 +10082,15 @@ int main(int argc, char** argv) {
+             }
+             bool first_window = true;
+             int64_t produced_n = 0, sfx_windows = 0, sfx_drafts = 0, sfx_ok = 0;
++            // port of suffix-draft-stats: why a lookup proposal did not become the window (MTP disagree,
++            // first token outside the draft subset, or policy preferring the MTP window)
++            int64_t sfx_proposed = 0, sfx_gate_disagree = 0, sfx_gate_oov = 0, sfx_policy_mtp = 0, sfx_oov_taken = 0;
++            // STRATA_SFX_OOV=1 (opt-in): a lookup the MTP cannot propose passes the gate on long match.
++            // Verification is unchanged, so greedy text is what the window would give anyway
++            static const int sfx_oov_min = [] {
++                const char* v = std::getenv("STRATA_SFX_OOV");
++                return v != nullptr && v[0] == '1' ? 12 : 0;
++            }();
+             int64_t chain_windows = 0, chain_drafts = 0, chain_ok = 0;   // --lookup-chain's own counts
+             int64_t t2_rej[8] = {}, t2_hit[8] = {};   // STRATA_MTP_TOP2: rejections inside the MTP drafts by depth, runner-up hits
+             int64_t dp_tested[8] = {}, dp_ok[8] = {};   // STRATA_SPEC_DEPTH=1: MTP drafts tested / accepted by depth
+@@ -10748,9 +10757,19 @@ int main(int argc, char** argv) {
+                 if (o.suffix_draft > 0 && !first_window) {
+                     const int k = sfx.propose(S - 1, sbuf.data());
+                     sfx_match = sfx.last_match();
+-                    if (k > 0 && (!use_mtp || sbuf[0] == drafts[0])) {
+-                        const strata::spec::DraftPolicy::Pick pk = policy.choose(T, k, sfx_match);
+-                        if (pk.lookup) { T = pk.t; from_sfx = true; }
++                    if (k > 0) {
++                        ++sfx_proposed;
++                        const bool agree = !use_mtp || sbuf[0] == drafts[0];
++                        const bool oov = !agree && use_mtp && !mtp.in_draft_vocab(sbuf[0]);
++                        if (agree || (oov && sfx_oov_min > 0 && sfx_match >= sfx_oov_min)) {
++                            const strata::spec::DraftPolicy::Pick pk = policy.choose(T, k, sfx_match);
++                            if (pk.lookup) { T = pk.t; from_sfx = true; sfx_oov_taken += oov; }
++                            else ++sfx_policy_mtp;
++                        } else if (oov) {
++                            ++sfx_gate_oov;
++                        } else {
++                            ++sfx_gate_disagree;
++                        }
+                     }
+                 }
+                 // --lookup-chain: what followed an earlier occurrence of the context + the MTP's drafts, after them
+@@ -11259,6 +11278,12 @@ int main(int argc, char** argv) {
+             if (sfx_windows > 0)
+                 std::fprintf(stderr, "strata serve: suffix drafts: %lld windows, %lld of %lld drafts accepted\n",
+                              (long long) sfx_windows, (long long) sfx_ok, (long long) sfx_drafts);
++            if (sfx_proposed > 0)
++                std::fprintf(stderr, "strata serve: lookup proposals %lld: taken %lld (%lld past the draft vocab), "
++                                     "policy chose the MTP %lld, gate: MTP disagreed %lld, first token outside the "
++                                     "draft vocab %lld\n",
++                             (long long) sfx_proposed, (long long) sfx_windows, (long long) sfx_oov_taken,
++                             (long long) sfx_policy_mtp, (long long) sfx_gate_disagree, (long long) sfx_gate_oov);
+             if (o.lookup_chain > 0)
+                 std::fprintf(stderr, "strata serve: lookup chain: %lld of %lld windows, %lld of %lld chained drafts accepted\n",
+                              (long long) chain_windows, (long long) dec_windows, (long long) chain_ok, (long long) chain_drafts);
+@@ -11869,6 +11894,11 @@ int main(int argc, char** argv) {
+         strata::spec::DraftPolicy policy(o.spec);   // MTP or lookup window (see draft_policy.hpp)
+         std::vector<int32_t> sbuf((size_t) o.spec, 0);
+         int64_t sfx_windows = 0, sfx_drafts = 0, sfx_ok = 0;
++        int64_t sfx_proposed = 0, sfx_gate_disagree = 0, sfx_gate_oov = 0, sfx_policy_mtp = 0, sfx_oov_taken = 0;
++        static const int sfx_oov_min = [] {   // port of suffix-draft-stats (same rule as the serve loop)
++            const char* v = std::getenv("STRATA_SFX_OOV");
++            return v != nullptr && v[0] == '1' ? 12 : 0;
++        }();
+         int64_t chain_windows = 0, chain_drafts = 0, chain_ok = 0;   // --lookup-chain's own counts
+         std::vector<int32_t> cbuf((size_t) o.spec, 0), ctail;
+         strata::spec::PromptLookupSource lookup_src(sfx);
+@@ -11897,9 +11927,19 @@ int main(int argc, char** argv) {
+             if (o.suffix_draft > 0 && !first_window) {
+                 const int k = sfx.propose(o.spec - 1, sbuf.data());
+                 sfx_match = sfx.last_match();
+-                if (k > 0 && (!use_mtp || sbuf[0] == drafts[0])) {
+-                    const strata::spec::DraftPolicy::Pick pk = policy.choose(T, k, sfx_match);
+-                    if (pk.lookup) { T = pk.t; from_sfx = true; }
++                if (k > 0) {
++                    ++sfx_proposed;
++                    const bool agree = !use_mtp || sbuf[0] == drafts[0];
++                    const bool oov = !agree && use_mtp && !mtp.in_draft_vocab(sbuf[0]);
++                    if (agree || (oov && sfx_oov_min > 0 && sfx_match >= sfx_oov_min)) {
++                        const strata::spec::DraftPolicy::Pick pk = policy.choose(T, k, sfx_match);
++                        if (pk.lookup) { T = pk.t; from_sfx = true; sfx_oov_taken += oov; }
++                        else ++sfx_policy_mtp;
++                    } else if (oov) {
++                        ++sfx_gate_oov;
++                    } else {
++                        ++sfx_gate_disagree;
++                    }
+                 }
+             }
+             // --lookup-chain: what followed an earlier occurrence of the context + the MTP's drafts, after them
+@@ -12063,6 +12103,10 @@ int main(int argc, char** argv) {
+         if (o.suffix_draft > 0)
+             std::printf("%-24s %lld windows, drafts accepted %lld of %lld\n", "suffix drafts", (long long) sfx_windows,
+                         (long long) sfx_ok, (long long) sfx_drafts);
++        if (sfx_proposed > 0)
++            std::printf("%-24s proposed %lld, taken %lld (%lld oov), policy-mtp %lld, disagree %lld, oov %lld\n",
++                        "lookup proposals", (long long) sfx_proposed, (long long) sfx_windows, (long long) sfx_oov_taken,
++                        (long long) sfx_policy_mtp, (long long) sfx_gate_disagree, (long long) sfx_gate_oov);
+         if (o.lookup_chain > 0)
+             std::printf("%-24s %lld windows, chained drafts accepted %lld of %lld\n", "lookup chain",
+                         (long long) chain_windows, (long long) chain_ok, (long long) chain_drafts);
+-- 
+2.43.0
+

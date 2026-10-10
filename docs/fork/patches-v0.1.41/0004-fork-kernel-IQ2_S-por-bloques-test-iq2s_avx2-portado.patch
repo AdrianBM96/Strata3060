@@ -1,0 +1,407 @@
+From 5b80500f1e1491bf37aadd23a2dc13c7680cd46a Mon Sep 17 00:00:00 2001
+From: ada <ada@local>
+Date: Sat, 10 Oct 2026 16:10:33 +0000
+Subject: [PATCH 04/13] fork: kernel IQ2_S por bloques + test iq2s_avx2
+ (portado de wt/CUP bebb18d/782eb5f; OFF por defecto, STRATA_IQ2S_BLOCK=1)
+
+---
+ CMakeLists.txt                   |  14 +++
+ src/kernels/cpu/iq_avx2.cpp      |  13 ++
+ src/kernels/cpu/iq_avx2_rows.inl |  93 +++++++++++++-
+ tests/core/iq2s_avx2_test.cpp    | 207 +++++++++++++++++++++++++++++++
+ 4 files changed, 324 insertions(+), 3 deletions(-)
+ create mode 100644 tests/core/iq2s_avx2_test.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 6e0ce1c4..51f2a5a6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -244,6 +244,20 @@ if(STRATA_BUILD_TESTS)
+   add_executable(gguf_split_test tests/core/gguf_split_test.cpp)
+   target_link_libraries(gguf_split_test PRIVATE strata_artifact)
+   add_test(NAME gguf_split_test COMMAND gguf_split_test)
++  # the IQ2_S AVX-2 block kernel against the generic one, bit for bit (CPU only: it includes the kernel source, so it
++  # needs neither a GPU nor the ggml build); exit 77 = no AVX2 on this CPU, reported as skipped
++  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|x86")
++    add_executable(iq2s_avx2_test tests/core/iq2s_avx2_test.cpp)
++    target_include_directories(iq2s_avx2_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
++                                                      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ggml)
++    if(MSVC)
++      target_compile_options(iq2s_avx2_test PRIVATE /arch:AVX2)
++    else()
++      target_compile_options(iq2s_avx2_test PRIVATE -mavx2 -mfma -mf16c)
++    endif()
++    add_test(NAME iq2s_avx2_test COMMAND iq2s_avx2_test)
++    set_tests_properties(iq2s_avx2_test PROPERTIES SKIP_RETURN_CODE 77)
++  endif()
+ 
+   # the hipBLASLt tuning header's architecture gate: RDNA4 siblings share solution IDs, RDNA3 siblings share
+   # theirs, cross-family pairs and version mismatches stay rejected (synthetic tables: no model, no GPU)
+diff --git a/src/kernels/cpu/iq_avx2.cpp b/src/kernels/cpu/iq_avx2.cpp
+index 2884fcde..a7cbb09c 100644
+--- a/src/kernels/cpu/iq_avx2.cpp
++++ b/src/kernels/cpu/iq_avx2.cpp
+@@ -367,6 +367,18 @@ template <> struct Fmt32<23> {   // IQ4_XS: d, scales_h, scales_l[4], qs[128] -
+ };
+ 
+ // ---- the row kernels, twice: the AVX2 forms and the AVX-VNNI ones (iq_avx2_rows.inl)
++// Our IQ2_S block kernel (row_dot_iq2s in the .inl), bit-identical to the generic kernel (tests/core/iq2s_avx2_test.cpp),
++// x1.21-1.34 per core on a 2.6 GHz Cascade Lake in L2 (docs/fork/informes/prototipos-cpu; +1.4 % e2e on v0.1.40).
++// v0.1.41 has its own faster IQ2_S decode (d6850f3: Fmt32<22>/hi_spread above), so here the block kernel is OFF by
++// default: STRATA_IQ2S_BLOCK=1 turns it on for the A/B (it was ON by default in the v0.1.40 fork).
++// Read on first use: this TU is compiled for AVX2 and must not run anything before cpu_avx2_ok() (#391).
++inline bool iq2s_block_on() {
++    static const bool on = [] {
++        const char* v = std::getenv("STRATA_IQ2S_BLOCK");
++        return v != nullptr && v[0] == '1';
++    }();
++    return on;
++}
+ namespace plain {
+ #define STRATA_ROWS_VNNI 0
+ #define STRATA_ROWS_FN
+@@ -382,6 +394,7 @@ namespace vnni {
+ 
+ bool vnni_on() { return STRATA_AVXVNNI && cpu_avxvnni_ok(); }
+ 
++
+ }  // namespace
+ 
+ // ggml's quantize_row_q8_K_ref (ggml-quants.c), which is also what ggml-cpu runs on x86 (no SIMD version there),
+diff --git a/src/kernels/cpu/iq_avx2_rows.inl b/src/kernels/cpu/iq_avx2_rows.inl
+index a8af07fb..7301fd19 100644
+--- a/src/kernels/cpu/iq_avx2_rows.inl
++++ b/src/kernels/cpu/iq_avx2_rows.inl
+@@ -145,10 +145,93 @@ inline void row_dot_iq2xs(const uint8_t* row, int nblocks, const block_q8_K* con
+     for (int t = 0; t < NT; ++t) res[t] = hsum8(accf[t]);
+ }
+ 
++// ---- IQ2_S (22) with the block decoded at once: Fmt32<22>::decode builds each half's 4 grid indices, 32 sign
++// bits and 2 scales in scalar code, 8 times per block.  Here a block's 32 grid indices (low byte + 2 qh bits)
++// come out of 4 vector steps, its 8 scale bytes become all 16 half-scales with the IQ2_XS unpack, and each
++// half's sign vector is a dword broadcast + pshufb of one 32-byte load.  The integer products and their sum
++// are the generic kernel's, so the result is bit-identical (tests/core/iq2s_avx2_test.cpp); measured
++// x1.21-1.34 per core on a 2.6 GHz Cascade Lake in L2 (docs/fork/informes/prototipos-cpu).  IQ2_S is the
++// gate/up type of 34 of the IQ2_XS pack's 48 layers.  STRATA_IQ2S_BLOCK=1 enables it (off by default on v0.1.41).
++// Lives in this .inl, so both the plain and the AVX-VNNI copies carry it (iq2s_block_on() in iq_avx2.cpp picks it).
++template <int NT> STRATA_ROWS_FN
++inline void row_dot_iq2s(const uint8_t* row, int nblocks, const block_q8_K* const* y, float* res) {
++    static const uint8_t k_sc_shuffle[128] = {  // half h -> scale bytes 2h (lanes 0-7), 2h+1 (lanes 8-15)
++        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
++        2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
++        4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
++        6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7,
++        8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9,
++        10, 10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 11,
++        12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 13,
++        14, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15 };
++    const __m128i m4 = _mm_set1_epi8(0xf), m1 = _mm_set1_epi8(1);
++    const __m256i bsel = _mm256_setr_epi8(1, 2, 4, 8, 16, 32, 64, (char) 0x80, 1, 2, 4, 8, 16, 32, 64, (char) 0x80,
++                                          1, 2, 4, 8, 16, 32, 64, (char) 0x80, 1, 2, 4, 8, 16, 32, 64, (char) 0x80);
++    // the 4 sign bytes of a half (one dword, broadcast to all 8 dwords) -> 8 lanes each
++    const __m256i shuf_sgn = _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
++                                              2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3);
++    const __m256i one8 = _mm256_set1_epi8(1);
++    const __m256i m300 = _mm256_set1_epi32(0x300);
++    // grid index g of a block = qs[g] | qh[g/4] bits 2*(g%4), 2*(g%4)+1 as bits 8, 9: Fmt32<22>'s
++    // (h << 8, 6, 4, 2) & 0x300 for the 4 groups of a qh byte
++    const __m256i qh_shift = _mm256_setr_epi32(8, 6, 4, 2, 8, 6, 4, 2);
++    const __m256i qh_pick = _mm256_setr_epi8(0, (char) 0x80, (char) 0x80, (char) 0x80, 0, (char) 0x80, (char) 0x80,
++                                             (char) 0x80, 0, (char) 0x80, (char) 0x80, (char) 0x80, 0, (char) 0x80,
++                                             (char) 0x80, (char) 0x80,
++                                             1, (char) 0x80, (char) 0x80, (char) 0x80, 1, (char) 0x80, (char) 0x80,
++                                             (char) 0x80, 1, (char) 0x80, (char) 0x80, (char) 0x80, 1, (char) 0x80,
++                                             (char) 0x80, (char) 0x80);
++    const int pf = prefetch_distance();
++    __m256 accf[NT];
++    for (int t = 0; t < NT; ++t) accf[t] = _mm256_setzero_ps();
++    for (int i = 0; i < nblocks; ++i) {
++        const uint8_t* blk = row + (size_t) i * 82;   // d | qs[32] grid low bytes | signs[32] | qh[8] | scales[8]
++        rows_ahead(blk, pf);
++        __m128i st = _mm_set1_epi64x((long long) u64(blk + 74));
++        st = _mm_unpacklo_epi8(_mm_and_si128(st, m4), _mm_and_si128(_mm_srli_epi16(st, 4), m4));
++        const __m128i scales = _mm_add_epi8(_mm_slli_epi16(st, 1), m1);   // [a0, b0, a1, b1, ...] = 2*s+1
++        alignas(32) uint32_t gi[32];
++        const uint64_t qh8 = u64(blk + 66);
++        for (int m = 0; m < 4; ++m) {   // grid indices 8m .. 8m+7: qh bytes 2m (lanes 0-3) and 2m+1 (lanes 4-7)
++            const __m128i qh2 = _mm_cvtsi32_si128((int) ((qh8 >> (16 * m)) & 0xffff));
++            const __m256i qhv = _mm256_shuffle_epi8(_mm256_broadcastsi128_si256(qh2), qh_pick);
++            const __m256i hi = _mm256_and_si256(_mm256_sllv_epi32(qhv, qh_shift), m300);
++            const __m256i lo = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i*) (blk + 2 + 8 * m)));
++            _mm256_store_si256((__m256i*) (gi + 8 * m), _mm256_or_si256(lo, hi));
++        }
++        const __m256i sgnall = _mm256_loadu_si256((const __m256i*) (blk + 34));
++        __m256i acci[NT];
++        for (int t = 0; t < NT; ++t) acci[t] = _mm256_setzero_si256();
++        for (int H = 0; H < 8; ++H) {   // the 8 32-value halves, in Fmt32<22>'s order (64*j + 32*half = 32*H)
++            const uint32_t* q = gi + 4 * H;
++            const __m256i g = _mm256_set_epi64x((long long) iq2s_grid[q[3]], (long long) iq2s_grid[q[2]],
++                                               (long long) iq2s_grid[q[1]], (long long) iq2s_grid[q[0]]);
++            const __m256i sb = _mm256_shuffle_epi8(_mm256_permutevar8x32_epi32(sgnall, _mm256_set1_epi32(H)),
++                                                   shuf_sgn);
++            const __m256i sgn = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(sb, bsel), bsel), one8);
++            const __m256i sc = _mm256_cvtepi8_epi16(
++                _mm_shuffle_epi8(scales, _mm_loadu_si128((const __m128i*) k_sc_shuffle + H)));
++            const int off = 32 * H;
++            for (int t = 0; t < NT; ++t) {
++                const __m256i yv = _mm256_loadu_si256((const __m256i*) (y[t][i].qs + off));
++                acci[t] = _mm256_add_epi32(acci[t],
++                    _mm256_madd_epi16(_mm256_maddubs_epi16(g, _mm256_sign_epi8(yv, sgn)), sc));
++            }
++        }
++        const float dx = h2f(u16(blk)) * 0.125f;
++        for (int t = 0; t < NT; ++t)
++            accf[t] = _mm256_fmadd_ps(_mm256_set1_ps(dx * y[t][i].d), _mm256_cvtepi32_ps(acci[t]), accf[t]);
++    }
++    for (int t = 0; t < NT; ++t) res[t] = hsum8(accf[t]);
++}
++
+ template <int TY, int NT> STRATA_ROWS_FN
+ inline void row_dot_any(const uint8_t* row, int nblocks, const block_q8_K* const* y, float* res) {
+     if constexpr (TY == 17) row_dot_iq2xs<NT>(row, nblocks, y, res);
+-    else                    row_dot<TY, NT>(row, nblocks, y, res);
++    else if constexpr (TY == 22) {
++        if (iq2s_block_on()) row_dot_iq2s<NT>(row, nblocks, y, res);
++        else                 row_dot<TY, NT>(row, nblocks, y, res);
++    } else                  row_dot<TY, NT>(row, nblocks, y, res);
+ }
+ 
+ template <int TY, int NT> STRATA_ROWS_FN
+@@ -215,7 +298,9 @@ void gu_type(int type, int nt, const uint8_t* blob, size_t gu_row, size_t up_off
+         case 17: gu_rows_nt<17>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
+         case 18: gu_rows_nt<G ? 118 : 18>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
+         case 21: gu_rows_nt<G ? 121 : 21>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
+-        case 22: gu_rows_nt<G ? 122 : 22>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
++        case 22:
++            if (iq2s_block_on()) { gu_rows_nt<22>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break; }
++            gu_rows_nt<G ? 122 : 22>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
+         case 23: gu_rows_nt<23>(nt, blob, gu_row, up_off, n, act, ff, r0, r1); break;
+         default: break;
+     }
+@@ -229,7 +314,9 @@ void dot_type(int type, int nt, const uint8_t* w, size_t row_bytes, int n, const
+         case 17: dot_rows_nt<17>(nt, w, row_bytes, n, act, out, r0, r1); break;
+         case 18: dot_rows_nt<G ? 118 : 18>(nt, w, row_bytes, n, act, out, r0, r1); break;
+         case 21: dot_rows_nt<G ? 121 : 21>(nt, w, row_bytes, n, act, out, r0, r1); break;
+-        case 22: dot_rows_nt<G ? 122 : 22>(nt, w, row_bytes, n, act, out, r0, r1); break;
++        case 22:
++            if (iq2s_block_on()) { dot_rows_nt<22>(nt, w, row_bytes, n, act, out, r0, r1); break; }
++            dot_rows_nt<G ? 122 : 22>(nt, w, row_bytes, n, act, out, r0, r1); break;
+         case 23: dot_rows_nt<23>(nt, w, row_bytes, n, act, out, r0, r1); break;
+         default: break;
+     }
+diff --git a/tests/core/iq2s_avx2_test.cpp b/tests/core/iq2s_avx2_test.cpp
+new file mode 100644
+index 00000000..95709ea8
+--- /dev/null
++++ b/tests/core/iq2s_avx2_test.cpp
+@@ -0,0 +1,207 @@
++// tests/core/iq2s_avx2_test.cpp - the IQ2_S block kernel (row_dot_iq2s) against the generic one (row_dot<22>), bit for
++// bit, for every window width the pool uses (1-8 tokens).  CPU only: no GPU, no model, no ggml build - it includes the
++// kernel source itself so the two internal kernels can be called side by side.
++//
++//   g++ -O2 -std=c++20 -mavx2 -mfma -mf16c -Iinclude -Ithird_party/ggml tests/core/iq2s_avx2_test.cpp -o iq2s_avx2_test
++//
++// Exit 0 = identical; 1 = a mismatch (the first one is printed); 77 = this CPU has no AVX2 (ctest: skipped).
++// `iq2s_avx2_test --bench`: the two kernels' speed on this CPU, one core, rows in L2 (an A/B before rebuilding).
++#include "../../src/kernels/cpu/iq_avx2.cpp"
++
++#include <algorithm>
++#include <chrono>
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <random>
++#include <utility>
++#include <vector>
++
++namespace strata::kernels::cpu {
++// This TU stays standalone (no expert_layout.cpp, no ggml build): the three CPU probes iq256_variant() reads, with
++// conservative answers (unset STRATA_IQ256_GATHER, the scalar decode, no VNNI).  check_dispatch() below pins the
++// dispatch per variant explicitly instead; the cross-variant bit-identity on a gather-fast / VNNI core is upstream's
++// iq_avx2_parity (it links strata_kernels_cpu).
++int iq256_gather_setting() {
++    static const int s = [] {
++        const char* v = std::getenv("STRATA_IQ256_GATHER");
++        if (v == nullptr || v[0] == '\0') return -1;
++        return std::atoi(v) != 0 ? 1 : 0;
++    }();
++    return s;
++}
++bool cpu_gather_fast_here() { return false; }
++bool cpu_avxvnni_ok() { return false; }
++}  // namespace strata::kernels::cpu
++
++namespace strata::kernels::cpu {
++namespace {
++
++constexpr int kBlockBytes = 82;
++constexpr int kBlocks = 10;   // one gate/up row of the model: n_embd 2560 = 10 x QK_K
++
++void fill_block(uint8_t* b, std::mt19937_64& rng, int pattern) {
++    for (int k = 0; k < kBlockBytes; ++k) b[k] = (uint8_t) rng();
++    if (pattern == 1) std::memset(b + 2, 0xFF, kBlockBytes - 2);   // every index at its top, every sign set
++    if (pattern == 2) std::memset(b + 2, 0x00, kBlockBytes - 2);   // index 0, no signs, the smallest scales
++    if (pattern == 3) std::memset(b + 66, 0xAA, 8);                // qh bits 1,3,5,7 only
++    // a finite, moderate f16 scale (1/8 .. 2), so a NaN can never make two identical sums compare unequal
++    const uint16_t h = (uint16_t) (0x3000 + (rng() % 0x0C00));
++    std::memcpy(b, &h, 2);
++}
++
++template <int NT>
++int check(std::mt19937_64& rng, int rows, int pattern) {
++    std::vector<uint8_t> w((size_t) rows * kBlocks * kBlockBytes);
++    for (int r = 0; r < rows * kBlocks; ++r) fill_block(&w[(size_t) r * kBlockBytes], rng, pattern);
++    std::vector<block_q8_K> q((size_t) NT * kBlocks);
++    for (auto& b : q) {
++        b.d = 0.001f + (float) (rng() % 1000) * 1e-5f;
++        for (int k = 0; k < QK_K; ++k) b.qs[k] = (int8_t) ((int) (rng() % 255) - 127);
++    }
++    const block_q8_K* y[NT];
++    for (int t = 0; t < NT; ++t) y[t] = &q[(size_t) t * kBlocks];
++    for (int r = 0; r < rows; ++r) {
++        const uint8_t* row = &w[(size_t) r * kBlocks * kBlockBytes];
++        float a[NT], b[NT];
++        plain::row_dot<22, NT>(row, kBlocks, y, a);
++        plain::row_dot_iq2s<NT>(row, kBlocks, y, b);
++        for (int t = 0; t < NT; ++t)
++            if (std::memcmp(&a[t], &b[t], sizeof(float)) != 0) {
++                std::printf("FAIL NT=%d pattern=%d row=%d token=%d: generic %.9g, block %.9g\n", NT, pattern, r, t,
++                            (double) a[t], (double) b[t]);
++                return 1;
++            }
++    }
++    return 0;
++}
++
++template <int NT>
++int check_all(std::mt19937_64& rng) {
++    int bad = 0;
++    for (int pattern = 0; pattern < 4; ++pattern) bad |= check<NT>(rng, pattern == 0 ? 512 : 16, pattern);
++    return bad;
++}
++
++// The public entries (iq256_rows, and iq256_gu_rows_v in each variant this build has) go through the block
++// kernel for type 22 unless STRATA_IQ2S_BLOCK=0.
++int check_dispatch(std::mt19937_64& rng) {
++    constexpr int rows = 8, nt = 3;
++    const size_t gu_row = (size_t) kBlocks * kBlockBytes;
++    std::vector<uint8_t> gate((size_t) rows * gu_row), up((size_t) rows * gu_row);
++    for (int r = 0; r < rows * kBlocks; ++r) {
++        fill_block(&gate[(size_t) r * kBlockBytes], rng, 0);
++        fill_block(&up[(size_t) r * kBlockBytes], rng, 0);
++    }
++    std::vector<block_q8_K> q((size_t) nt * kBlocks);
++    for (auto& b : q) {
++        b.d = 0.01f;
++        for (int k = 0; k < QK_K; ++k) b.qs[k] = (int8_t) ((int) (rng() % 255) - 127);
++    }
++    const void* act[nt];
++    for (int t = 0; t < nt; ++t) act[t] = &q[(size_t) t * kBlocks];
++    const block_q8_K* y[nt];
++    for (int t = 0; t < nt; ++t) y[t] = &q[(size_t) t * kBlocks];
++    // (variant, name): the default dispatch plus every explicit variant bit this build carries
++    const std::pair<int, const char*> variants[] = {{-1, "iq256_rows"}, {0, "scalar"}, {kIq256Gather, "gather"}};
++    for (const auto& [v, name] : variants) {
++        std::vector<float> got((size_t) nt * rows);
++        float* gp[nt];
++        for (int t = 0; t < nt; ++t) gp[t] = &got[(size_t) t * rows];
++        if (v < 0) {
++            iq256_rows(22, gate.data(), gu_row, kBlocks * QK_K, act, nt, gp, 0, rows);
++            for (int r = 0; r < rows; ++r) {
++                float b[nt];
++                plain::row_dot_iq2s<nt>(&gate[(size_t) r * gu_row], kBlocks, y, b);
++                for (int t = 0; t < nt; ++t)
++                    if (std::memcmp(&gp[t][r], &b[t], sizeof(float)) != 0) {
++                        std::printf("FAIL dispatch(%s) row=%d token=%d: %.9g vs %.9g\n", name, r, t,
++                                    (double) gp[t][r], (double) b[t]);
++                        return 1;
++                    }
++            }
++            continue;
++        }
++        std::vector<uint8_t> blob(gate.size() + up.size());
++        std::memcpy(blob.data(), gate.data(), gate.size());
++        std::memcpy(blob.data() + gate.size(), up.data(), up.size());
++        iq256_gu_rows_v(v, 22, blob.data(), gu_row, gate.size(), kBlocks * QK_K, act, nt, gp, 0, rows);
++        for (int r = 0; r < rows; ++r) {
++            float g[nt], u[nt];
++            plain::row_dot_iq2s<nt>(&gate[(size_t) r * gu_row], kBlocks, y, g);
++            plain::row_dot_iq2s<nt>(&up[(size_t) r * gu_row], kBlocks, y, u);
++            for (int t = 0; t < nt; ++t) {
++                const float e = (g[t] / (1.f + std::exp(-g[t]))) * u[t];   // gu_rows' silu-gate times up
++                if (std::memcmp(&gp[t][r], &e, sizeof(float)) != 0) {
++                    std::printf("FAIL dispatch(%s) row=%d token=%d: %.9g vs %.9g\n", name, r, t,
++                                (double) gp[t][r], (double) e);
++                    return 1;
++                }
++            }
++        }
++    }
++    return 0;
++}
++
++template <int NT>
++void bench() {
++    constexpr int rows = 640;   // 640 rows x 820 B = 525 KB: in L2 on most CPUs, so this is the decode cost alone
++    std::mt19937_64 rng(5);
++    std::vector<uint8_t> w((size_t) rows * kBlocks * kBlockBytes);
++    for (int r = 0; r < rows * kBlocks; ++r) fill_block(&w[(size_t) r * kBlockBytes], rng, 0);
++    std::vector<block_q8_K> q((size_t) NT * kBlocks);
++    for (auto& b : q) {
++        b.d = 0.01f;
++        for (int k = 0; k < QK_K; ++k) b.qs[k] = (int8_t) ((int) (rng() % 255) - 127);
++    }
++    const block_q8_K* y[NT];
++    for (int t = 0; t < NT; ++t) y[t] = &q[(size_t) t * kBlocks];
++    volatile float sink = 0.0f;
++    float o[NT];
++    auto time = [&](auto&& fn) {
++        double best = 1e30;
++        for (int rep = 0; rep < 7; ++rep) {
++            const auto t0 = std::chrono::steady_clock::now();
++            for (int it = 0; it < 200; ++it)
++                for (int r = 0; r < rows; ++r) {
++                    fn(&w[(size_t) r * kBlocks * kBlockBytes], o);
++                    sink = sink + o[0];
++                }
++            best = std::min(best, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
++        }
++        return 200.0 * rows * kBlocks * kBlockBytes / best / 1e9;
++    };
++    const double g = time([&](const uint8_t* row, float* r) { plain::row_dot<22, NT>(row, kBlocks, y, r); });
++    const double b = time([&](const uint8_t* row, float* r) { plain::row_dot_iq2s<NT>(row, kBlocks, y, r); });
++    std::printf("NT=%d  generic %.2f GB/s  block %.2f GB/s  x%.2f\n", NT, g, b, b / g);
++}
++
++}  // namespace
++}  // namespace strata::kernels::cpu
++
++int main(int argc, char** argv) {
++    using namespace strata::kernels::cpu;
++#if defined(__GNUC__) || defined(__clang__)
++    if (!__builtin_cpu_supports("avx2") || !__builtin_cpu_supports("fma") || !__builtin_cpu_supports("f16c")) {
++        std::printf("SKIP: this CPU has no AVX2/FMA/F16C\n");
++        return 77;
++    }
++#endif
++    if (argc > 1 && std::strcmp(argv[1], "--bench") == 0) {
++        bench<1>(); bench<2>(); bench<3>(); bench<4>(); bench<6>(); bench<8>();
++        return 0;
++    }
++    int bad = 0;
++    for (std::uint64_t seed : {1ull, 7ull, 1234567ull}) {
++        std::mt19937_64 rng(seed);
++        bad |= check_all<1>(rng) | check_all<2>(rng) | check_all<3>(rng) | check_all<4>(rng) | check_all<5>(rng) |
++               check_all<6>(rng) | check_all<7>(rng) | check_all<8>(rng);
++    }
++    std::mt19937_64 rng(99);
++    if (iq2s_block_on()) bad |= check_dispatch(rng);
++    if (bad) return 1;
++    std::printf("iq2s_avx2_test: block kernel bit-identical to the generic one (NT 1-8, 3 seeds, 4 patterns)%s\n",
++                iq2s_block_on() ? "" : " [STRATA_IQ2S_BLOCK=0: dispatch not checked]");
++    return 0;
++}
+-- 
+2.43.0
+

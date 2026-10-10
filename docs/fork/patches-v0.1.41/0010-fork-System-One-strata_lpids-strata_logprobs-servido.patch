@@ -1,0 +1,91 @@
+From 3aa9ecaf1e0d16a37c7c9b39ad33ff48b05d91ea Mon Sep 17 00:00:00 2001
+From: ada <ada@local>
+Date: Sat, 10 Oct 2026 16:13:07 +0000
+Subject: [PATCH 10/13] fork: System One strata_lpids/strata_logprobs servidor
+ (portado de port/vision-cpu 070d006+b728839)
+
+---
+ serve/server.py | 32 ++++++++++++++++++++++++++++++--
+ 1 file changed, 30 insertions(+), 2 deletions(-)
+
+diff --git a/serve/server.py b/serve/server.py
+index 553f440c..fba7e431 100644
+--- a/serve/server.py
++++ b/serve/server.py
+@@ -956,6 +956,16 @@ class StrataEngine:
+                 keys += f" penalty_last_n={pln}"
+             else:
+                 keys += " penalty_last_n=64"
++        # System One: emit the logprobs of EXACTLY these ids (the option labels), not the top-k.
++        # An unknown key for the engine? It is skipped, so this is backward compatible.
++        lp = sampling.get("strata_lpids")
++        if isinstance(lp, (list, tuple)) and lp:
++            try:
++                ids = ",".join(str(int(i)) for i in lp if int(i) >= 0)
++                if ids:
++                    keys += f" lpids={ids}"
++            except (TypeError, ValueError):
++                pass
+         seed = sampling.get("seed")
+         if isinstance(seed, int) and seed > 0:
+             keys += f" seed={seed}"
+@@ -1479,6 +1489,7 @@ class StrataEngine:
+             return
+         self.progress, self.progress_ms, self.reused = None, 0, 0
+         self.prefill_tok_s_mean = None
++        self.last_logprobs = None      # --logprobs N: the prompt's last-position distribution
+         # an image request takes the same sampling keys as text (#75: it used to decode greedily whatever was asked)
+         head = f"GENI {int(max_new)}{self.sampling_keys(sampling or {})} {embeddings}" if embeddings else \
+             f"GEN {int(max_new)}{self.sampling_keys(sampling or {})}"
+@@ -1529,7 +1540,19 @@ class StrataEngine:
+                 beat = heard
+                 if stall_state:
+                     stall_state.clear()
+-                if line.startswith("T "):
++                if line.startswith("strata logprobs:"):
++                    # engine (--logprobs N): {token_id: logprob} of the prompt's last position.
++                    # Read-only read-out; it is not part of the generated text (no `T ` prefix).
++                    pairs = {}
++                    for tok in line[len("strata logprobs:"):].split():
++                        i, _, v = tok.partition(":")
++                        try:
++                            pairs[int(i)] = float(v)
++                        except ValueError:
++                            pass
++                    if pairs:
++                        self.last_logprobs = pairs
++                elif line.startswith("T "):
+                     allow = silence
+                     if cancel.is_set():
+                         return
+@@ -3756,7 +3779,8 @@ class Service:
+             yield "event", Event("content", stops.flush())     # the held tail was not a stop string after all
+         done = {"finish": finish, "completion_tokens": n, "reused": (timings or {}).get("cache_n", 0),
+                 "timings": timings, "reasoning_tokens": thinking_n,
+-                "reasoning_recoveries": recovery_count}
++                "reasoning_recoveries": recovery_count,
++                "strata_logprobs": getattr(self.engine, "last_logprobs", None)}
+         if stops is not None and stops.hit is not None:
+             done["stop_sequence"] = stops.hit
+         yield "done", done
+@@ -4000,6 +4024,8 @@ def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel
+                              "prompt_tokens_details": {"cached_tokens": x.get("reused") or 0}}
+             if x.get("timings"):
+                 last["timings"] = x["timings"]          # llama.cpp's field: the speed its clients show
++            if x.get("strata_logprobs"):
++                last["strata_logprobs"] = x["strata_logprobs"]   # --logprobs N (System One)
+             yield last
+ 
+ 
+@@ -4044,6 +4070,8 @@ def openai_collect(chunks) -> dict:
+            "usage": last["usage"]}
+     if last.get("timings"):
+         out["timings"] = last["timings"]
++    if last.get("strata_logprobs"):
++        out["strata_logprobs"] = last["strata_logprobs"]
+     return out
+ 
+ 
+-- 
+2.43.0
+

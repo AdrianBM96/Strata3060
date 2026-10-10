@@ -1,0 +1,110 @@
+From a5f74269e6c052f3da276252961c72c9421664bb Mon Sep 17 00:00:00 2001
+From: ada <ada@local>
+Date: Sat, 10 Oct 2026 16:11:06 +0000
+Subject: [PATCH 06/13] fork: STRATA_PROFILE_HEAT_MIN perfil por calor (portado
+ de wt/CUP ba038d0)
+
+---
+ include/strata/core/expert_cache.hpp    |  6 +++++-
+ src/core/expert_cache.cpp               |  6 ++++--
+ src/program/generate.cpp                | 17 ++++++++++++++---
+ tests/core/expert_profile_save_test.cpp |  8 ++++++++
+ 4 files changed, 31 insertions(+), 6 deletions(-)
+
+diff --git a/include/strata/core/expert_cache.hpp b/include/strata/core/expert_cache.hpp
+index 17e277de..9452de84 100644
+--- a/include/strata/core/expert_cache.hpp
++++ b/include/strata/core/expert_cache.hpp
+@@ -60,10 +60,14 @@ bool read_expert_profile(const std::string& path, int64_t n_layers, int64_t n_ex
+ /// started from: an expert this run never routed keeps its old place), then by index.  A start from it begins
+ /// where this one ended; one with more slots adds the hottest of the rest, one with fewer keeps the hottest.
+ /// `resident` and `heat`: n_layers x n_expert entries (`heat` may be empty: no counts, the prior decides).
++/// `heat_first`: by `heat` across ALL layers first, residency only breaks ties.  The adaptive tier swaps within a
++/// layer, so resident-first keeps each layer's share of the cache where the first profile put it, restart after
++/// restart; heat-first lets the next start give the slots to the layers whose routing concentrates most.
+ std::vector<std::pair<int32_t, int32_t>> rank_learned_profile(int64_t n_layers, int64_t n_expert,
+                                                               const std::vector<uint8_t>& resident,
+                                                               const std::vector<double>& heat,
+-                                                              const std::vector<std::pair<int32_t, int32_t>>& prior);
++                                                              const std::vector<std::pair<int32_t, int32_t>>& prior,
++                                                              bool heat_first = false);
+ 
+ /// #477: writes `ranked` in tools/make_profile.py's format, byte for byte: `STRP`, `1, n_layers, n_expert,
+ /// n_ranked, n_ranked` (uint32), the pairs (uint16 layer, uint16 expert), then the n_layers x n_expert int32 table
+diff --git a/src/core/expert_cache.cpp b/src/core/expert_cache.cpp
+index 9fe45205..53e5ae3e 100644
+--- a/src/core/expert_cache.cpp
++++ b/src/core/expert_cache.cpp
+@@ -141,7 +141,8 @@ bool read_expert_profile(const std::string& path, int64_t n_layers, int64_t n_ex
+ std::vector<std::pair<int32_t, int32_t>> rank_learned_profile(int64_t n_layers, int64_t n_expert,
+                                                               const std::vector<uint8_t>& resident,
+                                                               const std::vector<double>& heat,
+-                                                              const std::vector<std::pair<int32_t, int32_t>>& prior) {
++                                                              const std::vector<std::pair<int32_t, int32_t>>& prior,
++                                                              bool heat_first) {
+     const size_t n = (size_t) (n_layers * n_expert);
+     std::vector<int64_t> prior_rank(n, INT64_MAX);
+     for (size_t r = 0; r < prior.size(); ++r) {
+@@ -156,8 +157,9 @@ std::vector<std::pair<int32_t, int32_t>> rank_learned_profile(int64_t n_layers,
+     auto res = [&](int64_t i) { return (size_t) i < resident.size() && resident[(size_t) i] != 0; };
+     auto ht = [&](int64_t i) { return (size_t) i < heat.size() ? heat[(size_t) i] : 0.0; };
+     std::stable_sort(order.begin(), order.end(), [&](int64_t a, int64_t b) {
+-        if (res(a) != res(b)) return res(a);
++        if (!heat_first && res(a) != res(b)) return res(a);
+         if (ht(a) != ht(b)) return ht(a) > ht(b);
++        if (res(a) != res(b)) return res(a);
+         if (prior_rank[(size_t) a] != prior_rank[(size_t) b]) return prior_rank[(size_t) a] < prior_rank[(size_t) b];
+         return a < b;
+     });
+diff --git a/src/program/generate.cpp b/src/program/generate.cpp
+index 75380b6f..3899479c 100644
+--- a/src/program/generate.cpp
++++ b/src/program/generate.cpp
+@@ -7973,11 +7973,22 @@ int main(int argc, char** argv) {
+             if (astate == AState::SwapIn)   // --adapt-async: the same for a round past its step 2
+                 for (const ASwap& w : aswaps) resident[(size_t) w.layer * g.n_expert + w.in] = 1;
+             std::string e;
++            // STRATA_PROFILE_HEAT_MIN=N (opt-in): once this run has counted >= N routed entries per layer (tokens x
++            // the model's top-k; each entry is worth 1 / (1 - decay) in `heat` over its decays), rank by the counted
++            // routing across all layers.  Below N the counts are too few to move slots between layers
++            static const double heat_min = [] {
++                const char* v = std::getenv("STRATA_PROFILE_HEAT_MIN");
++                return v != nullptr ? std::atof(v) : 0.0;
++            }();
++            double total = 0.0;
++            for (const double h : heat) total += h;
++            const double per_layer = total * (1.0 - (double) o.adapt_decay) / (double) g.n_layers;
++            const bool heat_first = heat_min > 0.0 && per_layer >= heat_min;
+             const auto ranked = strata::core::rank_learned_profile(g.n_layers, g.n_expert, resident, heat,
+-                                                                   profile_loaded);
++                                                                   profile_loaded, heat_first);
+             if (strata::core::write_expert_profile(o.expert_profile_save, g.n_layers, g.n_expert, ranked, e))
+-                std::fprintf(stderr, "strata serve: expert profile saved to %s (%s)\n", o.expert_profile_save.c_str(),
+-                             why);
++                std::fprintf(stderr, "strata serve: expert profile saved to %s (%s%s)\n", o.expert_profile_save.c_str(),
++                             why, heat_first ? ", ranked by routing across layers" : "");
+             else
+                 std::fprintf(stderr, "strata serve: the expert profile was not saved: %s\n", e.c_str());
+             profile_saved_at = Clock::now();
+diff --git a/tests/core/expert_profile_save_test.cpp b/tests/core/expert_profile_save_test.cpp
+index 6b610702..d98d2d15 100644
+--- a/tests/core/expert_profile_save_test.cpp
++++ b/tests/core/expert_profile_save_test.cpp
+@@ -42,6 +42,14 @@ int main() {
+     check(r0.size() == 12 && r0[0] == Pair(0, 2) && r0[1] == Pair(1, 1) && r0[2] == Pair(2, 0) &&
+           r0[3] == Pair(1, 3) && r0[4] == Pair(0, 1) && r0[5] == Pair(0, 0), "without heat: resident, then prior");
+ 
++    // heat_first: the counted routing across every layer, residency only breaks ties
++    const std::vector<Pair> rh = strata::core::rank_learned_profile(L, E, resident, heat, prior, true);
++    const std::vector<Pair> hhead = {{2, 3}, {1, 1}, {0, 0}, {0, 2}, {2, 0}, {1, 3}, {0, 1}, {0, 3}};
++    for (size_t i = 0; i < hhead.size() && i < rh.size(); ++i)
++        check(rh[i] == hhead[i], "heat_first: by heat, then resident, then the prior, then the index");
++    check(strata::core::rank_learned_profile(L, E, resident, {}, prior, true) == r0,
++          "heat_first without counts: the same as resident first");
++
+     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "strata_profile_save_test";
+     std::filesystem::create_directories(dir);
+     const std::string path = (dir / "learned.bin").string();
+-- 
+2.43.0
+

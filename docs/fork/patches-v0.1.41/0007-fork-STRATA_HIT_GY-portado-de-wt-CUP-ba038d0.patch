@@ -1,0 +1,43 @@
+From 64c0f62408a454d1f548ddb8b5bdd94e8437b998 Mon Sep 17 00:00:00 2001
+From: ada <ada@local>
+Date: Sat, 10 Oct 2026 16:11:22 +0000
+Subject: [PATCH 07/13] fork: STRATA_HIT_GY (portado de wt/CUP ba038d0)
+
+---
+ src/core/verify.cpp | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/verify.cpp b/src/core/verify.cpp
+index 71c0c7d0..91569180 100644
+--- a/src/core/verify.cpp
++++ b/src/core/verify.cpp
+@@ -1437,9 +1437,16 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+                                hit_xs_ + (size_t) tb * (N / 32), hit_scratch_, dst_buf, cs);
+             }
+         };
++        // STRATA_HIT_GY=N (opt-in, for an A/B): the VRAM groups' launch with N block rows striding over the groups
++        // instead of cap of them.  A window holds ~17 hit groups of a cap of 10 T, so most rows started only to
++        // return; the results do not depend on gridDim.y (iq_kernels.cu, native_gu_kernel's note)
++        static const int64_t hit_gy = [] {
++            const char* v = std::getenv("STRATA_HIT_GY");
++            return v != nullptr ? (std::max)((int64_t) 0, (int64_t) std::atoll(v)) : (int64_t) 0;
++        }();
+         if (ar_on()) {
+             stamp(l, 19, grp);
+-            grouped(p_ptr, p_start, p_counts, 0, parts_out);
++            grouped(p_ptr, p_start, p_counts, hit_gy, parts_out);
+             stamp(l, 20, grp);
+         } else {
+             if (device_plan_) {   // E-6: skipped when the device planned this group (all its experts resident)
+@@ -1450,7 +1457,7 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+                 copy_i32_from_mapped(pl, m_plan_ + (size_t) grp * (size_t) plan_i32_, plan_i32_, cs);
+             }
+             stamp(l, 19, grp);
+-            grouped(p_ptr, p_start, p_counts, 0, hit_out);
++            grouped(p_ptr, p_start, p_counts, hit_gy, hit_out);
+             stamp(l, 20, grp);
+             if (device_plan_) wait_flag_ge_or(m_flagB_, ring, skip_ + grp, cs);
+             else wait_flag_ge(m_flagB_, ring, cs);                 // the PCIe share is in staging (DMA) or mapped
+-- 
+2.43.0
+

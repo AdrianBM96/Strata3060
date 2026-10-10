@@ -1,0 +1,319 @@
+From 4bbe1bbacc11e5aafad0d0d813286c01a5b1ddca Mon Sep 17 00:00:00 2001
+From: ada <ada@local>
+Date: Sat, 10 Oct 2026 16:11:48 +0000
+Subject: [PATCH 08/13] fork: STRATA_FETCH_ADMIT (portado de wt/CUP e8b26e2,
+ parte FETCH_ADMIT)
+
+---
+ include/strata/core/expert_source.hpp     |  7 ++++
+ include/strata/core/verify.hpp            |  7 ++++
+ include/strata/kernels/verify_kernels.hpp |  7 ++++
+ src/core/expert_source.cpp                | 47 +++++++++++++++++++++++
+ src/core/verify.cpp                       | 19 +++++++--
+ src/kernels/cuda/verify_kernels.cu        | 36 +++++++++++++++++
+ src/program/generate.cpp                  | 30 ++++++++++++++-
+ 7 files changed, 148 insertions(+), 5 deletions(-)
+
+diff --git a/include/strata/core/expert_source.hpp b/include/strata/core/expert_source.hpp
+index dfc249d8..8ce955c3 100644
+--- a/include/strata/core/expert_source.hpp
++++ b/include/strata/core/expert_source.hpp
+@@ -272,6 +272,7 @@ struct GpuPlanSink {
+     /// copy engine.  counts[0] = VRAM groups, counts[1] = all entries, counts[2] = PCIe groups.
+     unsigned long long* ptr2 = nullptr;
+     int32_t* start2 = nullptr;
++    unsigned long long* admit2 = nullptr;  ///< STRATA_FETCH_ADMIT (port of 50581c2): per-PCIe-group cache slot (0: staging)
+     unsigned long long staging = 0;
+     int64_t staging_cap = 0;
+     int64_t cap = 0;
+@@ -416,6 +417,12 @@ struct ExpertDispatch {
+     /// Plan v0.3 P6: decayed routing counts per (layer, expert) during decode (sized by the caller; empty = off),
+     /// which the driver uses to swap the most-routed missing experts into the VRAM tier between rounds.
+     std::vector<float> usage;
++    /// STRATA_FETCH_ADMIT (port of 50581c2): keep the PCIe share in the VRAM cache, in place of the least-used
++    /// resident of the layer that the window did not route.  `host_res_w` is the same residency table as
++    /// `host_res`, writable.
++    bool fetch_admit = false;
++    int32_t* host_res_w = nullptr;
++    int64_t fetch_admitted = 0;   ///< experts kept so (the request's log line)
+     int64_t multi_misses = 0;      ///< distinct (layer, expert) pairs the CPU computed in verify windows
+     int64_t multi_entries = 0;     ///< routed (token, expert) entries the CPU served in verify windows
+     /// Multi-GPU: the second GPU's tier.  Its experts are computed there instead of on the CPU (kind 2).
+diff --git a/include/strata/core/verify.hpp b/include/strata/core/verify.hpp
+index deb25f0a..7d62364d 100644
+--- a/include/strata/core/verify.hpp
++++ b/include/strata/core/verify.hpp
+@@ -261,6 +261,12 @@ public:
+     /// arena directly, 2 = a copy kernel stages it inside the graph (no API calls on the pool's thread; best when
+     /// the CPU is RAM-bound, Q2_0).  Set before the first `run`.
+     void set_pcie_mode(int mode) { sink_.pcie_mode = mode; }
++    /// STRATA_FETCH_ADMIT (port of 50581c2): PCIe-copied blobs land in cache slots.  Refuses the device plan,
++    /// the zero-doorbell graph and non-kernel PCIe modes; the driver calls it before the first window.
++    bool set_fetch_admit(bool on) {
++        fetch_admit_ = on && sink_.pcie_mode == 2 && !device_plan_ && !all_resident_;
++        return fetch_admit_ || !on;
++    }
+     /// the pool never plans a PCIe share (--pcie-frac 0): the window skips that path.  Before the first run.
+ 
+     double ms_wait = 0, ms_pool = 0, ms_host = 0, ms_commit = 0;
+@@ -354,6 +360,7 @@ private:
+     uint32_t* h_plan_err_ = nullptr; uint32_t* m_plan_err_ = nullptr;   // set by resident_plan on a -1 (all-resident graph)
+     const int32_t* h_res_ = nullptr;      ///< the host residency table (VerifyHits::h_res)
+     bool device_plan_ = false;            ///< E-6: resident-only layers planned on the device (STRATA_VERIFY_DEVICE_PLAN)
++    bool fetch_admit_ = false;              ///< STRATA_FETCH_ADMIT (port of 50581c2): PCIe blobs land in cache slots
+     uint32_t* skip_ = nullptr;            ///< E-6: per group, the ring whose plan the device built (0: the host's)
+     unsigned* qcnt_ = nullptr;             ///< S26 STRATA_QFUSE: the HC read's q8_1 group counters (n_embd / 32)
+     unsigned long long* slot_off_d_ = nullptr;   ///< E-6: the slot offsets on the device
+diff --git a/include/strata/kernels/verify_kernels.hpp b/include/strata/kernels/verify_kernels.hpp
+index 777f12f8..298c5ff0 100644
+--- a/include/strata/kernels/verify_kernels.hpp
++++ b/include/strata/kernels/verify_kernels.hpp
+@@ -82,6 +82,13 @@ void copy_indexed(float* dst, const float* src, int64_t stride, const int32_t* i
+ void fetch_blobs(const unsigned long long* src, const int32_t* n, uint8_t* dst, int64_t blob_bytes, int cap, void* stream);
+ /// ptr[k] = base + k * blob_bytes for k < *n (the staged copies `fetch_blobs` made).
+ void rebase_ptrs(unsigned long long* ptr, const int32_t* n, uint8_t* base, int64_t blob_bytes, void* stream);
++/// STRATA_FETCH_ADMIT (port of 50581c2): fetch_blobs / rebase_ptrs where blob k goes to `admit[k]` (a device
++/// cache slot) when non-zero, else to staging slot k - the PCIe share of the misses kept in the VRAM cache
++/// without a second copy.
++void fetch_blobs_admit(const unsigned long long* src, const int32_t* n, uint8_t* stage, const unsigned long long* admit,
++                       int64_t blob_bytes, int cap, void* stream);
++void rebase_ptrs_admit(unsigned long long* ptr, const int32_t* n, uint8_t* base, int64_t blob_bytes,
++                       const unsigned long long* admit, void* stream);
+ 
+ // ---- the MTP draft layer (src/core/mtp.cpp)
+ /// R[t][c][:] = h[t][c][:] + e[t][:]  (the embedding branch added to every stream).
+diff --git a/src/core/expert_source.cpp b/src/core/expert_source.cpp
+index e4b46490..a321d3c9 100644
+--- a/src/core/expert_source.cpp
++++ b/src/core/expert_source.cpp
+@@ -3215,8 +3215,55 @@ void expert_pool_dispatch_multi(ExpertDispatch& d, const float* x_f, const int32
+         }
+         P.start[groups] = entries;
+         const uint64_t bb = lay.blob_bytes(d.layers);
++        // STRATA_FETCH_ADMIT (port of 50581c2; docs/fork/ops/cache-sim.py, `fetch-admit`): the blobs of the PCIe
++        // share cross the link anyway, so each one is kept in the cache - copied straight into the slot of the
++        // least-used resident of this layer that this window did not route - while it has been used more than
++        // that resident.  Same bytes over PCIe, and this window's result is unchanged (the GPU reads the same
++        // blob at another address); from the next window the expert is a VRAM hit.  Victims: the `fetches`
++        // least-used, ascending; candidates in routing order, the first that does not beat its victim ends the
++        // admissions (as the simulator).
++        const bool admit_on = d.fetch_admit && P.admit2 != nullptr && P.pcie_mode == 2 && fetches > 0 &&
++                              d.host_res_w != nullptr && !d.usage.empty();
++        int32_t vict[64];
++        int nv = 0;
++        const size_t rbase = (size_t) d.layers * (size_t) d.n_expert;
++        if (admit_on) {
++            thread_local std::vector<uint8_t> routed;
++            if ((int64_t) routed.size() < d.n_expert) routed.assign((size_t) d.n_expert, 0);
++            for (int64_t i = 0; i < n; ++i)
++                if (ids[i] >= 0 && ids[i] < d.n_expert) routed[(size_t) ids[i]] = 1;
++            const float* u = d.usage.data() + rbase;
++            for (int32_t x = 0; x < (int32_t) d.n_expert; ++x) {
++                if (d.host_res_w[rbase + (size_t) x] < 0 || routed[(size_t) x]) continue;
++                if (nv < fetches) vict[nv++] = x;
++                else if (u[x] < u[vict[nv - 1]]) vict[nv - 1] = x;
++                else continue;
++                for (int j = nv - 1; j > 0 && u[vict[j]] < u[vict[j - 1]]; --j) std::swap(vict[j], vict[j - 1]);
++            }
++            for (int64_t i = 0; i < n; ++i)
++                if (ids[i] >= 0 && ids[i] < d.n_expert) routed[(size_t) ids[i]] = 0;
++        }
++        int vi = 0;
++        bool admitting = admit_on;
+         for (int q = 0; q < fetches; ++q) {       // the PCIe groups: staging slot q, entries after the VRAM ones
+             const int64_t i0 = pcie_i0[q];
++            if (P.admit2 != nullptr && d.fetch_admit) {
++                unsigned long long to = 0;
++                const int32_t e = ids[i0];
++                const float* u = d.usage.data() + rbase;
++                if (admitting && vi < nv && u[e] > u[vict[vi]]) {
++                    const int32_t slot = d.host_res_w[rbase + (size_t) vict[vi]];
++                    to = (unsigned long long) (d.cache_base + (d.cache_slot_off ? (size_t) d.cache_slot_off[slot]
++                                                                                : (size_t) slot * (size_t) d.cache_blob));
++                    d.host_res_w[rbase + (size_t) vict[vi]] = kNotResident;   // not routed in this window: nobody reads it
++                    d.host_res_w[rbase + (size_t) e] = slot;                   // resident from the next window
++                    ++vi;
++                    ++d.fetch_admitted;
++                } else {
++                    admitting = false;
++                }
++                P.admit2[q] = to;
++            }
+             P.ptr2[q] = P.pcie_mode != 0 ? (unsigned long long) d.src->device_alias(d.layers, ids[i0])
+                                  : P.staging + (unsigned long long) q * (unsigned long long) bb;
+             P.start2[q] = entries;
+diff --git a/src/core/verify.cpp b/src/core/verify.cpp
+index 91569180..113cf9ec 100644
+--- a/src/core/verify.cpp
++++ b/src/core/verify.cpp
+@@ -492,11 +492,14 @@ bool Verifier::init(const WeightTable& wt, const ModelGeometry& g, SessionState&
+               mapped(T * K * N * 4, (void**) &h_ymiss_, (void**) &m_ymiss_);
+     if (!ok) { err = "verify: mapped staging allocation failed"; return false; }
+     // the GPU plan: counts(4) | start(cap+1) | dst(cap) | tok(cap) | pad | ptr(cap u64) | ptr2(cap u64) | start2(cap+1)
++    //               | pad | admit2(cap u64): STRATA_FETCH_ADMIT's cache slot per PCIe group (0: staging), at the END so
++    //               no earlier field moves (port of 50581c2)
+     {
+         const int64_t cap = (int64_t) (T * K);
+         const int64_t i32 = 4 + (cap + 1) + cap + cap;
+         const int64_t ptr_off = (i32 + 1) & ~1ll;
+-        plan_i32_ = ptr_off + 4 * cap + (cap + 1) + 1;
++        const int64_t adm_off = (ptr_off + 4 * cap + (cap + 1) + 1 + 1) & ~1ll;
++        plan_i32_ = adm_off + 2 * cap;
+         if (!mapped((size_t) plan_i32_ * 4 * 2 + 64, (void**) &h_plan_, (void**) &m_plan_)) {
+             err = "verify: mapped plan allocation failed";
+             return false;
+@@ -508,6 +511,7 @@ bool Verifier::init(const WeightTable& wt, const ModelGeometry& g, SessionState&
+         sink_.ptr = (unsigned long long*) (h_plan_ + ptr_off);
+         sink_.ptr2 = sink_.ptr + cap;
+         sink_.start2 = h_plan_ + ptr_off + 4 * cap;
++        sink_.admit2 = (unsigned long long*) (h_plan_ + adm_off);
+         sink_.cap = cap;
+         sink_.publish = &Verifier::publish_plan;
+         sink_.fetch = &Verifier::fetch_dma;
+@@ -1420,6 +1424,8 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+         const unsigned long long* p_ptr = (const unsigned long long*) (pl + ptr_off);
+         const unsigned long long* p_ptr2 = p_ptr + capx;
+         const int32_t* p_start2 = pl + ptr_off + 4 * capx;
++        const unsigned long long* p_admit2 =   // STRATA_FETCH_ADMIT (port of 50581c2): same adm_off as init
++            (const unsigned long long*) (pl + ((ptr_off + 4 * capx + (capx + 1) + 1 + 1) & ~1ll));
+         float* hit_out = hit_out_ + (size_t) tb * K * N;
+         float* parts_out = parts_ + (size_t) tb * K * N;
+         const auto& lay = strata::kernels::cpu::expert_layout();
+@@ -1464,8 +1470,14 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+             if (sink_.pcie_mode == 2) {                            // stage it with a copy kernel, then point at staging
+                 const int64_t per = G == 2 ? kStagingBlobs / 2 : kStagingBlobs;
+                 uint8_t* stage = staging_ + (size_t) (grp * per) * lay.max_blob;
+-                fetch_blobs(p_ptr2, p_counts + 2, stage, (int64_t) lay.blob_bytes(l), (int) per, cs);
+-                rebase_ptrs((unsigned long long*) p_ptr2, p_counts + 2, stage, (int64_t) lay.blob_bytes(l), cs);
++                if (fetch_admit_) {   // STRATA_FETCH_ADMIT (port of 50581c2): a blob with a cache slot lands there
++                    fetch_blobs_admit(p_ptr2, p_counts + 2, stage, p_admit2, (int64_t) lay.blob_bytes(l), (int) per, cs);
++                    rebase_ptrs_admit((unsigned long long*) p_ptr2, p_counts + 2, stage, (int64_t) lay.blob_bytes(l),
++                                      p_admit2, cs);
++                } else {
++                    fetch_blobs(p_ptr2, p_counts + 2, stage, (int64_t) lay.blob_bytes(l), (int) per, cs);
++                    rebase_ptrs((unsigned long long*) p_ptr2, p_counts + 2, stage, (int64_t) lay.blob_bytes(l), cs);
++                }
+             }
+             stamp(l, 21, grp);
+             // the PCIe share is pcie_frac of the misses: a few groups when the cache is cold, usually none (always none at
+@@ -2147,6 +2159,7 @@ void Verifier::set_plan_slot(int grp) {
+     sink_.ptr = (unsigned long long*) (base + ptr_off);
+     sink_.ptr2 = sink_.ptr + cap;
+     sink_.start2 = base + ptr_off + 4 * cap;
++    sink_.admit2 = (unsigned long long*) (base + ((ptr_off + 4 * cap + (cap + 1) + 1 + 1) & ~1ll));
+     const int G = last_batch_ ? 1 : (groups_[last_t_] > 0 ? groups_[last_t_] : 1);
+     const int64_t per = G == 2 ? kStagingBlobs / 2 : kStagingBlobs;
+     sink_.staging = (unsigned long long) (staging_ + (size_t) (grp * per) * strata::kernels::cpu::expert_layout().max_blob);
+diff --git a/src/kernels/cuda/verify_kernels.cu b/src/kernels/cuda/verify_kernels.cu
+index 6642f074..e1071495 100644
+--- a/src/kernels/cuda/verify_kernels.cu
++++ b/src/kernels/cuda/verify_kernels.cu
+@@ -513,6 +513,26 @@ __global__ void rebase_ptrs_kernel(unsigned long long* ptr, const int32_t* n, un
+     if (k < *n) ptr[k] = base + (unsigned long long) k * (unsigned long long) bytes;
+ }
+ 
++// STRATA_FETCH_ADMIT (port of 50581c2): as fetch_blobs_kernel, but blob k lands in `admit[k]` (a cache slot on
++// the device) when that is non-zero, else in staging slot k.  The same bytes cross PCIe either way.
++__global__ void fetch_blobs_admit_kernel(const unsigned long long* __restrict__ src, const int32_t* __restrict__ n,
++                                         uint4* __restrict__ stage, const unsigned long long* __restrict__ admit,
++                                         long long per) {
++    const long long total = (long long) *n * per;
++    for (long long i = (long long) blockIdx.x * blockDim.x + threadIdx.x; i < total;
++         i += (long long) gridDim.x * blockDim.x) {
++        const long long k = i / per, off = i - k * per;
++        uint4* dst = admit[k] != 0ull ? (uint4*) admit[k] : stage + k * per;
++        dst[off] = ((const uint4*) src[k])[off];
++    }
++}
++
++__global__ void rebase_ptrs_admit_kernel(unsigned long long* ptr, const int32_t* n, unsigned long long base, long long bytes,
++                                         const unsigned long long* admit) {
++    const int k = threadIdx.x;
++    if (k < *n) ptr[k] = admit[k] != 0ull ? admit[k] : base + (unsigned long long) k * (unsigned long long) bytes;
++}
++
+ __global__ void add_streams_broadcast_kernel(const float* __restrict__ h, const float* __restrict__ e,
+                                              float* __restrict__ R, int64_t n, int hc) {
+     const int t = blockIdx.y;
+@@ -608,6 +628,22 @@ void rebase_ptrs(unsigned long long* ptr, const int32_t* n, uint8_t* base, int64
+     check("rebase_ptrs");
+ }
+ 
++void fetch_blobs_admit(const unsigned long long* src, const int32_t* n, uint8_t* stage, const unsigned long long* admit,
++                       int64_t blob_bytes, int cap, void* stream) {
++    if (cap <= 0) return;
++    if (blob_bytes % 16 != 0) { std::fprintf(stderr, "fetch_blobs_admit: blob size must be a multiple of 16\n"); std::exit(1); }
++    fetch_blobs_admit_kernel<<<48 * 8, 256, 0, (cudaStream_t) stream>>>(src, n, (uint4*) stage, admit,
++                                                                        (long long) (blob_bytes / 16));
++    check("fetch_blobs_admit");
++}
++
++void rebase_ptrs_admit(unsigned long long* ptr, const int32_t* n, uint8_t* base, int64_t blob_bytes,
++                       const unsigned long long* admit, void* stream) {
++    rebase_ptrs_admit_kernel<<<1, 128, 0, (cudaStream_t) stream>>>(ptr, n, (unsigned long long) base, (long long) blob_bytes,
++                                                                   admit);
++    check("rebase_ptrs_admit");
++}
++
+ void add_streams_broadcast(const float* h, const float* e, float* R, int64_t n_embd, int hc, int n_tok, void* stream) {
+     add_streams_broadcast_kernel<<<dim3((unsigned) ((n_embd * hc + 255) / 256), (unsigned) n_tok), 256, 0,
+                                    (cudaStream_t) stream>>>(h, e, R, n_embd, hc);
+diff --git a/src/program/generate.cpp b/src/program/generate.cpp
+index 3899479c..5f7ecc79 100644
+--- a/src/program/generate.cpp
++++ b/src/program/generate.cpp
+@@ -7442,6 +7442,29 @@ int main(int argc, char** argv) {
+             std::all_of(host_res.begin(), host_res.end(), [](int32_t r) { return r >= 0; });
+         if (o.adapt_every > 0 && o.adapt_swaps > 0 && !all_experts_resident)
+             drive.d.usage.assign((size_t) (g.n_layers * g.n_expert), 0.0f);
++        // STRATA_FETCH_ADMIT=1 (port of 50581c2, opt-in, for an A/B): the PCIe share of each window's misses is
++        // copied straight into cache slots instead of staging, so it stays resident.  Off wherever the residency
++        // table is not the only truth: a layer split, a peer, the resident RAM mode (an eviction must go back to
++        // RAM), the device plan, the zero-doorbell graph, DMA/direct PCIe, or non-blocking adaptive swaps.
++        if (const char* fa = std::getenv("STRATA_FETCH_ADMIT"); fa != nullptr && fa[0] == '1') {
++            const char* why = multi_gpu ? "a layer split"
++                            : peer.valid() ? "a peer GPU"
++                            : drive.d.usage.empty() ? "no adaptive tier (--adapt-every / --adapt-swaps)"
++                            : host_res.empty() ? "no residency table"
++                            : src.complement_ready() ? "the resident RAM mode"
++                            : adapt_nowait() ? "STRATA_ADAPT_NOWAIT"
++                            : nullptr;
++            if (why == nullptr && !ver.set_fetch_admit(true))
++                why = "the device plan, the zero-doorbell graph, or a --pcie-mode other than the copy kernel";
++            if (why != nullptr) {
++                std::fprintf(stderr, "strata serve: STRATA_FETCH_ADMIT is off here: %s\n", why);
++            } else {
++                drive.d.fetch_admit = true;
++                drive.d.host_res_w = host_res.data();
++                std::fprintf(stderr, "strata serve: STRATA_FETCH_ADMIT: the PCIe share of the misses stays in the VRAM "
++                                     "cache\n");
++            }
++        }
+         // #477 --expert-profile-save: what the adaptive tier learned, kept across restarts (opt-in; off: `heat` stays
+         // empty and nothing below runs).  It needs the adaptive tier's counts and the residency table.
+         std::vector<double> heat;
+@@ -10087,6 +10110,7 @@ int main(int argc, char** argv) {
+             double dt_run = 0, dt_commit = 0, dt_draft = 0;
+             int64_t dec_windows = 0, dec_T = 0;
+             const int64_t decode_hits0 = drive.d.cache_hits;
++            const int64_t admitted0 = drive.d.fetch_admitted;
+             // CS-T: the RAM and file tiers of this request (the mmap source; 0 with the arena)
+             const int64_t ram0 = src.ram_reads(), files0 = src.file_reads();
+             const uint64_t file_bytes0 = src.file_read_bytes();
+@@ -11147,9 +11171,11 @@ int main(int argc, char** argv) {
+                                   "all %lld routed)", (long long) req_offload,
+                                   100.0 * (double) req_offload / (double) (req_look + req_offload),
+                                   (long long) (req_look + req_offload));
+-                std::fprintf(stderr, "strata serve: decode expert cache hit rate: %.1f%% (%lld hits / %lld lookups)%s\n",
++                std::fprintf(stderr, "strata serve: decode expert cache hit rate: %.1f%% (%lld hits / %lld lookups), "
++                                     "%lld kept from the PCIe share%s\n",
+                              100.0 * (double) req_hits / (double) req_look,
+-                             (long long) req_hits, (long long) req_look, off);
++                             (long long) req_hits, (long long) req_look,
++                             (long long) (drive.d.fetch_admitted - admitted0), off);
+             }
+             // the resident RAM mode, cumulative: experts read from experts.bin since the copy was made (what the plain
+             // mmap mode reads through the OS file cache, from the SSD when the RAM could not keep it)
+-- 
+2.43.0
+
